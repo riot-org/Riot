@@ -6308,7 +6308,7 @@ button.chip-ref.clickable:hover,
 
 /* 卡片里的列表和空态自带外边距，装进 Group 时把它们收掉。 */
 .set-group > .skill-list,
-.set-group > .pack-list,
+.set-group > .plugin-list,
 .set-group > .mcp-list {
   margin-top: 0;
 }
@@ -6318,10 +6318,17 @@ button.chip-ref.clickable:hover,
    它分隔的是滚动内容和固定底栏，是另一回事。
    两个选择器分别对应：编辑器直接挂在正文里（服务方），和挂在分组里（MCP）。 */
 .settings-inner > .editor-foot,
-.set-group > .editor-foot {
+.set-group > .editor-foot,
+.set-block > .editor-foot {
   margin-top: 14px;
   padding-top: 0;
   border-top: none;
+}
+
+/* 卡片行里的操作条：外框已经有分隔线，再留 14px 上边距会把按钮顶得
+   离内容太远。分组底下那条才需要这段距离。 */
+.set-block > .editor-foot {
+  margin-top: 0;
 }
 
 /* stack 行里的多行输入铺满，且和上面的说明拉开一点。 */
@@ -7190,9 +7197,23 @@ button.ta-resize-grip:hover:not(:disabled),
   padding: 3px 7px;
 }
 
-/* ── 能力包分区 ──────────────────────────── */
+/* ── 插件分区 ──────────────────────────── */
 
-.pack-list {
+/* 同一分组里的表单、清单、搜索框是兄弟块。分组本身不给子元素
+   加 gap（标题和说明要贴得更近），所以这里单独拉开。 */
+.plugin-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.plugin-stack > .plugin-list,
+.plugin-stack > .plugin-search,
+.plugin-stack > .plugin-actions {
+  margin-top: 0;
+}
+
+.plugin-list {
   list-style: none;
   margin: 8px 0 0;
   padding: 0;
@@ -7201,62 +7222,151 @@ button.ta-resize-grip:hover:not(:disabled),
   gap: 10px;
 }
 
-.pack-item {
+.plugin-item {
   padding: 10px 12px;
   border-radius: 8px;
   background: var(--lift-1);
 }
 
-.pack-head {
+.plugin-item.bad {
+  outline: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
+}
+
+.plugin-head {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
-.pack-name {
+.plugin-name {
   font-weight: 600;
   font-size: 13px;
 }
 
-.pack-badge {
+.plugin-spacer {
+  flex: 1;
+}
+
+.plugin-badge {
   font-size: 11px;
   color: var(--text-dim);
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 0 6px;
+  white-space: nowrap;
 }
 
-/* 描边是 --ok 打 35% 透明。原先写死的是 Apple 系统绿 #30d158 的 RGB ——
-   :root 收敛语义色之前的残留，跟着字色一起换成 --ok。 */
-.pack-badge.on {
+/* 描边是 --ok 打 35% 透明，跟着字色一起用语义色。 */
+.plugin-badge.on {
   color: var(--ok);
   border-color: color-mix(in srgb, var(--ok) 35%, transparent);
 }
 
-.pack-progress {
+.plugin-badge.bad {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 35%, transparent);
+}
+
+.plugin-source {
+  overflow-wrap: anywhere;
+}
+
+.plugin-progress {
   margin-top: 8px;
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.pack-bar {
+.plugin-bar {
   height: 4px;
   border-radius: 999px;
   background: var(--lift-2);
   overflow: hidden;
 }
 
-.pack-bar-fill {
+.plugin-bar-fill {
   height: 100%;
   background: var(--accent);
   transition: width var(--dur-3) var(--ease-out);
 }
 
-.pack-actions {
-  margin-top: 10px;
+/* 清单条目上的动作（详情 / 打开目录 / 卸载）。跟设置行右列、
+   editor-foot-actions 一样靠右，不靠左铺。 */
+.plugin-actions,
+.set-actions {
   display: flex;
   gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.plugin-actions {
+  margin-top: 10px;
+}
+
+.set-actions {
+  margin-top: 6px;
+}
+
+.plugin-actions .form-error,
+.set-actions .form-error {
+  margin-right: auto;
+}
+
+/* 组件清单：确认页和详情共用。一个组件类型一小节，条目用等宽字体 ——
+   这里列的是工具名、命令行、路径，都是要照着抄的东西。 */
+.plugin-components {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.plugin-component-title {
+  display: block;
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 2px;
+}
+
+.plugin-component ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.plugin-component li {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.plugin-component code {
+  font-size: 11.5px;
+}
+
+.plugin-search {
+  width: 100%;
+  margin: 8px 0 0;
+  box-sizing: border-box;
+}
+
+.plugin-market-add {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.plugin-market-add input {
+  flex: 1;
+  min-width: 0;
 }
 
 /* ── Skills 分区 ──────────────────────────── */
@@ -7282,7 +7392,7 @@ button.ta-resize-grip:hover:not(:disabled),
   background: var(--lift-1);
 }
 
-/* 原先写死的是 Apple 系统红 #ff453a 的 RGB，同 .pack-badge.on 的理由换成
+/* 原先写死的是 Apple 系统红 #ff453a 的 RGB，同 .plugin-badge.on 的理由换成
    --danger 打透明。 */
 .skill-item.bad {
   outline: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);

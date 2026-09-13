@@ -15,6 +15,7 @@ use serde::Serialize;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
+use riot_protocol::rpc::McpTransport;
 use riot_protocol::text::UiError;
 use riot_protocol::tool::Tool;
 use riot_protocol::ui_error;
@@ -24,17 +25,25 @@ use crate::stdio;
 use crate::tool::McpTool;
 use crate::wire::ToolDef;
 
-/// 一个服务器怎么启动。由宿主从配置映射过来。
+/// 一个服务器怎么连。由宿主从配置映射过来。
 ///
 /// `PartialEq` 是 reconcile 的判据：spec 没变就不动它 —— 改一个无关
 /// 设置就把所有服务器全部重启，用户会看到工具清单闪断。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ServerSpec {
     /// 稳定标识，进工具名（`mcp__<id>__…`），也是权限规则的一部分。
     pub id: String,
-    pub command: String,
-    pub args: Vec<String>,
-    pub env: Vec<(String, String)>,
+    pub transport: McpTransport,
+}
+
+impl ServerSpec {
+    /// 给日志和报错看的一句话：命令名或地址。
+    fn label(&self) -> &str {
+        match &self.transport {
+            McpTransport::Stdio { command, .. } => command,
+            McpTransport::Http { url, .. } => url,
+        }
+    }
 }
 
 /// 给设置页看的状态快照。
@@ -56,8 +65,9 @@ enum ServerState {
     Connecting,
     Ready {
         client: Arc<Client>,
-        /// 进程句柄留在状态里：移除服务器时要杀整组。
-        child: Box<dyn process_wrap::tokio::ChildWrapper>,
+        /// 进程句柄留在状态里：移除服务器时要杀整组。HTTP 服务器没有
+        /// 进程（`None`），停掉它 = 取消令牌 + drop 客户端。
+        child: Option<Box<dyn process_wrap::tokio::ChildWrapper>>,
         server_name: String,
         tools: Vec<ToolDef>,
     },
@@ -280,25 +290,46 @@ fn start(spec: ServerSpec) -> Handle {
 }
 
 async fn connect_task(spec: ServerSpec, state: Arc<Mutex<ServerState>>, cancel: CancellationToken) {
-    // 进程先起起来、句柄拿在手上，之后的每条失败路径都要负责杀掉它 ——
-    // 把 spawn 塞进可取消的 future 里的话，取消时机不巧就会漏一个进程组。
-    let spawned = match stdio::spawn_server(&spec) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!(server = %spec.id, error = %e, "MCP 服务器启动失败");
-            *state.lock().await = ServerState::Failed {
-                error: spawn_error(&spec.command, e),
+    // 两种传输在这里汇合成"一对读写端 + 可能有的进程句柄"。
+    //
+    // stdio：进程先起起来、句柄拿在手上，之后的每条失败路径都要负责杀掉
+    // 它 —— 把 spawn 塞进可取消的 future 里的话，取消时机不巧就会漏一个
+    // 进程组。HTTP：没有进程，取消令牌一拉所有请求任务自己停。
+    let (mut child, connect) = match &spec.transport {
+        McpTransport::Stdio { .. } => {
+            let spawned = match stdio::spawn_server(&spec) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(server = %spec.id, error = %e, "MCP 服务器启动失败");
+                    *state.lock().await = ServerState::Failed {
+                        error: spawn_error(spec.label(), e),
+                    };
+                    return;
+                }
             };
-            return;
+            let fut = handshake(spawned.stdout, spawned.stdin);
+            (Some(spawned.child), fut)
         }
-    };
-    let child = spawned.child;
-
-    let connect = async {
-        let (client, hello) =
-            Client::connect(spawned.stdout, spawned.stdin, Timeouts::default()).await?;
-        let tools = client.list_tools().await?;
-        Ok::<_, crate::client::ClientError>((client, hello, tools))
+        McpTransport::Http {
+            url,
+            headers,
+            legacy_sse,
+        } => {
+            let io =
+                crate::http::connect(url.clone(), headers.clone(), *legacy_sse, cancel.clone())
+                    .await;
+            let (r, w) = match io {
+                Ok(pair) => pair,
+                Err(e) => {
+                    tracing::warn!(server = %spec.id, error = %e, "MCP 服务器连不上");
+                    *state.lock().await = ServerState::Failed {
+                        error: ui_error!("kernel.mcp.httpFailed", url = url; e),
+                    };
+                    return;
+                }
+            };
+            (None, handshake(r, w))
+        }
     };
 
     tokio::select! {
@@ -319,14 +350,39 @@ async fn connect_task(spec: ServerSpec, state: Arc<Mutex<ServerState>>, cancel: 
             }
             Err(e) => {
                 tracing::warn!(server = %spec.id, error = %e, "MCP 握手失败");
-                stdio::terminate(child).await;
+                if let Some(c) = child.take() {
+                    stdio::terminate(c).await;
+                }
+                cancel.cancel();
                 *state.lock().await = ServerState::Failed { error: e.ui_error() };
             }
         },
         _ = cancel.cancelled() => {
-            stdio::terminate(child).await;
+            if let Some(c) = child.take() {
+                stdio::terminate(c).await;
+            }
         }
     }
+}
+
+/// 握手完成后拿到的三件东西：客户端、服务器身份、第一份工具清单。
+type Handshake =
+    Result<(Arc<Client>, crate::client::ServerHello, Vec<ToolDef>), crate::client::ClientError>;
+
+/// 握手 + 第一次工具清单。传输无关。
+fn handshake<R, W>(
+    reader: R,
+    writer: W,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Handshake> + Send>>
+where
+    R: tokio::io::AsyncRead + Send + Unpin + 'static,
+    W: tokio::io::AsyncWrite + Send + Unpin + 'static,
+{
+    Box::pin(async move {
+        let (client, hello) = Client::connect(reader, writer, Timeouts::default()).await?;
+        let tools = client.list_tools().await?;
+        Ok((client, hello, tools))
+    })
 }
 
 /// 起不来的原因。找不到命令单独一键 —— 从访达 / Dock 打开时没有终端里的
@@ -341,9 +397,12 @@ fn spawn_error(command: &str, err: std::io::Error) -> UiError {
 
 async fn shutdown_handle(h: Handle) {
     // 还在连接中的任务看到取消会自己杀进程；已就绪的从状态里取出句柄杀。
+    // HTTP 服务器没有进程：取消令牌让它的请求任务停下，客户端随状态 drop。
     h.cancel.cancel();
     let mut st = h.state.lock().await;
-    if let ServerState::Ready { child, .. } = std::mem::replace(
+    if let ServerState::Ready {
+        child: Some(child), ..
+    } = std::mem::replace(
         &mut *st,
         ServerState::Failed {
             error: ui_error!("kernel.mcp.stopped"),
@@ -391,9 +450,12 @@ mod tests {
     async fn insert_ready(hub: &McpHub, id: &str, client: Arc<Client>, tools: Vec<ToolDef>) {
         let spec = ServerSpec {
             id: id.to_owned(),
-            command: "echo".into(),
-            args: vec![],
-            env: vec![],
+            transport: McpTransport::Stdio {
+                command: "echo".into(),
+                args: vec![],
+                env: vec![],
+                cwd: None,
+            },
         };
         hub.servers.lock().await.insert(
             id.to_owned(),
@@ -401,7 +463,7 @@ mod tests {
                 spec,
                 state: Arc::new(Mutex::new(ServerState::Ready {
                     client,
-                    child: dummy_child(),
+                    child: Some(dummy_child()),
                     server_name: "fake 0".into(),
                     tools,
                 })),

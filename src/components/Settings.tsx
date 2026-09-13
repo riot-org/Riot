@@ -29,7 +29,7 @@ import { CommandsPane } from "./settings/CommandsPane";
 import { GeneralPane } from "./settings/GeneralPane";
 import { HooksPane } from "./settings/HooksPane";
 import { McpPane } from "./settings/McpPane";
-import { PacksPane } from "./settings/PacksPane";
+import { PluginsPane } from "./settings/PluginsPane";
 import { PermissionPane } from "./settings/PermissionPane";
 import { PromptsPane } from "./settings/PromptsPane";
 import { ProviderPane } from "./settings/ProviderPane";
@@ -59,7 +59,7 @@ type Tab =
   | "prompts"
   | "permission"
   | "mcp"
-  | "packs"
+  | "plugins"
   | "skills"
   | "commands"
   | "hooks"
@@ -98,7 +98,7 @@ const NAV: { group: MessageKey; tabs: TabDef[] }[] = [
     group: "settings.group.ext",
     tabs: [
       { id: "mcp", icon: PlugIcon },
-      { id: "packs", icon: PackageIcon },
+      { id: "plugins", icon: PackageIcon },
       { id: "skills", icon: SkillIcon },
       { id: "commands", icon: TerminalIcon },
       { id: "hooks", icon: HookIcon },
@@ -276,7 +276,7 @@ export function Settings({
                   onSaved={flashSaved}
                 />
               ) : null}
-              {tab === "packs" ? <PacksPane askConfirm={setConfirm} /> : null}
+              {tab === "plugins" ? <PluginsPane askConfirm={setConfirm} status={status} /> : null}
               {tab === "skills" ? (
                 <SkillsPane status={status} activeRoot={activeRoot ?? null} />
               ) : null}

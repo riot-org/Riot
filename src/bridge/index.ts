@@ -351,6 +351,13 @@ export interface AppConfig {
   web: WebConfig;
   /** MCP 服务器。连接是应用级的（会话共享），工具每轮快照。 */
   mcpServers: McpServerConfig[];
+  /**
+   * 插件注册表。前端**不直接改它**（装、卸、启停走 `plugins_*` 命令，
+   * 宿主顺带重连 MCP）；这里只是让 `setConfig` 整体回传时不丢字段。
+   */
+  plugins?: unknown[];
+  /** 插件市场列表。改它走 `pluginsSetMarketplaces`。 */
+  pluginMarketplaces?: MarketplaceConfig[];
   /** 收藏的提示词。老配置可能没有这个字段。 */
   prompts?: PromptPreset[];
   /** 历史估算超过这个 token 数时自动摘要压缩。宿主侧夹在 8k–1M。 */
@@ -613,8 +620,10 @@ export interface SlashCommand {
   /** 内置命令的说明（词典键）。只有 `source === "builtin"` 才有。 */
   descriptionText?: UiTextPayload;
   argumentHint?: string;
-  /** `builtin` / `project` / `global` / `skill`。 */
+  /** `builtin` / `project` / `global` / `plugin` / `skill`。 */
   source: string;
+  /** 带来它的插件 id（命令来自插件，或技能来自插件）。 */
+  plugin?: string;
   /**
    * 敲 `/名字` 时是否就地展开成提示词。
    *
@@ -678,8 +687,10 @@ export interface HookInfo {
   matcher: string;
   command: string;
   timeoutSecs: number;
-  /** `global` / `project`。 */
+  /** `global` / `project` / `plugin`。 */
   source: string;
+  /** `source === "plugin"` 时是插件 id。 */
+  plugin?: string;
   error?: UiErrorPayload | null;
 }
 
@@ -1008,8 +1019,10 @@ export interface SkillInfo {
   description: string;
   /** SKILL.md 的完整路径。内置技能编在二进制里，没有路径，给空串。 */
   path: string;
-  /** `builtin` 随应用分发；`pack` 来自能力包；`global` / `project` 是用户写的。 */
-  source: "builtin" | "pack" | "global" | "project";
+  /** `builtin` 随应用分发；`plugin` 来自插件；`global` / `project` 是用户写的。 */
+  source: "builtin" | "plugin" | "global" | "project";
+  /** `source === "plugin"` 时是插件 id。 */
+  plugin?: string;
   /** 解析失败的原因。没有 = 可用。 */
   error?: UiErrorPayload | null;
 }
@@ -1073,26 +1086,116 @@ export function sandboxUninstall(): Promise<void> {
   return invoke("sandbox_uninstall", undefined, NO_DEADLINE);
 }
 
-/** 一个可下载的能力包。 */
-export interface PackStatus {
+// ── 插件 ──────────────────────────────────────────────
+
+/** 插件清单元数据（各家格式收成一个形状）。 */
+export interface PluginMeta {
+  name: string;
+  displayName?: string;
+  version?: string;
+  description?: string;
+  author?: string;
+  homepage?: string;
+  repository?: string;
+  license?: string;
+  keywords?: string[];
+}
+
+/** Riot 暂不支持的组件。设置页要列出来，不能静默丢。 */
+export interface PluginUnsupported {
+  /** `agents` / `rules` / `lspServers` / `hookEvent:SessionStart` … */
+  component: string;
+  detail: string;
+}
+
+/** 插件带了什么，名字都是装完之后对外的样子。 */
+export interface PluginComponents {
+  skills: string[];
+  commands: string[];
+  hooks: { event: string; matcher: string; command: string }[];
+  mcpServers: { id: string; transport: "stdio" | "http"; detail: string }[];
+  pathDirs: string[];
+  envKeys: string[];
+  selfChecks: string[];
+}
+
+/** 一个已登记（或待安装）的插件。 */
+export interface PluginStatus {
   id: string;
-  name: UiTextPayload;
-  description: UiTextPayload;
-  /** 已装版本。null = 没装。 */
-  installedVersion: string | null;
-  /** 远端可装版本。null = 清单没拉到，或这个平台没有包。 */
-  availableVersion: string | null;
-  /** 下载体积，字节。 */
-  downloadSize: number;
-  /** 解压后体积，字节。 */
-  installedSize: number;
+  enabled: boolean;
+  version: string;
+  root: string;
+  /** 链接的本地目录（开发模式）。 */
+  linked: boolean;
+  source: { kind: "local" | "git" | "archive" | "legacy"; detail: string; commit?: string };
+  marketplace?: string;
+  meta?: PluginMeta;
+  format?: "agent-plugins" | "claude-code" | "cursor";
+  /** 清单整个读不了的原因。 */
+  fatal?: UiErrorPayload;
+  problems: { path: string; error: UiErrorPayload }[];
+  unsupported: PluginUnsupported[];
+  platformOk: boolean;
+  components: PluginComponents;
+  /** 市场里的可装版本；和 `version` 不同 = 可升级。 */
+  availableVersion?: string;
+}
+
+/** 市场里的一条。 */
+export interface MarketEntry {
+  marketplace: string;
+  name: string;
+  description?: string;
+  version?: string;
+  author?: string;
+  homepage?: string;
+  category?: string;
+  tags?: string[];
+  source:
+    | { kind: "git"; url: string; gitRef?: string; subdir?: string }
+    | { kind: "archive"; platforms: Record<string, { url: string; sha256: string; size: number; installedSize: number }> };
   supported: boolean;
-  /** 清单拉取失败的原因。有值时显示"离线"，而不是"没有可用更新"。 */
-  manifestError: UiErrorPayload | null;
+  downloadSize: number;
+  installedSize: number;
+}
+
+/** 一个市场拉下来的样子。拉失败时 `error` 有值、`plugins` 为空。 */
+export interface Marketplace {
+  id: string;
+  source: string;
+  name: string;
+  plugins: MarketEntry[];
+  error?: UiErrorPayload;
+}
+
+/** 配置里的一条市场。 */
+export interface MarketplaceConfig {
+  id: string;
+  source: string;
+  enabled: boolean;
+}
+
+/** 前端发来的"装这个"。 */
+export type PluginSourceRequest =
+  | { kind: "local"; path: string }
+  | { kind: "git"; url: string; gitRef?: string; subdir?: string }
+  | { kind: "market"; marketplace: string; name: string };
+
+/** 确认页要的预览。 */
+export interface PluginPreview {
+  token: string;
+  plugin: PluginStatus;
+  /** 内容已经真的读过了（git / 本地），还是只有市场说的（压缩包）。 */
+  contentsVerified: boolean;
+  downloadSize: number;
+  installedSize: number;
+  /** 同 id 已装的版本；有值 = 这次是覆盖/升级。 */
+  replacesVersion?: string;
 }
 
 /** 安装进度。各阶段耗时差着数量级，所以分开报而不是合成一个百分比。 */
-export type PackProgress =
+export type PluginProgress =
+  | { kind: "cloning" }
   | { kind: "downloading"; received: number; total: number }
   | { kind: "verifying" }
   | { kind: "extracting" }
@@ -1100,28 +1203,57 @@ export type PackProgress =
   | { kind: "done"; version: string }
   | { kind: "failed"; error: UiErrorPayload };
 
-/** 能力包清单：装了什么、有什么可装。 */
-export function packsStatus(): Promise<PackStatus[]> {
-  // 要拉远端清单（拉不到时宿主自己收成 manifestError，不 reject）。
-  return invoke<PackStatus[]>("packs_status", undefined, T_SLOW);
+/** 已登记的插件清单。读的是本地目录，不走网络。 */
+export function pluginsStatus(): Promise<PluginStatus[]> {
+  return invoke<PluginStatus[]>("plugins_status", undefined, T_SLOW);
 }
 
-/** 下载并安装一个能力包。装完即可用，不需要重启。 */
-export function packsInstall(
-  id: string,
-  onProgress: (p: PackProgress) => void,
-): Promise<void> {
-  const channel: HostChannel<PackProgress> = transport.channel<PackProgress>();
+/** 市场清单。`refresh` 强制重拉，否则有缓存用缓存。 */
+export function pluginsMarket(refresh: boolean): Promise<Marketplace[]> {
+  // 要拉远端清单（拉不到时宿主装进各自的 error，不 reject）。
+  return invoke<Marketplace[]>("plugins_market", { refresh }, T_SLOW);
+}
+
+/** 准备安装：取下来、读清单、给确认页一份预览。git 来源要 clone，可能慢。 */
+export function pluginsPrepare(source: PluginSourceRequest): Promise<PluginPreview> {
+  return invoke<PluginPreview>("plugins_prepare", { source }, NO_DEADLINE);
+}
+
+/** 用户确认后真的装。装完即可用，不需要重启。 */
+export function pluginsCommit(token: string, onProgress: (p: PluginProgress) => void): Promise<void> {
+  const channel: HostChannel<PluginProgress> = transport.channel<PluginProgress>();
   channel.onmessage = onProgress;
   // 不设期限：几十上百兆的下载 + 解压 + 自检，慢网上十几分钟都可能。
   // 进度有自己的通道，卡没卡从进度条上看得出来，不需要期限来兜。
-  return invoke("packs_install", { id, onProgress: channel }, NO_DEADLINE);
+  return invoke("plugins_commit", { token, onProgress: channel }, NO_DEADLINE);
 }
 
-/** 卸载一个能力包，连带摘掉它注册的 MCP 服务器。 */
-export function packsUninstall(id: string): Promise<void> {
+/** 放弃一次准备好的安装（确认页点了取消）。 */
+export function pluginsDiscard(token: string): Promise<void> {
+  return invoke("plugins_discard", { token });
+}
+
+/** 启停一个插件。 */
+export function pluginsSetEnabled(id: string, enabled: boolean): Promise<void> {
+  return invoke("plugins_set_enabled", { id, enabled }, T_SLOW);
+}
+
+/** 卸载一个插件，连带摘掉它带的 MCP 服务器。 */
+export function pluginsUninstall(id: string): Promise<void> {
   // 删几万个小文件，机械盘上不快。
-  return invoke("packs_uninstall", { id }, T_SLOW);
+  return invoke("plugins_uninstall", { id }, T_SLOW);
+}
+
+/** 升级到来源里的最新版。 */
+export function pluginsUpdate(id: string, onProgress: (p: PluginProgress) => void): Promise<void> {
+  const channel: HostChannel<PluginProgress> = transport.channel<PluginProgress>();
+  channel.onmessage = onProgress;
+  return invoke("plugins_update", { id, onProgress: channel }, NO_DEADLINE);
+}
+
+/** 整体替换市场列表。 */
+export function pluginsSetMarketplaces(marketplaces: MarketplaceConfig[]): Promise<void> {
+  return invoke("plugins_set_marketplaces", { marketplaces });
 }
 
 /** 登记一个项目目录（验证并规范化），返回 canonical 根。不创建会话。 */

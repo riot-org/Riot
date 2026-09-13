@@ -163,15 +163,15 @@ pub async fn dispatch(
         .await),
 
         // ── 斜杠命令 / 文件 ──
-        "slash_commands" => ok(crate::slash_commands(a.take("root")?).await),
+        "slash_commands" => ok(crate::slash_commands(st, a.take("root")?).await),
         "slash_expand" => {
             ok(
                 crate::slash_expand(st, a.take("sessionId")?, a.take("name")?, a.take("args")?)
                     .await,
             )
         }
-        "hooks_list" => ok(crate::hooks_list(a.take("root")?).await),
-        "skills_list" => ok(crate::skills_list(a.take("root")?).await),
+        "hooks_list" => ok(crate::hooks_list(st, a.take("root")?).await),
+        "skills_list" => ok(crate::skills_list(st, a.take("root")?).await),
         "search_files" => {
             ok(
                 crate::search_files(st, a.take("sessionId")?, a.take("query")?, a.take("limit")?)
@@ -348,9 +348,23 @@ pub async fn dispatch(
         "sandbox_status" => val(crate::sandbox_status().await),
         "sandbox_install" => ok(crate::sandbox_install().await),
         "sandbox_uninstall" => ok(crate::sandbox_uninstall().await),
-        "packs_status" => ok(crate::packs_status().await),
-        "packs_install" => ok(crate::packs_install(st, a.take("id")?, a.chan("onProgress")?).await),
-        "packs_uninstall" => ok(crate::packs_uninstall(st, a.take("id")?).await),
+        "plugins_status" => ok(crate::plugins_status(st).await),
+        "plugins_market" => ok(crate::plugins_market(st, a.take("refresh")?).await),
+        "plugins_prepare" => ok(crate::plugins_prepare(st, a.take("source")?).await),
+        "plugins_commit" => {
+            ok(crate::plugins_commit(st, a.take("token")?, a.chan("onProgress")?).await)
+        }
+        "plugins_discard" => ok(crate::plugins_discard(st, a.take("token")?).await),
+        "plugins_set_enabled" => {
+            ok(crate::plugins_set_enabled(st, a.take("id")?, a.take("enabled")?).await)
+        }
+        "plugins_uninstall" => ok(crate::plugins_uninstall(st, a.take("id")?).await),
+        "plugins_update" => {
+            ok(crate::plugins_update(st, a.take("id")?, a.chan("onProgress")?).await)
+        }
+        "plugins_set_marketplaces" => {
+            ok(crate::plugins_set_marketplaces(st, a.take("marketplaces")?).await)
+        }
         "test_connection" => {
             ok(crate::test_connection(st, a.take("providerId")?, a.take("model")?).await)
         }

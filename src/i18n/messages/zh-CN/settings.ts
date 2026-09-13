@@ -23,9 +23,6 @@ export default {
   "settings.tab.mcp": "MCP",
   "settings.tab.mcp.title": "MCP 服务器",
   "settings.tab.mcp.desc": "接入外部工具服务器，连上之后模型直接就能调用。",
-  "settings.tab.packs": "能力包",
-  "settings.tab.packs.title": "能力包",
-  "settings.tab.packs.desc": "可选下载的运行时。装上之后相关工具和技能自动注册。",
   "settings.tab.skills": "Skills",
   "settings.tab.skills.title": "Skills",
   "settings.tab.skills.desc": "写成 SKILL.md 的技能，模型按需加载。",
@@ -274,4 +271,8 @@ export default {
     "让模型能翻本项目的其它会话：回答「上次那个问题最后怎么解决的」，并给出跳到那个会话的链接。摘录按项目分目录，存在 Riot 自己的数据目录里，不进项目。关掉后提示词里不再提它；每个会话自己的摘录仍会维护 —— 上下文压缩后模型靠它找回被总结掉的原文。摘录随会话一起删。",
   "settings.permission.rules": "会话内规则",
   "settings.permission.rules.hint": "点「总是允许」记住的规则（如 {example}）只在当前会话有效，关掉会话就没了。",
+
+  "settings.tab.plugins": "插件",
+  "settings.tab.plugins.title": "插件",
+  "settings.tab.plugins.desc": "把技能、命令、Hooks、MCP 服务器打成一个可安装的包。兼容 Agent Plugins 开放标准、Claude Code 与 Cursor 的插件格式。",
 };

@@ -2,7 +2,7 @@
 //!
 //! # 职责边界
 //!
-//! 这里只做**装配与运行**：每轮把工具、权限闸、provider、能力包串成
+//! 这里只做**装配与运行**：每轮把工具、权限闸、provider、插件运行时串成
 //! 一个能跑的轮子，并维护会话状态（历史、队列、挂起的询问）。
 //! 单一职责的零件在各自的模块里：
 //!
@@ -562,6 +562,8 @@ pub struct Session {
     /// 最前 —— Bash 里的 python / pip 直接落在这个环境里，不需要
     /// `source activate`。下一轮生效。
     python_venv: Mutex<Option<String>>,
+    /// 本轮生效的插件（宿主每轮随 TurnConfig 传）。目录内容在开轮时现读。
+    plugins: Mutex<Vec<riot_protocol::PluginRef>>,
     /// 用户为这个会话追加的系统提示词。
     ///
     /// **追加**在内置提示词之后，不替换它 —— 内置提示词里有工作目录和
@@ -833,6 +835,7 @@ impl Session {
             live_stream: Mutex::new(LiveStream::default()),
             sampling_override: Mutex::new(Sampling::default()),
             python_venv: Mutex::new(None),
+            plugins: Mutex::new(Vec::new()),
             system_prompt_extra: Mutex::new(None),
             thinking_override: Mutex::new(riot_protocol::ThinkingPolicy::default()),
             rules: Arc::new(Mutex::new(Vec::new())),
@@ -895,6 +898,7 @@ impl Session {
             live_stream: Mutex::new(LiveStream::default()),
             sampling_override: Mutex::new(settings.sampling),
             python_venv: Mutex::new(settings.python_venv.clone()),
+            plugins: Mutex::new(Vec::new()),
             system_prompt_extra: Mutex::new(settings.system_prompt.clone()),
             thinking_override: Mutex::new(settings.thinking),
             rules: Arc::new(Mutex::new(Vec::new())),
@@ -1241,6 +1245,19 @@ impl Session {
 
     pub async fn python_venv(&self) -> Option<String> {
         self.python_venv.lock().await.clone()
+    }
+
+    /// 宿主每轮传来的生效插件清单。
+    pub async fn set_plugins(&self, plugins: Vec<riot_protocol::PluginRef>) {
+        *self.plugins.lock().await = plugins;
+    }
+
+    /// 读一遍本轮生效的插件目录。每次调用都现读 —— 和 SKILL.md、hooks.json
+    /// 同一条规矩：目录里的东西改了下一轮生效，不缓存。
+    pub async fn load_plugins(&self) -> Vec<crate::plugins::Loaded> {
+        let refs = self.plugins.lock().await.clone();
+        let data_root = crate::plugins::data_root(&crate::config::config_path());
+        crate::plugins::load_all(&refs, &data_root)
     }
 
     /// 设置会话级追加提示词。None 或空白表示清除，只用内置提示词。
@@ -2743,16 +2760,16 @@ impl Session {
         clock: Arc<dyn riot_protocol::tool::Clock>,
         caps: TurnCapabilities,
         gate: Arc<dyn PermissionGate>,
-        python_venv: Option<&str>,
+        exec: ExecEnv<'_>,
         sandbox: Option<Arc<riot_runtime::ActiveSandbox>>,
     ) -> Scheduler {
-        // venv 和能力包都每轮现装（和 caps 一个道理）：用户中途在设置里换
-        // 环境、或者刚装完文档能力包，下一轮就生效，不用重启。
+        // venv 和插件都每轮现装（和 caps 一个道理）：用户中途在设置里换
+        // 环境、或者刚装完一个插件，下一轮就生效，不用重启。
         let proc = process_chain(
             Arc::new(SystemProcessRunner::default()),
             sandbox,
-            python_venv,
-            crate::packs::doc_runtime().as_ref(),
+            exec.python_venv,
+            exec.plugins,
         );
         let scheduler = Scheduler::new(
             tools.registry,
@@ -3311,6 +3328,7 @@ impl Session {
             .as_ref()
             .map(|c| Arc::clone(&c.active));
         let python_venv = self.python_venv().await;
+        let plugin_runtime = crate::plugins::runtime_of(&self.load_plugins().await);
         let clock: Arc<dyn riot_protocol::tool::Clock> =
             Arc::new(riot_providers::watchdog::TokioClock);
         let scheduler = self.build_scheduler(
@@ -3322,7 +3340,10 @@ impl Session {
             Arc::clone(&clock),
             last.caps,
             Arc::clone(&seed.gate),
-            python_venv.as_deref(),
+            ExecEnv {
+                python_venv: python_venv.as_deref(),
+                plugins: &plugin_runtime,
+            },
             sandbox,
         );
 
@@ -3407,9 +3428,16 @@ impl Session {
         let clock: Arc<dyn riot_protocol::tool::Clock> =
             Arc::new(riot_providers::watchdog::TokioClock);
 
+        // 插件目录每轮现读（清单、hooks、运行时注入都从这一份来）。
+        let plugins = self.load_plugins().await;
         // Hooks 引擎每轮现装（和 caps 一条规矩：hooks.json 中途改了，
         // 下一轮生效）。没配置时各检查点都是零开销的空实现。
-        let hook_engine = Arc::new(crate::hooks::HookEngine::load(&self.cwd, self.id.as_str()));
+        let hook_engine = Arc::new(crate::hooks::HookEngine::load(
+            &self.cwd,
+            self.id.as_str(),
+            &plugins,
+        ));
+        let plugin_runtime = crate::plugins::runtime_of(&plugins);
 
         // 沙箱先算出来：它同时决定"命令怎么跑"（下面的 build_scheduler）
         // 和"策略层敢不敢放松"（紧接着的 PermissionContext）。
@@ -3604,7 +3632,10 @@ impl Session {
             clock.clone(),
             caps,
             gate,
-            python_venv.as_deref(),
+            ExecEnv {
+                python_venv: python_venv.as_deref(),
+                plugins: &plugin_runtime,
+            },
             sandbox,
         );
         // PostToolUse hooks：只在真配了的时候装 —— enabled() 为 false 时
@@ -4196,13 +4227,20 @@ fn restored_files(file_state: &dyn riot_protocol::tool::FileStateCache) -> Vec<A
     out
 }
 
+/// 工具子进程的执行环境：会话的 venv + 生效插件的运行时注入。两者都是
+/// 每轮现算的，一起传给 `build_scheduler`。
+struct ExecEnv<'a> {
+    python_venv: Option<&'a str>,
+    plugins: &'a crate::plugins::Runtime,
+}
+
 /// 往 `spec` 的 PATH 前面接上几个目录。
 ///
 /// `ProcessSpec.env` 的语义是"覆盖这几个、其余继承"（见
 /// `SystemProcessRunner`），所以 PATH 必须拼完整：已经有人设过就在那份前面
 /// 接，没有就从宿主当前的 PATH 接。
 ///
-/// `[约束]` 必须是"接"而不是"没有才设"。venv 和能力包两层装饰器都要改
+/// `[约束]` 必须是"接"而不是"没有才设"。venv 和插件两层装饰器都要改
 /// PATH，谁先跑取决于装配顺序 —— 用"没有才设"的话，先跑的那层会把后跑的
 /// 那层整个吞掉，表现是设了 venv 就找不到 soffice（或者反过来）。
 /// 把 `base`（真正起进程的那个）一层层包成本轮要用的执行器。
@@ -4213,18 +4251,18 @@ fn restored_files(file_state: &dyn riot_protocol::tool::FileStateCache) -> Vec<A
 /// - 沙箱装在最外层 → Windows 上 `WinSandbox::run` 用受限令牌自己调
 ///   `CreateProcessAsUserW`，**根本不会调 inner**，于是下面两层改环境
 ///   变量的装饰器一个都跑不到。表现是"一开沙箱（默认开），会话设的 venv
-///   和能力包静默失效，python 拿到的是系统那个"。所以沙箱贴最里层 ——
+///   和插件静默失效，python 拿到的是系统那个"。所以沙箱贴最里层 ——
 ///   它替换的是"最终由谁起进程"，不是"跑什么"。
-/// - venv 装在能力包外层 → [`prepend_path`] 是往**队首**插，而外层先跑，
-///   所以后跑的排在前面。venv 在外的话能力包的目录会盖在用户显式选的
+/// - venv 装在插件外层 → [`prepend_path`] 是往**队首**插，而外层先跑，
+///   所以后跑的排在前面。venv 在外的话插件的目录会盖在用户显式选的
 ///   venv 前面，一句 `python3 manage.py` 就拿到包里那份、找不到项目依赖。
 ///
-/// 结论：`能力包 → venv → 沙箱 → base`，从外到里。
+/// 结论：`插件 → venv → 沙箱 → base`，从外到里。
 fn process_chain(
     base: Arc<dyn riot_protocol::tool::ProcessRunner>,
     sandbox: Option<Arc<riot_runtime::ActiveSandbox>>,
     python_venv: Option<&str>,
-    pack: Option<&crate::packs::InstalledPack>,
+    plugins: &crate::plugins::Runtime,
 ) -> Arc<dyn riot_protocol::tool::ProcessRunner> {
     let proc: Arc<dyn riot_protocol::tool::ProcessRunner> = match sandbox {
         Some(sb) => Arc::new(riot_runtime::SandboxedRunner::new(base, sb)),
@@ -4234,9 +4272,10 @@ fn process_chain(
         Some(v) => Arc::new(VenvRunner::new(v, proc)),
         None => proc,
     };
-    match pack {
-        Some(p) => Arc::new(DocPackRunner::new(p, proc)),
-        None => proc,
+    if plugins.env.is_empty() && plugins.path_dirs.is_empty() {
+        proc
+    } else {
+        Arc::new(PluginRunner::new(plugins, proc))
     }
 }
 
@@ -4300,37 +4339,38 @@ impl riot_protocol::tool::ProcessRunner for VenvRunner {
     }
 }
 
-/// 给工具子进程接上已安装的能力包（目前是文档运行时）。
+/// 给工具子进程接上生效插件的运行时：`bin/`、`dev.riot.pathPrepend` 声明的
+/// 目录进 PATH，`dev.riot.env` 进环境。
 ///
 /// 做成装饰器而不是在 `SystemProcessRunner` 里判断：和 venv、沙箱是同一类
-/// 正交关注点，而"没装能力包"这条路径上一行相关代码都不会跑到。
+/// 正交关注点，而"没装插件"这条路径上一行相关代码都不会跑到。
 ///
-/// `[约束]` 进 PATH 的只有 `pack.json` 里 `pathPrepend` 声明的那些目录 ——
-/// 文档包故意把 `python3` 和 `node` 排除在外。放进去的话，用户给会话设了
-/// venv 时一句 `python3 manage.py` 会拿到包里那份、找不到项目依赖；为了
-/// 文档功能弄坏用户原本的 Python 工作流是不划算的。skill 正文里已经改成
-/// 显式写 `$RUNTIME_BIN_DIR/python3`。
-struct DocPackRunner {
+/// `[约束]` 进 PATH 的只有插件**声明**的目录。文档插件故意把 `python3`
+/// 和 `node` 排除在外（它们在 `bin/override` 之类没声明的目录里）：放进去
+/// 的话，用户给会话设了 venv 时一句 `python3 manage.py` 会拿到插件里那份、
+/// 找不到项目依赖；为了文档功能弄坏用户原本的 Python 工作流是不划算的。
+/// 技能正文里因此写 `$RUNTIME_BIN_DIR/python3`。
+struct PluginRunner {
     inner: Arc<dyn riot_protocol::tool::ProcessRunner>,
     env: Vec<(String, String)>,
     path_dirs: Vec<std::path::PathBuf>,
 }
 
-impl DocPackRunner {
+impl PluginRunner {
     fn new(
-        pack: &crate::packs::InstalledPack,
+        runtime: &crate::plugins::Runtime,
         inner: Arc<dyn riot_protocol::tool::ProcessRunner>,
     ) -> Self {
         Self {
             inner,
-            env: pack.env(),
-            path_dirs: pack.path_dirs(),
+            env: runtime.env.clone(),
+            path_dirs: runtime.path_dirs.clone(),
         }
     }
 }
 
 #[async_trait::async_trait]
-impl riot_protocol::tool::ProcessRunner for DocPackRunner {
+impl riot_protocol::tool::ProcessRunner for PluginRunner {
     async fn run(
         &self,
         mut spec: riot_protocol::tool::ProcessSpec,
@@ -4740,20 +4780,20 @@ mod tests {
         );
     }
 
-    /// venv 和能力包两层都要改 PATH。用"没有才设"的语义时，先跑的那层会把
+    /// venv 和插件两层都要改 PATH。用"没有才设"的语义时，先跑的那层会把
     /// 后跑的整个吞掉 —— 表现是设了 venv 就找不到 soffice。
     #[test]
     fn 两层装饰器的_path_叠加而不是互相覆盖() {
         let mut spec = empty_spec();
-        prepend_path(&mut spec, &[std::path::PathBuf::from("/packs/doc/path")]);
+        prepend_path(&mut spec, &[std::path::PathBuf::from("/plugins/doc/path")]);
         prepend_path(&mut spec, &[std::path::PathBuf::from("/proj/.venv/bin")]);
 
         let path = path_of(&spec);
         let venv = path.find("/proj/.venv/bin").expect("venv 要在");
-        let pack = path.find("/packs/doc/path").expect("能力包要在");
+        let pack = path.find("/plugins/doc/path").expect("插件要在");
         assert!(
             venv < pack,
-            "用户显式选的 venv 要排在能力包前面，实际：{path}"
+            "用户显式选的 venv 要排在插件前面，实际：{path}"
         );
     }
 
@@ -4779,39 +4819,31 @@ mod tests {
         }
     }
 
-    fn doc_pack() -> crate::packs::InstalledPack {
-        crate::packs::InstalledPack {
-            root: std::path::PathBuf::from("/packs/doc-runtime"),
-            manifest: crate::packs::PackManifest {
-                name: "doc-runtime".into(),
-                version: "0.1.0".into(),
-                platform: "darwin-arm64".into(),
-                source_runtime: None,
-                env: [("RUNTIME_NODE".to_owned(), "bin/node".to_owned())]
-                    .into_iter()
-                    .collect(),
-                path_prepend: vec!["path".to_owned()],
-                mcp_servers: vec![],
-                skills: vec![],
-            },
+    fn doc_plugin_runtime() -> crate::plugins::Runtime {
+        crate::plugins::Runtime {
+            env: vec![(
+                "RUNTIME_NODE".to_owned(),
+                "/plugins/doc-runtime/bin/node".to_owned(),
+            )],
+            path_dirs: vec![std::path::PathBuf::from("/plugins/doc-runtime/path")],
         }
     }
 
-    /// `[约束]` 装配顺序：能力包 → venv → 沙箱 → 真正起进程的那层。
+    /// `[约束]` 装配顺序：插件 → venv → 沙箱 → 真正起进程的那层。
     ///
     /// 这条用例钉的是 [`process_chain`] 文档里那两个错法。上面
     /// `两层装饰器的_path_叠加而不是互相覆盖` 只验了 `prepend_path` 本身
-    /// 叠加得对 —— 而真出过的 bug 是**装配顺序反了**（venv 在能力包外层），
+    /// 叠加得对 —— 而真出过的 bug 是**装配顺序反了**（venv 在插件外层），
     /// 那种情况下 prepend_path 每一步都正确，结果照样是错的。所以要走
     /// 真正的链条，看最里层收到什么。
     #[tokio::test]
-    async fn 执行器链条的顺序_venv_压过能力包() {
+    async fn 执行器链条的顺序_venv_压过插件() {
         let rec = Arc::new(RecordingRunner::default());
         let chain = process_chain(
             Arc::clone(&rec) as Arc<dyn riot_protocol::tool::ProcessRunner>,
             None,
             Some("/proj/.venv"),
-            Some(&doc_pack()),
+            &doc_plugin_runtime(),
         );
 
         chain
@@ -4822,8 +4854,8 @@ mod tests {
         let spec = rec.0.lock().expect("录制锁").clone().expect("录到了");
         let path = path_of(&spec);
         let venv = path.find("/proj/.venv/bin").expect("venv 要在 PATH 里");
-        let pack = path.find("/packs/doc-runtime/path").expect("能力包要在");
-        assert!(venv < pack, "用户显式选的 venv 要排在能力包前面：{path}");
+        let plugin = path.find("/plugins/doc-runtime/path").expect("插件要在");
+        assert!(venv < plugin, "用户显式选的 venv 要排在插件前面：{path}");
         assert!(
             spec.env
                 .iter()
@@ -4833,29 +4865,27 @@ mod tests {
         );
         assert!(
             spec.env.iter().any(|(k, _)| k == "RUNTIME_NODE"),
-            "能力包的变量也要落到最里层：{:?}",
+            "插件的变量也要落到最里层：{:?}",
             spec.env
         );
     }
 
-    #[test]
-    fn 能力包注入_runtime_变量并把工具目录放进_path() {
-        let pack = doc_pack();
-        let runner = DocPackRunner::new(&pack, Arc::new(SystemProcessRunner::default()));
-
-        assert_eq!(
-            runner.env,
-            vec![(
-                "RUNTIME_NODE".to_owned(),
-                "/packs/doc-runtime/bin/node".to_owned()
-            )],
-            "RUNTIME_* 要解析成绝对路径 —— skill 自带脚本直接读它们"
+    /// 没有任何插件运行时要注入时，链条上不该多一层。
+    #[tokio::test]
+    async fn 没有插件运行时就不加装饰器() {
+        let rec = Arc::new(RecordingRunner::default());
+        let chain = process_chain(
+            Arc::clone(&rec) as Arc<dyn riot_protocol::tool::ProcessRunner>,
+            None,
+            None,
+            &crate::plugins::Runtime::default(),
         );
-        assert_eq!(
-            runner.path_dirs,
-            vec![std::path::PathBuf::from("/packs/doc-runtime/path")],
-            "进 PATH 的只能是 path/，bin/ 里的 python3 会盖掉用户的解释器"
-        );
+        chain
+            .run(empty_spec(), CancellationToken::new())
+            .await
+            .expect("跑得起来");
+        let spec = rec.0.lock().expect("录制锁").clone().expect("录到了");
+        assert!(spec.env.is_empty(), "什么都没注入：{:?}", spec.env);
     }
 
     /// 一个不碰 fs / 进程 / 网络的工具上下文。给 AskUserQuestion 这类
@@ -5349,7 +5379,10 @@ mod tests {
                 extra_tools: Vec::new(),
             },
             gate,
-            None,
+            ExecEnv {
+                python_venv: None,
+                plugins: &crate::plugins::Runtime::default(),
+            },
             None,
         );
 

@@ -113,4 +113,21 @@ export default {
   "kernel.config.providerNotFound": "プロバイダー「{id}」が見つかりません。",
   "kernel.config.noModelSelected":
     "「{name}」でモデルが選択されていません。設定でモデルを追加して選択するか、入力欄のモデルメニューから選んでください。",
+
+  "kernel.plugin.noManifest": "ディレクトリにプラグインのマニフェストがありません（plugin.json、.claude-plugin/plugin.json または .cursor-plugin/plugin.json）。",
+  "kernel.plugin.badJson": "マニフェストが有効な JSON ではありません。",
+  "kernel.plugin.missingSchema": "標準マニフェストに $schema がありません。",
+  "kernel.plugin.badSchema": "未対応のマニフェストバージョン：{schema}",
+  "kernel.plugin.badName": "プラグイン名「{name}」が不正です：小文字、数字、ハイフン、ピリオドのみ使えます。",
+  "kernel.plugin.badField": "マニフェストのフィールド「{field}」の型が正しくありません。",
+  "kernel.plugin.unknownField": "マニフェストに未知のフィールド「{field}」があります。無視しました。",
+  "kernel.plugin.pathMissing": "パスが存在しません：{path}",
+  "kernel.plugin.pathUnreadable": "パスを読めません：{path}",
+  "kernel.plugin.pathEscapes": "パスがプラグインのディレクトリの外を指しています：{path}",
+  "kernel.plugin.componentNotDir": "{path} はディレクトリではありません。",
+  "kernel.plugin.componentNotFound": "{path} が存在しません。",
+  "kernel.plugin.mcpInvalid": "MCP 設定が無効です。",
+  "kernel.plugin.mcpServerInvalid": "MCP サーバー「{name}」の設定が無効です。",
+  "kernel.plugin.extInvalid": "dev.riot 拡張データが無効です。",
+  "kernel.mcp.httpFailed": "MCP サーバー {url} に接続できません。",
 } satisfies Dict<typeof zh>;

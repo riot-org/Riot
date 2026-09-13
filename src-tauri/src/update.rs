@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::HostResult;
 
-const RELEASES_LATEST: &str = "https://api.github.com/repos/caiwuu/Riot/releases/latest";
-const RELEASES_PAGE: &str = "https://github.com/caiwuu/Riot/releases";
+const RELEASES_LATEST: &str = "https://api.github.com/repos/riot-org/Riot/releases/latest";
+const RELEASES_PAGE: &str = "https://github.com/riot-org/Riot/releases";
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -197,7 +197,7 @@ mod tests {
             "0.1.0",
             &GhRelease {
                 tag_name: "Riot_0.1.1".into(),
-                html_url: "https://github.com/caiwuu/Riot/releases/tag/Riot_0.1.1".into(),
+                html_url: "https://github.com/riot-org/Riot/releases/tag/Riot_0.1.1".into(),
                 body: Some("修复".into()),
                 assets: vec![GhAsset {
                     name: "Riot_0.1.1_aarch64.dmg".into(),

@@ -5,6 +5,8 @@
 //! ```text
 //! <配置目录>/riot/hooks.json      全局，所有项目生效
 //! <项目根>/.riot/hooks.json       项目级，两层拼接（都跑，不覆盖）
+//! <插件根>/hooks/hooks.json       插件带的，同样拼接；命令里的 ${PLUGIN_ROOT}
+//!                                 展开成插件根，子进程环境多 PLUGIN_ROOT / PLUGIN_DATA
 //! ```
 //!
 //! 结构与 Claude Code 的 settings.hooks 段同构，方便直接拷贝：
@@ -95,6 +97,13 @@ pub struct HookDef {
     /// 秒。缺省 60，夹在 1..=600。
     #[serde(default)]
     pub timeout: Option<u64>,
+    /// 额外注入子进程的环境变量。不从配置里读 —— 只有插件带的 hook 有
+    /// （`PLUGIN_ROOT` / `PLUGIN_DATA`，加载时由插件层填）。
+    #[serde(skip)]
+    pub env: Vec<(String, String)>,
+    /// 带来它的插件 id。给设置页标来源。
+    #[serde(skip)]
+    pub plugin: Option<String>,
 }
 
 fn default_type() -> String {
@@ -118,18 +127,21 @@ pub struct HookInfo {
     pub matcher: String,
     pub command: String,
     pub timeout_secs: u64,
-    /// `global` / `project`。
+    /// `global` / `project` / `plugin`。
     pub source: String,
+    /// `source == "plugin"` 时是插件 id。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<String>,
     /// 配置文件级的问题（这条不是 hook，是一条错误提示）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<UiError>,
 }
 
-/// 设置页的 hooks 清单：两层配置里配了什么，加上解析失败的文件。
-pub fn list(project_root: Option<&Path>) -> Vec<HookInfo> {
+/// 设置页的 hooks 清单：各层配置里配了什么，加上解析失败的文件。
+pub fn list(project_root: Option<&Path>, plugins: &[crate::plugins::Loaded]) -> Vec<HookInfo> {
     let mut problems = Vec::new();
     let mut out = Vec::new();
-    let mut take = |f: HooksFile, source: &str| {
+    let mut take = |f: HooksFile, source: &str, plugin: Option<&str>| {
         for (event, groups) in [
             ("PreToolUse", f.pre_tool_use),
             ("PostToolUse", f.post_tool_use),
@@ -147,15 +159,23 @@ pub fn list(project_root: Option<&Path>) -> Vec<HookInfo> {
                             .unwrap_or(DEFAULT_TIMEOUT_SECS)
                             .clamp(*TIMEOUT_RANGE.start(), *TIMEOUT_RANGE.end()),
                         source: source.to_owned(),
+                        plugin: plugin.map(str::to_owned),
                         error: None,
                     });
                 }
             }
         }
     };
-    take(load_file(&global_path(), &mut problems), "global");
+    take(load_file(&global_path(), &mut problems), "global", None);
     if let Some(root) = project_root {
-        take(load_file(&project_path(root), &mut problems), "project");
+        take(
+            load_file(&project_path(root), &mut problems),
+            "project",
+            None,
+        );
+    }
+    for p in plugins {
+        take(plugin_hooks(p, &mut problems), "plugin", Some(&p.id));
     }
     out.extend(problems.into_iter().map(|p| HookInfo {
         event: String::new(),
@@ -163,9 +183,35 @@ pub fn list(project_root: Option<&Path>) -> Vec<HookInfo> {
         command: p.path.display().to_string(),
         timeout_secs: 0,
         source: "global".into(),
+        plugin: None,
         error: Some(p.reason),
     }));
     out
+}
+
+/// 一个插件的全部 hooks（几份来源拼起来），命令里的占位符已展开，每条
+/// 都带上子进程要的 `PLUGIN_ROOT` / `PLUGIN_DATA`。
+fn plugin_hooks(p: &crate::plugins::Loaded, problems: &mut Vec<Problem>) -> HooksFile {
+    let mut merged = HooksFile::default();
+    for src in &p.hooks {
+        let mut f = parse_value(src.value.clone(), &src.path, problems);
+        let env = p.vars.env();
+        for group in f
+            .pre_tool_use
+            .iter_mut()
+            .chain(f.post_tool_use.iter_mut())
+            .chain(f.stop.iter_mut())
+            .chain(f.user_prompt_submit.iter_mut())
+        {
+            for h in &mut group.hooks {
+                h.command = p.vars.expand(&h.command);
+                h.env = env.clone();
+                h.plugin = Some(p.id.clone());
+            }
+        }
+        merged = merge(merged, f);
+    }
+    merged
 }
 
 /// 全局 hooks.json 的路径。
@@ -193,7 +239,6 @@ fn load_file(path: &Path, problems: &mut Vec<Problem>) -> HooksFile {
             return HooksFile::default();
         }
     };
-    // 顶层允许 {"hooks": {...}}（CC settings.json 原样拷贝）或直接事件表。
     let value: serde_json::Value = match serde_json::from_str(&raw) {
         Ok(v) => v,
         Err(e) => {
@@ -204,6 +249,12 @@ fn load_file(path: &Path, problems: &mut Vec<Problem>) -> HooksFile {
             return HooksFile::default();
         }
     };
+    parse_value(value, path, problems)
+}
+
+/// 把一份 JSON 解析成事件表。顶层允许 `{"hooks": {...}}`（CC settings.json
+/// 原样拷贝）或直接事件表。形状不对记问题、返回空表。
+fn parse_value(value: serde_json::Value, path: &Path, problems: &mut Vec<Problem>) -> HooksFile {
     let table = match value.get("hooks") {
         Some(inner) => inner.clone(),
         None => value,
@@ -258,16 +309,20 @@ pub struct HookEngine {
 }
 
 impl HookEngine {
-    /// 读全局 + 项目两层配置。问题记日志，不拦启动。
-    pub fn load(cwd: &Path, session_id: &str) -> Self {
+    /// 读全局 + 项目 + 各插件的配置。问题记日志，不拦启动。
+    pub fn load(cwd: &Path, session_id: &str, plugins: &[crate::plugins::Loaded]) -> Self {
         let mut problems = Vec::new();
         let global = load_file(&global_path(), &mut problems);
         let project = load_file(&project_path(cwd), &mut problems);
+        let mut cfg = merge(global, project);
+        for p in plugins {
+            cfg = merge(cfg, plugin_hooks(p, &mut problems));
+        }
         for p in &problems {
             tracing::warn!(path = %p.path.display(), reason = %p.reason, "hooks 配置有问题，跳过该文件");
         }
         Self {
-            cfg: merge(global, project),
+            cfg,
             cwd: cwd.to_path_buf(),
             session_id: session_id.to_owned(),
         }
@@ -448,6 +503,11 @@ impl HookEngine {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
+        // 插件带的 hook：脚本按 $CLAUDE_PLUGIN_ROOT / $PLUGIN_ROOT 找自己的
+        // 文件。用户配置里的 hook 没有这些（env 为空）。
+        for (k, v) in &def.env {
+            cmd.env(k, v);
+        }
         // Windows:不带 CREATE_NO_WINDOW 的话，打包后的 GUI 主程序每跑一个
         // hook 就闪一个黑色控制台窗。理由的完整版见 riot-runtime 的命令执行器。
         #[cfg(windows)]

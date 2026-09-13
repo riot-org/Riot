@@ -70,7 +70,7 @@ export function PlugIcon() {
   );
 }
 
-/** 能力包：箱子。 */
+/** 插件：箱子。 */
 export function PackageIcon() {
   return (
     <svg {...S} aria-hidden>

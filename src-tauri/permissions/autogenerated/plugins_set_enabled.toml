@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-plugins-set-enabled"
+description = "Enables the plugins_set_enabled command without any pre-configured scope."
+commands.allow = ["plugins_set_enabled"]
+
+[[permission]]
+identifier = "deny-plugins-set-enabled"
+description = "Denies the plugins_set_enabled command without any pre-configured scope."
+commands.deny = ["plugins_set_enabled"]

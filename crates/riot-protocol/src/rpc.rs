@@ -360,9 +360,37 @@ pub struct ToolInfo {
 pub struct McpServerSpec {
     /// 稳定标识,进工具名(`mcp__<id>__…`),也是权限规则的一部分。
     pub id: String,
-    pub command: String,
-    pub args: Vec<String>,
-    pub env: Vec<(String, String)>,
+    pub transport: McpTransport,
+}
+
+/// MCP 服务器怎么连。
+///
+/// 两种传输的信任模型不同：stdio 是本机起一个子进程；HTTP 是连到一个
+/// 远端。前者受进程组 / Job Object 管，后者受网络中断影响。分开成变体
+/// 而不是在一个平铺结构里靠"url 非空"猜 —— 猜错的表现是服务器起不来
+/// 而报错完全指不到原因。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum McpTransport {
+    /// 本机子进程，stdin/stdout 走换行分隔的 JSON-RPC。
+    Stdio {
+        command: String,
+        args: Vec<String>,
+        env: Vec<(String, String)>,
+        /// 子进程的工作目录。`None` = 继承宿主。插件带的服务器把它设成
+        /// 插件根（Agent Plugins 规范 §11.7）：包内相对路径才有意义。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cwd: Option<PathBuf>,
+    },
+    /// 远端 HTTP：MCP 的 Streamable HTTP，或旧的 HTTP+SSE。
+    Http {
+        url: String,
+        headers: Vec<(String, String)>,
+        /// 走 2024-11-05 版的 HTTP+SSE（GET 打开事件流、POST 到 endpoint
+        /// 事件给的地址），而不是 Streamable HTTP。
+        #[serde(default)]
+        legacy_sse: bool,
+    },
 }
 
 /// MCP 连接状态快照,给设置页看。

@@ -113,4 +113,21 @@ export default {
   "kernel.config.providerNotFound": "找不到服務商「{id}」。",
   "kernel.config.noModelSelected":
     "「{name}」還沒有選定模型。在設定裡新增一個模型並點選，或在輸入框的模型選單裡選擇。",
+
+  "kernel.plugin.noManifest": "目錄裡沒有外掛清單（plugin.json、.claude-plugin/plugin.json 或 .cursor-plugin/plugin.json）。",
+  "kernel.plugin.badJson": "清單不是合法 JSON。",
+  "kernel.plugin.missingSchema": "標準清單缺 $schema 欄位。",
+  "kernel.plugin.badSchema": "不支援的清單版本：{schema}",
+  "kernel.plugin.badName": "外掛名「{name}」不合法：只能用小寫字母、數字、連字號和點。",
+  "kernel.plugin.badField": "清單欄位「{field}」的型別不對。",
+  "kernel.plugin.unknownField": "清單裡有未知欄位「{field}」，已忽略。",
+  "kernel.plugin.pathMissing": "路徑不存在：{path}",
+  "kernel.plugin.pathUnreadable": "路徑讀不了：{path}",
+  "kernel.plugin.pathEscapes": "路徑逃出了外掛目錄：{path}",
+  "kernel.plugin.componentNotDir": "{path} 不是目錄。",
+  "kernel.plugin.componentNotFound": "{path} 不存在。",
+  "kernel.plugin.mcpInvalid": "MCP 設定無效。",
+  "kernel.plugin.mcpServerInvalid": "MCP 伺服器「{name}」的設定無效。",
+  "kernel.plugin.extInvalid": "dev.riot 擴充欄位無效。",
+  "kernel.mcp.httpFailed": "連不上 MCP 伺服器 {url}。",
 } satisfies Dict<typeof zh>;

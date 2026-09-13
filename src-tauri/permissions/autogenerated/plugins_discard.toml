@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-plugins-discard"
+description = "Enables the plugins_discard command without any pre-configured scope."
+commands.allow = ["plugins_discard"]
+
+[[permission]]
+identifier = "deny-plugins-discard"
+description = "Denies the plugins_discard command without any pre-configured scope."
+commands.deny = ["plugins_discard"]

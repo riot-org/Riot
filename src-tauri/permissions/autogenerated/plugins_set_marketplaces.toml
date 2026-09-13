@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-plugins-set-marketplaces"
+description = "Enables the plugins_set_marketplaces command without any pre-configured scope."
+commands.allow = ["plugins_set_marketplaces"]
+
+[[permission]]
+identifier = "deny-plugins-set-marketplaces"
+description = "Denies the plugins_set_marketplaces command without any pre-configured scope."
+commands.deny = ["plugins_set_marketplaces"]

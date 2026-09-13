@@ -10,13 +10,17 @@
 //!   走和内置工具完全相同的注册、调度、权限管线。
 //! - [`hub`] —— [`McpHub`]：应用级的连接生命周期（会话间共享）。
 //!
+//! - `http` —— Streamable HTTP 与旧 HTTP+SSE，适配成 [`client::Client`]
+//!   认的那对管道。远端服务器（Agent Plugins 里的 `streamable-http`）走这里。
+//!
 //! # 边界
 //!
-//! 传输只做 stdio。HTTP/SSE 的远程服务器是另一类信任模型（要 OAuth、
-//! 要处理网络中断重连），等有真实需求再加 —— [`client::Client`] 对传输
-//! 无感知，加的时候这层不用动。
+//! [`client::Client`] 对传输无感知：stdio 和 HTTP 两种都只是"一边读行、
+//! 一边写行"。OAuth 一类的认证不在这一版里 —— 配置里的 `headers` 是明文，
+//! 够用的场景是本机或内网里带静态令牌的服务器。
 
 pub mod client;
+mod http;
 pub mod hub;
 mod lines;
 mod stdio;
@@ -383,9 +387,12 @@ rl.on('line', (l) => {
         let hub = McpHub::new();
         hub.reconcile(vec![ServerSpec {
             id: "node".into(),
-            command: "node".into(),
-            args: vec!["-e".into(), script.into()],
-            env: vec![],
+            transport: riot_protocol::rpc::McpTransport::Stdio {
+                command: "node".into(),
+                args: vec!["-e".into(), script.into()],
+                env: vec![],
+                cwd: None,
+            },
         }])
         .await;
 
@@ -417,9 +424,12 @@ rl.on('line', (l) => {
         let hub = McpHub::new();
         hub.reconcile(vec![ServerSpec {
             id: "ghost".into(),
-            command: "/definitely/not/a/real/binary-riot-test".into(),
-            args: vec![],
-            env: vec![],
+            transport: riot_protocol::rpc::McpTransport::Stdio {
+                command: "/definitely/not/a/real/binary-riot-test".into(),
+                args: vec![],
+                env: vec![],
+                cwd: None,
+            },
         }])
         .await;
 

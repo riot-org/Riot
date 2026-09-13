@@ -1,4 +1,4 @@
-//! 能力包下载。流式落盘、断点续传、边下边算 sha256。
+//! 插件压缩包下载。流式落盘、断点续传、边下边算 sha256。
 //!
 //! 包有几百 MB,而目标用户里有相当一部分网络不稳。三个设计后果:
 //!   - 不能整包读进内存再写盘
@@ -24,7 +24,7 @@ use futures::StreamExt as _;
 use reqwest::header::{ACCEPT_ENCODING, CONTENT_RANGE, LOCATION, RANGE};
 use sha2::{Digest as _, Sha256};
 
-use super::{InstallError, PackProgress};
+use super::{InstallError, PluginProgress};
 
 /// 连续这么多次完全没把半成品变大,才认输让用户再点。
 ///
@@ -42,13 +42,13 @@ pub async fn fetch(
     dest: &Path,
     expected_size: u64,
     expected_sha256: &str,
-    progress: &(impl Fn(PackProgress) + Send + Sync),
+    progress: &(impl Fn(PluginProgress) + Send + Sync),
 ) -> Result<(), InstallError> {
     // 上次装到一半留下的完整包,校验过就不用再下。
     if dest.exists() {
-        progress(PackProgress::Verifying);
+        progress(PluginProgress::Verifying);
         if sha256_file(dest)? == expected_sha256 {
-            tracing::info!(path = %dest.display(), "pack already cached and verified");
+            tracing::info!(path = %dest.display(), "plugin archive already cached and verified");
             return Ok(());
         }
         // 校验不过说明是坏的或旧版本,删掉重下 —— 对它做续传会拼出一堆垃圾。
@@ -88,7 +88,7 @@ pub async fn fetch(
                     error = %e,
                     saved = after,
                     stalls,
-                    "pack download interrupted; resuming from offset"
+                    "plugin download interrupted; resuming from offset"
                 );
                 if stalls >= MAX_STALLS {
                     return Err(InstallError::Network(format!(
@@ -133,7 +133,7 @@ async fn download_attempt(
     part: &Path,
     expected_size: u64,
     expected_sha256: &str,
-    progress: &(impl Fn(PackProgress) + Send + Sync),
+    progress: &(impl Fn(PluginProgress) + Send + Sync),
 ) -> Result<(), InstallError> {
     let mut done = part_len(part);
     // 半成品比目标还大,只可能是上游换了内容,续传没有意义。
@@ -208,7 +208,7 @@ async fn download_attempt(
 
     let mut received = done;
     let mut last_report = std::time::Instant::now();
-    progress(PackProgress::Downloading { received, total });
+    progress(PluginProgress::Downloading { received, total });
 
     let mut stream = res.bytes_stream();
     loop {
@@ -237,13 +237,13 @@ async fn download_attempt(
         // 前端忙着重绘进度条反而更慢。
         if last_report.elapsed() >= Duration::from_millis(200) {
             last_report = std::time::Instant::now();
-            progress(PackProgress::Downloading { received, total });
+            progress(PluginProgress::Downloading { received, total });
         }
     }
     file.flush()
         .map_err(|e| InstallError::Io("flush download temp file".into(), e))?;
     drop(file);
-    progress(PackProgress::Downloading {
+    progress(PluginProgress::Downloading {
         received,
         total: received.max(total),
     });
@@ -291,10 +291,10 @@ fn finalize_part(
     dest: &Path,
     expected_size: u64,
     expected_sha256: &str,
-    progress: &(impl Fn(PackProgress) + Send + Sync),
+    progress: &(impl Fn(PluginProgress) + Send + Sync),
 ) -> Result<(), InstallError> {
     // 校验放在续传拼接之后:每一段单独看都可能是好的,拼错了才出问题。
-    progress(PackProgress::Verifying);
+    progress(PluginProgress::Verifying);
     let actual = sha256_file(part)?;
     if actual == expected_sha256 {
         std::fs::rename(part, dest).map_err(|e| InstallError::Io("rename download".into(), e))?;

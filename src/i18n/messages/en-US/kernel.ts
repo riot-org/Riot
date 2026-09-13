@@ -114,4 +114,21 @@ export default {
   "kernel.config.providerNotFound": "Provider \u201c{id}\u201d not found.",
   "kernel.config.noModelSelected":
     "\u201c{name}\u201d has no model selected. Add and select one in Settings, or pick one from the model menu in the composer.",
+
+  "kernel.plugin.noManifest": "No plugin manifest in the directory (plugin.json, .claude-plugin/plugin.json or .cursor-plugin/plugin.json).",
+  "kernel.plugin.badJson": "The manifest is not valid JSON.",
+  "kernel.plugin.missingSchema": "The standard manifest is missing $schema.",
+  "kernel.plugin.badSchema": "Unsupported manifest version: {schema}",
+  "kernel.plugin.badName": "Plugin name “{name}” is invalid: lowercase letters, digits, hyphens and periods only.",
+  "kernel.plugin.badField": "Manifest field “{field}” has the wrong type.",
+  "kernel.plugin.unknownField": "Unknown manifest field “{field}” ignored.",
+  "kernel.plugin.pathMissing": "Path does not exist: {path}",
+  "kernel.plugin.pathUnreadable": "Path cannot be read: {path}",
+  "kernel.plugin.pathEscapes": "Path escapes the plugin directory: {path}",
+  "kernel.plugin.componentNotDir": "{path} is not a directory.",
+  "kernel.plugin.componentNotFound": "{path} does not exist.",
+  "kernel.plugin.mcpInvalid": "Invalid MCP configuration.",
+  "kernel.plugin.mcpServerInvalid": "Invalid configuration for MCP server “{name}”.",
+  "kernel.plugin.extInvalid": "Invalid dev.riot extension data.",
+  "kernel.mcp.httpFailed": "Cannot reach MCP server {url}.",
 } satisfies Dict<typeof zh>;

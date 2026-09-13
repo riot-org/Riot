@@ -111,7 +111,11 @@ export function HooksPane({ status, activeRoot }: { status: ConfigStatus; active
                     <span className="skill-name">{h.error ? t("settings.hooks.broken") : h.event}</span>
                     {h.matcher ? <code className="hook-matcher">{h.matcher}</code> : null}
                     <span className="skill-source">
-                      {h.source === "project" ? t("settings.ext.tier.project") : t("settings.ext.tier.global")}
+                      {h.source === "plugin"
+                        ? t("settings.ext.tier.pluginNamed", { plugin: h.plugin ?? "" })
+                        : h.source === "project"
+                          ? t("settings.ext.tier.project")
+                          : t("settings.ext.tier.global")}
                     </span>
                   </div>
                   <p className={h.error ? "form-error" : "hint"} style={{ margin: "2px 0 0" }}>

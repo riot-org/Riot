@@ -206,6 +206,25 @@ pub struct TurnConfig {
     /// 每轮现传；内核据此在消息侧注入协调者准则。
     #[serde(default)]
     pub multitask: bool,
+    /// 本轮生效的插件（已安装且启用的），按 id 排序。
+    ///
+    /// 宿主是插件注册表的权威（装了什么、开没开都记在它的配置里），内核
+    /// 只拿到"去哪些目录读"。目录里的 manifest、技能、命令、hooks 由内核
+    /// 每轮现读 —— 和 SKILL.md、hooks.json 同一条"改完下一轮生效"的规矩。
+    /// 插件的 MCP 服务器不在这里：连接是应用级的，走 `mcp.reconcile`。
+    #[serde(default)]
+    pub plugins: Vec<PluginRef>,
+}
+
+/// 一个生效中的插件：id 加它的根目录。
+///
+/// `root` 是**解析后的绝对路径**。安装的插件在配置目录下，开发者「链接
+/// 本地目录」的插件在任何地方 —— 内核不关心区别，两者都只是一个目录。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PluginRef {
+    /// 插件 id（manifest 的 `name`）。技能和命令按它加命名空间前缀。
+    pub id: String,
+    pub root: std::path::PathBuf,
 }
 
 /// 用户在界面上按的一个"推一把"按钮，变成一条塞给模型的带外提醒。

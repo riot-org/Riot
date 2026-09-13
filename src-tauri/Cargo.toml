@@ -56,7 +56,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 portable-pty = "0.9.0"
 ignore = "0.4.33"
-# 能力包的下载校验与解包。见 src/packs/。
+# 插件压缩包的下载校验与解包。见 src/plugins/。
 sha2.workspace = true
 tar.workspace = true
 zstd.workspace = true

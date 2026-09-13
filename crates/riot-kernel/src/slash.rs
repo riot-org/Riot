@@ -5,9 +5,11 @@
 //! ```text
 //! <配置目录>/riot/commands/**/*.md     全局命令
 //! <项目根>/.riot/commands/**/*.md      项目命令，同名赢（和技能同一直觉）
+//! <插件根>/commands/**/*.md            插件命令，名字前缀 `<插件>:`
 //! ```
 //!
-//! 子目录变成命名空间：`commands/git/pr.md` → `/git:pr`。
+//! 子目录变成命名空间：`commands/git/pr.md` → `/git:pr`。插件的再多一层：
+//! `<插件>/commands/git/pr.md` → `/<插件>:git:pr`（和 Claude Code 一致）。
 //!
 //! # 文件格式
 //!
@@ -66,8 +68,11 @@ pub struct SlashCommand {
     /// 一份几十 KB 的模板过 IPC 是白花的钱。
     #[serde(skip)]
     pub body: String,
-    /// `builtin` / `project` / `global` / `skill`。
+    /// `builtin` / `project` / `global` / `plugin` / `skill`。
     pub source: String,
+    /// 带来它的插件 id。命令来自插件、或技能来自插件时有值。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<String>,
     /// 用户敲 `/名字` 时，是否就地展开成提示词。
     ///
     /// 规则是「模型加载不了的才展开」：
@@ -103,19 +108,38 @@ pub fn project_dir(root: &Path) -> PathBuf {
     root.join(".riot").join("commands")
 }
 
-/// 一个项目可用的全部命令：内置在前，然后项目级、全局（同名先到先得，
-/// 所以项目级盖全局；自定义**不能**盖内置 —— 内置的行为要可预期）。
+/// 一个项目可用的全部命令：内置在前，然后项目级、全局、插件（同名先到
+/// 先得，所以项目级盖全局；自定义**不能**盖内置 —— 内置的行为要可预期）。
 ///
-/// `project_root` 为 None（设置页里没有活跃会话）时只列内置 + 全局。
-pub fn discover(project_root: Option<&Path>) -> Vec<SlashCommand> {
+/// `project_root` 为 None（设置页里没有活跃会话）时不列项目级。
+/// `plugins` 是本轮生效的插件，它们的命令带 `<插件>:` 前缀。
+pub fn discover(
+    project_root: Option<&Path>,
+    plugins: &[crate::plugins::Loaded],
+) -> Vec<SlashCommand> {
     let mut out = builtin();
     if let Some(root) = project_root {
-        scan(&project_dir(root), "project", &mut out);
+        scan(&project_dir(root), "project", None, &mut out);
     }
-    scan(&global_dir(), "global", &mut out);
+    scan(&global_dir(), "global", None, &mut out);
+    for p in plugins {
+        for dir in &p.command_dirs {
+            scan(dir, "plugin", Some(&p.id), &mut out);
+        }
+        for file in &p.command_files {
+            let stem = file
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_owned();
+            if !stem.is_empty() {
+                add_file(file, &stem, "plugin", Some(&p.id), &mut out);
+            }
+        }
+    }
     // 技能（含内置技能）排最后 = 优先级最低。没有活跃项目时也要走这条：
     // 内置技能不依赖项目，设置页里该看得到。
-    add_skills(project_root, &mut out);
+    add_skills(project_root, plugins, &mut out);
     out
 }
 
@@ -128,8 +152,12 @@ pub fn discover(project_root: Option<&Path>) -> Vec<SlashCommand> {
 ///
 /// 排在最后 = 优先级最低。同名时命令赢：命令是专门为 `/` 写的，技能只是
 /// 顺带可调用；反过来的话，用户写的命令会被一个同名技能悄悄顶掉。
-fn add_skills(root: Option<&Path>, out: &mut Vec<SlashCommand>) {
-    let found = crate::skills::discover_opt(root);
+fn add_skills(
+    root: Option<&Path>,
+    plugins: &[crate::plugins::Loaded],
+    out: &mut Vec<SlashCommand>,
+) {
+    let found = crate::skills::discover_opt(root, plugins);
     let skills_global = crate::skills::global_dir();
     for card in found.cards {
         if out.iter().any(|c| c.name == card.name) {
@@ -138,9 +166,12 @@ fn add_skills(root: Option<&Path>, out: &mut Vec<SlashCommand>) {
         }
         // 模型加载不了的才就地展开，见 `expand_inline` 的说明。
         let expand_inline = found.slash_only.contains(&card.name);
+        let plugin = found.plugin_of.get(&card.name).cloned();
         // 内置的先判：它的 dir 是空路径，落到前缀判断会被误认成 project。
         let skill_source = if found.builtin.contains(&card.name) {
             "builtin"
+        } else if plugin.is_some() {
+            "plugin"
         } else if card.dir.starts_with(&skills_global) {
             "global"
         } else {
@@ -153,6 +184,7 @@ fn add_skills(root: Option<&Path>, out: &mut Vec<SlashCommand>) {
             argument_hint: None,
             body: card.body,
             source: "skill".to_owned(),
+            plugin,
             expand_inline,
             skill_source: Some(skill_source.to_owned()),
             dir: Some(card.dir),
@@ -164,8 +196,13 @@ fn add_skills(root: Option<&Path>, out: &mut Vec<SlashCommand>) {
 ///
 /// `None` = 没这条命令，或它是内置命令（内置由前端按 name 执行，
 /// 没有模板可展开）。
-pub fn expand(project_root: Option<&Path>, name: &str, args: &str) -> Option<String> {
-    let cmd = discover(project_root)
+pub fn expand(
+    project_root: Option<&Path>,
+    plugins: &[crate::plugins::Loaded],
+    name: &str,
+    args: &str,
+) -> Option<String> {
+    let cmd = discover(project_root, plugins)
         .into_iter()
         .find(|c| c.name == name)?;
     if cmd.body.is_empty() {
@@ -176,6 +213,15 @@ pub fn expand(project_root: Option<&Path>, name: &str, args: &str) -> Option<Str
     // 这条路时也得替换，否则用户会在提示词里看到一个字面量占位符。
     if let Some(dir) = cmd.dir.as_deref() {
         text = text.replace("${SKILL_DIR}", &dir.display().to_string());
+    }
+    // 插件的模板里可以写 ${PLUGIN_ROOT} / ${CLAUDE_PLUGIN_ROOT}（CC 的命令
+    // 常这么引用自带脚本）。同理要在这里展开。
+    if let Some(p) = cmd
+        .plugin
+        .as_deref()
+        .and_then(|id| plugins.iter().find(|p| p.id == id))
+    {
+        text = p.vars.expand(&text);
     }
     Some(text)
 }
@@ -266,6 +312,7 @@ fn builtin() -> Vec<SlashCommand> {
         argument_hint: None,
         body: String::new(),
         source: "builtin".into(),
+        plugin: None,
         // 内置命令由前端按名字执行，没有模板可展开。
         expand_inline: false,
         skill_source: None,
@@ -273,43 +320,60 @@ fn builtin() -> Vec<SlashCommand> {
     }]
 }
 
-fn scan(dir: &Path, source: &str, out: &mut Vec<SlashCommand>) {
+fn scan(dir: &Path, source: &str, plugin: Option<&str>, out: &mut Vec<SlashCommand>) {
     let mut files = Vec::new();
     collect_md(dir, dir, &mut files);
     // 排序保证清单稳定（read_dir 顺序随机）。
     files.sort();
     for (rel, path) in files {
-        let raw = match std::fs::read_to_string(&path) {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!(path = %path.display(), error = %e, "命令文件读不出来，跳过");
-                continue;
-            }
-        };
         let name = rel.trim_end_matches(".md").replace(['/', '\\'], ":");
         if name.is_empty() {
             continue;
         }
-        if out.iter().any(|c| c.name == name) {
-            tracing::debug!(name = %name, "同名命令已存在（内置 > 项目 > 全局），跳过");
-            continue;
+        add_file(&path, &name, source, plugin, out);
+    }
+}
+
+/// 读一个命令文件进清单。`name` 是不带插件前缀的名字（含子目录命名空间）。
+fn add_file(
+    path: &Path,
+    name: &str,
+    source: &str,
+    plugin: Option<&str>,
+    out: &mut Vec<SlashCommand>,
+) {
+    let raw = match std::fs::read_to_string(path) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "命令文件读不出来，跳过");
+            return;
         }
-        match parse(&raw) {
-            Ok((description, argument_hint, body)) => out.push(SlashCommand {
-                name,
-                description,
-                description_text: None,
-                argument_hint,
-                body,
-                source: source.into(),
-                // 命令就是提示词模板，没有别的加载路径。
-                expand_inline: true,
-                skill_source: None,
-                dir: None,
-            }),
-            Err(reason) => {
-                tracing::warn!(path = %path.display(), reason = %reason, "命令解析失败，跳过");
-            }
+    };
+    let name = match plugin {
+        Some(p) => format!("{p}:{name}"),
+        None => name.to_owned(),
+    };
+    if out.iter().any(|c| c.name == name) {
+        tracing::debug!(name = %name, "同名命令已存在（内置 > 项目 > 全局 > 插件），跳过");
+        return;
+    }
+    match parse(&raw) {
+        Ok((description, argument_hint, body)) => out.push(SlashCommand {
+            name,
+            description,
+            description_text: None,
+            argument_hint,
+            body,
+            source: source.into(),
+            plugin: plugin.map(str::to_owned),
+            // 命令就是提示词模板，没有别的加载路径。
+            expand_inline: true,
+            skill_source: None,
+            // 插件命令的 ${PLUGIN_ROOT} 之类由 expand 展开；这里记根目录。
+            dir: None,
+        }),
+        Err(reason) => {
+            tracing::warn!(path = %path.display(), reason = %reason, "命令解析失败，跳过");
         }
     }
 }
@@ -410,14 +474,14 @@ mod tests {
         )
         .expect("写技能");
 
-        let list = discover(Some(root));
+        let list = discover(Some(root), &[]);
         let found = list
             .iter()
             .find(|c| c.name == "verify")
             .expect("技能该在 / 菜单里");
         assert_eq!(found.source, "skill", "来源要标出来，用户得知道这是技能");
 
-        let text = expand(Some(root), "verify", "只跑 clippy").expect("该展开");
+        let text = expand(Some(root), &[], "verify", "只跑 clippy").expect("该展开");
         assert!(text.contains("只跑 clippy"), "$ARGUMENTS 要替换：{text}");
         assert!(
             !text.contains("${SKILL_DIR}"),
@@ -449,7 +513,7 @@ mod tests {
             std::fs::write(dir.join("SKILL.md"), front).expect("写技能");
         }
 
-        let list = discover(Some(root));
+        let list = discover(Some(root), &[]);
         let normal = list.iter().find(|c| c.name == "normal").expect("有");
         let handsoff = list.iter().find(|c| c.name == "handsoff").expect("有");
 
@@ -485,7 +549,7 @@ mod tests {
         )
         .expect("写命令");
 
-        let list = discover(Some(root));
+        let list = discover(Some(root), &[]);
         let hits: Vec<&SlashCommand> = list.iter().filter(|c| c.name == "dup").collect();
         assert_eq!(hits.len(), 1, "不该出现两条同名");
         assert_eq!(hits[0].description, "命令版", "命令必须赢");
@@ -497,7 +561,7 @@ mod tests {
     /// `/名字`。所以「内置命令」不需要另一套机制。
     #[test]
     fn 内置技能也是斜杠命令() {
-        let list = discover(None);
+        let list = discover(None, &[]);
         assert!(
             list.iter().any(|c| c.source == "skill"),
             "没有活跃项目时也该列出内置技能，实际：{:?}",
@@ -524,7 +588,7 @@ mod tests {
         )
         .expect("写技能");
 
-        let list = discover(Some(root));
+        let list = discover(Some(root), &[]);
 
         let mine = list
             .iter()
@@ -562,10 +626,46 @@ mod tests {
         )
         .expect("写技能");
 
-        let list = discover(Some(root));
+        let list = discover(Some(root), &[]);
         let hits: Vec<&SlashCommand> = list.iter().filter(|c| c.name == "compact").collect();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].source, "builtin", "内置必须赢");
+    }
+
+    /// 插件命令带 `<插件>:` 前缀，模板里的 `${CLAUDE_PLUGIN_ROOT}` 展开成
+    /// 插件根 —— CC 的命令常这么引用自带脚本，不展开的话模型看到的是字面量。
+    #[test]
+    fn 插件命令带前缀且展开插件根() {
+        let t = tempfile::tempdir().expect("临时目录");
+        let root = t.path().join("plug");
+        std::fs::create_dir_all(root.join("commands/git")).expect("建目录");
+        std::fs::create_dir_all(root.join(".claude-plugin")).expect("建目录");
+        std::fs::write(
+            root.join(".claude-plugin/plugin.json"),
+            r#"{ "name": "acme" }"#,
+        )
+        .expect("写清单");
+        std::fs::write(
+            root.join("commands/git/pr.md"),
+            "跑 ${CLAUDE_PLUGIN_ROOT}/scripts/pr.sh $ARGUMENTS",
+        )
+        .expect("写命令");
+        let loaded = crate::plugins::load(&root, &t.path().join("data")).expect("能读");
+
+        let list = discover(None, std::slice::from_ref(&loaded));
+        let cmd = list
+            .iter()
+            .find(|c| c.name == "acme:git:pr")
+            .expect("插件命令该带 `acme:` 前缀，再接子目录命名空间");
+        assert_eq!(cmd.source, "plugin");
+        assert_eq!(cmd.plugin.as_deref(), Some("acme"));
+
+        let text =
+            expand(None, std::slice::from_ref(&loaded), "acme:git:pr", "main").expect("该展开");
+        assert!(
+            text.starts_with(&format!("跑 {}/scripts/pr.sh main", loaded.root.display())),
+            "插件根要展开：{text}"
+        );
     }
 
     #[test]
@@ -626,7 +726,7 @@ mod tests {
         std::fs::write(project.join("compact.md"), "假装是压缩").expect("写");
 
         let mut out = builtin();
-        scan(&project, "project", &mut out);
+        scan(&project, "project", None, &mut out);
 
         let names: Vec<&str> = out.iter().map(|c| c.name.as_str()).collect();
         assert!(names.contains(&"git:pr"), "子目录变命名空间：{names:?}");

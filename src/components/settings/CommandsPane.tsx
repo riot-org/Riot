@@ -12,7 +12,7 @@ import { Card, CardBlock, Group, Row } from "./layout";
 /** 技能在命令页的层级前缀。和 Skills 页用同一套词。 */
 const SKILL_TIER: Record<string, MessageKey> = {
   builtin: "settings.ext.tier.builtin",
-  pack: "settings.ext.tier.pack",
+  plugin: "settings.ext.tier.plugin",
   global: "settings.ext.tier.global",
   project: "settings.ext.tier.project",
 };
@@ -121,9 +121,11 @@ export function CommandsPane({ status, activeRoot }: { status: ConfigStatus; act
                       ? t("settings.ext.tier.builtin")
                       : c.source === "skill"
                         ? skillSourceLabel(c.skillSource, t)
-                        : c.source === "project"
-                          ? t("settings.ext.tier.project")
-                          : t("settings.ext.tier.global")}
+                        : c.source === "plugin"
+                          ? t("settings.ext.tier.pluginNamed", { plugin: c.plugin ?? "" })
+                          : c.source === "project"
+                            ? t("settings.ext.tier.project")
+                            : t("settings.ext.tier.global")}
                   </span>
                 </div>
                 <p className="hint" style={{ margin: "2px 0 0" }}>

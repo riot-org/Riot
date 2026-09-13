@@ -14,7 +14,12 @@ riot-tools = { workspace = true }
 async-trait = { workspace = true }
 # MCP 的图片内容块是 base64，落盘原图前要解码。
 base64 = "0.22"
+# HTTP 传输（Streamable HTTP / 旧 SSE）。stream 特性给 SSE 逐块读。
+futures = { workspace = true }
 process-wrap = { workspace = true }
+reqwest = { workspace = true }
+# 旧 SSE 协议的 endpoint 事件可能给相对地址，按流地址解析。
+url = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

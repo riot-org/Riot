@@ -1,16 +1,21 @@
 //! Skill 的发现与解析。
 //!
-//! # 三层来源
+//! # 四层来源
 //!
 //! ```text
 //! <项目根>/.riot/skills/<名字>/SKILL.md      项目技能，只在该项目的会话里
 //! <配置目录>/skills/<名字>/SKILL.md          全局技能，用户自己写的
+//! <插件根>/skills/<名字>/SKILL.md            插件带的，名字前缀 `<插件>:`
 //! （编进二进制）                              内置技能，随应用分发
 //! ```
 //!
-//! 同名时**越具体的赢**：项目 > 全局 > 内置（和 git 的 local > global
+//! 同名时**越具体的赢**：项目 > 全局 > 插件 > 内置（和 git 的 local > global
 //! 同一直觉）。内置的排最后是刻意的 —— 用户想改内置技能的做法时，写一个
 //! 同名的就能盖掉，不需要去找应用包里的文件，也不用等版本更新。
+//!
+//! 插件的技能带 `<插件>:` 前缀（和 Claude Code 一致），所以它们实际上不会
+//! 和用户自己写的撞名 —— 两个插件都带 `review` 是常态，不加前缀的话后装的
+//! 静默消失。用户要盖掉插件的技能，写一个带同样前缀名字的即可。
 //!
 //! # 内置技能为什么编进二进制
 //!
@@ -90,6 +95,10 @@ const BUILTIN_SKILLS: &[(&str, &str)] = &[
         "split-to-prs",
         include_str!("../builtin/skills/split-to-prs/SKILL.md"),
     ),
+    (
+        "create-plugin",
+        include_str!("../builtin/skills/create-plugin/SKILL.md"),
+    ),
 ];
 
 /// 发现结果：能用的进工具，有问题的报给设置页。
@@ -109,6 +118,8 @@ pub struct Discovered {
     /// 这时这个名字不该再被标成内置 —— 设置页要显示的是**实际在用的那份**
     /// 来自哪里。
     pub builtin: std::collections::HashSet<String>,
+    /// 技能名 → 带来它的插件 id。只有最终生效的那份是插件带的才记。
+    pub plugin_of: std::collections::HashMap<String, String>,
 }
 
 impl Discovered {
@@ -140,8 +151,11 @@ pub struct SkillInfo {
     pub description: String,
     /// SKILL.md 的完整路径。内置技能没有路径（编进了二进制），给空串。
     pub path: String,
-    /// `builtin` / `pack` / `global` / `project`。
+    /// `builtin` / `plugin` / `global` / `project`。
     pub source: String,
+    /// `source == "plugin"` 时是插件 id。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<String>,
     /// 解析失败的原因（词典键 + 细节）。None = 这个技能可用。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<UiError>,
@@ -160,59 +174,32 @@ pub fn project_dir(root: &Path) -> PathBuf {
     root.join(".riot").join("skills")
 }
 
-/// 已安装能力包各自带的技能目录。
+/// 扫描一个项目的可用技能：项目级 > 全局 > 插件 > 内置（同名先到先得）。
 ///
-/// 直接扫能力包而不是安装时把技能拷贝（或软链）到全局目录：拷贝要在卸载时
-/// 记得清，软链在 Windows 上还要开开发者模式，而两者都会让"包里有什么技能"
-/// 和"全局目录里有什么"漂移。就地扫的话，装上即出现、卸掉即消失。
-pub fn pack_dirs() -> Vec<PathBuf> {
-    pack_dirs_in(&crate::config::packs_dir(&crate::config::config_path()))
+/// `plugins` 是本轮生效的插件（宿主给的清单，已按 id 排序）。直接扫插件
+/// 目录而不是安装时把技能拷贝（或软链）到全局目录：拷贝要在卸载时记得清，
+/// 软链在 Windows 上还要开开发者模式，而两者都会让"插件里有什么技能"和
+/// "全局目录里有什么"漂移。就地扫的话，装上即出现、卸掉即消失。
+pub fn discover(project_root: &Path, plugins: &[crate::plugins::Loaded]) -> Discovered {
+    discover_in(&project_dir(project_root), &global_dir(), plugins)
 }
 
-/// 参数化版本，给测试用（同 [`discover_dirs`] 的理由）。
-fn pack_dirs_in(root: &Path) -> Vec<PathBuf> {
-    let Ok(rd) = std::fs::read_dir(root) else {
-        return vec![]; // 一个包都没装
-    };
-    let mut dirs: Vec<PathBuf> = rd
-        .flatten()
-        .map(|e| e.path())
-        // 安装中途的临时目录和下载缓存都以点开头，跳过 —— 扫到半成品会把
-        // 一个残缺的 SKILL.md 当成可用技能列出来。
-        .filter(|p| {
-            !p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with('.'))
-        })
-        .map(|p| p.join("skills"))
-        .filter(|p| p.is_dir())
-        .collect();
-    dirs.sort();
-    dirs
-}
-
-/// 扫描一个项目的可用技能：项目级 > 全局 > 能力包 > 内置（同名先到先得）。
-///
-/// 能力包排在全局后面，这样用户想改包里带的技能时，在全局目录放一个同名的
-/// 就能盖掉 —— 而不必去改包内容（那会在下次升级时被覆盖）。
-pub fn discover(project_root: &Path) -> Discovered {
-    discover_in(&project_dir(project_root), &global_dir())
-}
-
-/// 没有活跃项目时（设置页）也要能列：全局 + 内置。
+/// 没有活跃项目时（设置页）也要能列：全局 + 插件 + 内置。
 ///
 /// 内置技能不依赖项目，少了它们设置页会显示"还没有技能"，而它们明明装着。
-pub fn discover_opt(project_root: Option<&Path>) -> Discovered {
+pub fn discover_opt(project_root: Option<&Path>, plugins: &[crate::plugins::Loaded]) -> Discovered {
     match project_root {
-        Some(root) => discover(root),
-        None => discover_in(Path::new("/nonexistent-no-project"), &global_dir()),
+        Some(root) => discover(root, plugins),
+        None => discover_in(Path::new("/nonexistent-no-project"), &global_dir(), plugins),
     }
 }
 
-fn discover_in(project: &Path, global: &Path) -> Discovered {
+fn discover_in(project: &Path, global: &Path, plugins: &[crate::plugins::Loaded]) -> Discovered {
     let mut out = discover_dirs(project, global);
-    for dir in pack_dirs() {
-        scan_dir(&dir, &mut out);
+    for p in plugins {
+        for dir in &p.skill_dirs {
+            scan_skill_dir(dir, Some(&p.id), &mut out);
+        }
     }
     // 内置**最后**扫：同名先到先得，所以用户写的那份赢。
     scan_builtin(&mut out);
@@ -241,42 +228,54 @@ fn scan_dir(dir: &Path, out: &mut Discovered) {
     entries.sort();
 
     for entry in entries {
-        let skill_md = entry.join("SKILL.md");
-        if !skill_md.is_file() {
-            continue;
-        }
-        let raw = match std::fs::read_to_string(&skill_md) {
-            Ok(r) => r,
-            Err(e) => {
-                out.problems.push(Problem {
-                    path: skill_md,
-                    reason: ui_error!("kernel.config.unreadable"; e),
-                });
-                continue;
-            }
-        };
-        let fallback_name = entry
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("unnamed")
-            .to_owned();
-        match parse_skill(&raw, &fallback_name, &entry) {
-            Ok((card, slash_only)) => {
-                // 同名先到先得：项目目录先扫，所以项目级赢。
-                if out.cards.iter().any(|c| c.name == card.name) {
-                    tracing::debug!(name = %card.name, "同名技能已存在（项目级优先），跳过");
-                } else {
-                    if slash_only {
-                        out.slash_only.insert(card.name.clone());
-                    }
-                    out.cards.push(card);
-                }
-            }
-            Err(reason) => out.problems.push(Problem {
+        scan_skill_dir(&entry, None, out);
+    }
+}
+
+/// 读一个技能目录（含 `SKILL.md` 的那一层）。`plugin` 有值时名字加
+/// `<插件>:` 前缀，并记下归属。
+fn scan_skill_dir(entry: &Path, plugin: Option<&str>, out: &mut Discovered) {
+    let skill_md = entry.join("SKILL.md");
+    if !skill_md.is_file() {
+        return;
+    }
+    let raw = match std::fs::read_to_string(&skill_md) {
+        Ok(r) => r,
+        Err(e) => {
+            out.problems.push(Problem {
                 path: skill_md,
-                reason,
-            }),
+                reason: ui_error!("kernel.config.unreadable"; e),
+            });
+            return;
         }
+    };
+    let fallback_name = entry
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unnamed")
+        .to_owned();
+    match parse_skill(&raw, &fallback_name, entry) {
+        Ok((mut card, slash_only)) => {
+            if let Some(p) = plugin {
+                card.name = format!("{p}:{}", card.name);
+            }
+            // 同名先到先得：项目目录先扫，所以项目级赢。
+            if out.cards.iter().any(|c| c.name == card.name) {
+                tracing::debug!(name = %card.name, "同名技能已存在（项目级优先），跳过");
+            } else {
+                if slash_only {
+                    out.slash_only.insert(card.name.clone());
+                }
+                if let Some(p) = plugin {
+                    out.plugin_of.insert(card.name.clone(), p.to_owned());
+                }
+                out.cards.push(card);
+            }
+        }
+        Err(reason) => out.problems.push(Problem {
+            path: skill_md,
+            reason,
+        }),
     }
 }
 
@@ -358,10 +357,16 @@ fn parse_skill(raw: &str, fallback_name: &str, dir: &Path) -> Result<(SkillCard,
 }
 
 /// 设置页的技能清单：可用的和有问题的都列出来。
-pub fn list(project_root: Option<&Path>) -> Vec<SkillInfo> {
+pub fn list(project_root: Option<&Path>, plugins: &[crate::plugins::Loaded]) -> Vec<SkillInfo> {
     let global = global_dir();
-    let packs = crate::config::packs_dir(&crate::config::config_path());
-    let d = discover_opt(project_root);
+    let d = discover_opt(project_root, plugins);
+    // 问题条目按路径归属插件：解析失败的 SKILL.md 没进 cards，只能按目录判。
+    let plugin_by_path = |path: &Path| -> Option<String> {
+        plugins
+            .iter()
+            .find(|p| path.starts_with(&p.root))
+            .map(|p| p.id.clone())
+    };
 
     let mut out: Vec<SkillInfo> = d
         .cards
@@ -370,12 +375,13 @@ pub fn list(project_root: Option<&Path>) -> Vec<SkillInfo> {
             // 内置的先判：它的 dir 是空路径，落到下面的前缀判断会被误认成
             // "project"（空路径不以全局目录开头）。
             let builtin = d.builtin.contains(&c.name);
+            let plugin = d.plugin_of.get(&c.name).cloned();
             let source = if builtin {
                 "builtin"
+            } else if plugin.is_some() {
+                "plugin"
             } else if c.dir.starts_with(&global) {
                 "global"
-            } else if c.dir.starts_with(&packs) {
-                "pack"
             } else {
                 "project"
             };
@@ -389,11 +395,13 @@ pub fn list(project_root: Option<&Path>) -> Vec<SkillInfo> {
                     c.dir.join("SKILL.md").display().to_string()
                 },
                 source: source.into(),
+                plugin,
                 error: None,
             }
         })
         .collect();
     out.extend(d.problems.iter().cloned().map(|p| {
+        let plugin = plugin_by_path(&p.path);
         SkillInfo {
             name: p
                 .path
@@ -403,12 +411,15 @@ pub fn list(project_root: Option<&Path>) -> Vec<SkillInfo> {
                 .unwrap_or("?")
                 .to_owned(),
             description: String::new(),
-            source: if p.path.starts_with(&global) {
+            source: if plugin.is_some() {
+                "plugin"
+            } else if p.path.starts_with(&global) {
                 "global"
             } else {
                 "project"
             }
             .into(),
+            plugin,
             path: p.path.display().to_string(),
             error: Some(p.reason),
         }
@@ -435,22 +446,56 @@ mod tests {
         (t, project, global)
     }
 
+    /// 插件带的技能加 `<插件>:` 前缀，并记下归属。
+    ///
+    /// 两个插件都带 `review` 是常态。不加前缀的话后装的静默消失，而设置页
+    /// 两条都列着 —— 用户看到的是"装了但不生效"。
     #[test]
-    fn 能力包目录跳过安装中途的临时目录() {
-        let t = tempfile::tempdir().expect("临时目录");
-        let root = t.path();
-        for name in ["doc-runtime", ".staging-doc-runtime-123", ".cache"] {
-            std::fs::create_dir_all(root.join(name).join("skills")).expect("建目录");
-        }
-        // 没有 skills 子目录的包不该被列出来
-        std::fs::create_dir_all(root.join("empty-pack")).expect("建目录");
+    fn 插件技能带前缀并记归属() {
+        let (_t, project, global) = dirs();
+        let t2 = tempfile::tempdir().expect("插件目录");
+        let mk = |name: &str| {
+            let root = t2.path().join(name);
+            std::fs::create_dir_all(&root).expect("建根");
+            std::fs::write(
+                root.join("plugin.json"),
+                format!(
+                    r#"{{ "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json", "name": "{name}" }}"#
+                ),
+            )
+            .expect("写清单");
+            write_skill(
+                &root.join("skills"),
+                "review",
+                &format!("---\nname: review\ndescription: {name} 的审查\n---\n正文\n"),
+            );
+            crate::plugins::load(&root, &t2.path().join("data")).expect("能读")
+        };
+        let a = mk("aaa");
+        let b = mk("bbb");
 
-        let dirs = pack_dirs_in(root);
-
+        let d = discover_in(&project, &global, &[a, b]);
+        let names: Vec<&str> = d
+            .cards
+            .iter()
+            .map(|c| c.name.as_str())
+            // 内置的 `review` 也在清单里，只看带前缀的。
+            .filter(|n| n.ends_with(":review"))
+            .collect();
         assert_eq!(
-            dirs,
-            vec![root.join("doc-runtime").join("skills")],
-            "点开头的是解压临时目录和下载缓存，扫进去会把半成品当成可用技能"
+            names,
+            vec!["aaa:review", "bbb:review"],
+            "两个都在，各带前缀"
+        );
+        assert_eq!(
+            d.plugin_of.get("aaa:review").map(String::as_str),
+            Some("aaa")
+        );
+
+        let listed = list(None, &[]);
+        assert!(
+            listed.iter().all(|s| s.source != "plugin"),
+            "没传插件就没有插件技能"
         );
     }
 
@@ -642,7 +687,7 @@ mod tests {
             &format!("---\nname: {name}\ndescription: 我自己的版本\n---\n我的做法\n"),
         );
 
-        let d = discover_in(&project, &global);
+        let d = discover_in(&project, &global, &[]);
         let hit: Vec<&SkillCard> = d.cards.iter().filter(|c| c.name == name).collect();
         assert_eq!(hit.len(), 1, "不该出现两条同名");
         assert_eq!(hit[0].description, "我自己的版本", "用户的那份必须赢");
@@ -657,7 +702,7 @@ mod tests {
     /// 少了这条，设置页会显示"还没有技能"，而它们明明装着。
     #[test]
     fn 没有项目也能列出内置技能() {
-        let list = list(None);
+        let list = list(None, &[]);
         assert!(
             list.iter().any(|s| s.source == "builtin"),
             "没有项目时该列出内置技能，实际：{:?}",

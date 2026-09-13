@@ -144,7 +144,7 @@ function SandboxReality({
           ? t("settings.permission.sandbox.installedOff")
           : t("settings.permission.sandbox.installed"),
       )}
-      <div className="pack-actions" style={{ marginTop: 6 }}>
+      <div className="set-actions">
         <button disabled={uninstalling} onClick={onUninstall}>
           {uninstalling ? t("settings.permission.sandbox.waitingUac") : t("settings.permission.sandbox.uninstall")}
         </button>
@@ -161,7 +161,7 @@ function SandboxReality({
     return (
       <>
         {line("form-error", t("settings.permission.sandbox.notInstalled"))}
-        <div className="pack-actions" style={{ marginTop: 6 }}>
+        <div className="set-actions">
           <button disabled={installing} onClick={onInstall}>
             {installing ? t("settings.permission.sandbox.waitingUac") : t("settings.permission.sandbox.install")}
           </button>

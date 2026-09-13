@@ -25,9 +25,6 @@ export default {
   "settings.tab.mcp": "MCP",
   "settings.tab.mcp.title": "MCP 伺服器",
   "settings.tab.mcp.desc": "接入外部工具伺服器，連上之後模型就能直接呼叫。",
-  "settings.tab.packs": "能力包",
-  "settings.tab.packs.title": "能力包",
-  "settings.tab.packs.desc": "可選下載的執行環境。裝好之後相關工具和技能會自動註冊。",
   "settings.tab.skills": "Skills",
   "settings.tab.skills.title": "Skills",
   "settings.tab.skills.desc": "寫成 SKILL.md 的技能，模型按需載入。",
@@ -270,4 +267,8 @@ export default {
     "讓模型能翻本專案的其他會話：回答「上次那個問題最後怎麼解決的」，並給出跳到那個會話的連結。摘錄按專案分資料夾，存在 Riot 自己的資料目錄裡，不進專案。關掉後提示詞裡不再提它；每個會話自己的摘錄仍會維護 —— 上下文壓縮後模型靠它找回被總結掉的原文。摘錄隨會話一起刪除。",
   "settings.permission.rules": "會話內規則",
   "settings.permission.rules.hint": "點「總是允許」記住的規則（如 {example}）只在目前會話有效，關掉會話就沒了。",
+
+  "settings.tab.plugins": "外掛",
+  "settings.tab.plugins.title": "外掛",
+  "settings.tab.plugins.desc": "把技能、命令、Hooks、MCP 伺服器打成一個可安裝的套件。相容 Agent Plugins 開放標準、Claude Code 與 Cursor 的外掛格式。",
 } satisfies Dict<typeof zh>;

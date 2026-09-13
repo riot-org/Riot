@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-plugins-commit"
+description = "Enables the plugins_commit command without any pre-configured scope."
+commands.allow = ["plugins_commit"]
+
+[[permission]]
+identifier = "deny-plugins-commit"
+description = "Denies the plugins_commit command without any pre-configured scope."
+commands.deny = ["plugins_commit"]

@@ -5,14 +5,14 @@
 
 **Codex 的开源替代。** Cursor 的工作台，Claude Code 的权限与扩展。
 
-[Release](https://github.com/caiwuu/Riot/releases/latest) ·
+[Release](https://github.com/riot-org/Riot/releases/latest) ·
 [能力](#能力) ·
 [开始使用](#开始使用) ·
 [开发](#开发) ·
 [架构](#架构) ·
 [许可](#许可)
 
-[![Release](https://img.shields.io/github/v/release/caiwuu/Riot?display_name=tag)](https://github.com/caiwuu/Riot/releases/latest)
+[![Release](https://img.shields.io/github/v/release/riot-org/Riot?display_name=tag)](https://github.com/riot-org/Riot/releases/latest)
 [![License](https://img.shields.io/badge/license-PolyForm%20NC-4B8BBE)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey)](#开始使用)
 [![Tauri](https://img.shields.io/badge/Tauri-v2-24C8DB)](https://v2.tauri.app)
@@ -53,13 +53,14 @@ Riot 是独立的桌面 Agent：宿主和内核分进程，模型走你自己的
 - 危险目标（SSH 密钥、启动脚本、hooks）即使「全部放行」也先问
 - macOS 沙箱开箱即开；Windows 沙箱需另装，默认不开
 - Skills、斜杠命令、Hooks、MCP、项目记忆（`AGENTS.md`，没有则读 `CLAUDE.md`）
+- 插件：把上面这些打成一个包安装。读 Agent Plugins 开放标准、Claude Code、Cursor 三种格式，现成的插件零改造装上；链接本地目录边写边试
 - 改完下一轮生效，不用重启
 
 ### 文档与浏览器
 
 - 创建和编辑 Word、Excel、PPT、PDF；表格走真实公式求值
 - Word / PPT / PDF 渲成页面图，模型逐页看过再交付
-- 文档运行时按需安装（设置 → 能力包），不必预装 Python、Node 或 LibreOffice
+- 文档运行时是一个插件，按需安装（设置 → 插件），不必预装 Python、Node 或 LibreOffice
 - 抓包、HAR 导出、请求重放、拦截修改
 
 ### 远程与定时
@@ -78,7 +79,7 @@ Riot 是独立的桌面 Agent：宿主和内核分进程，模型走你自己的
 | pnpm | 10 |
 | 模型 API key | OpenAI 兼容或 Anthropic；从源码跑时必填 |
 
-预编译安装包见 [GitHub Releases](https://github.com/caiwuu/Riot/releases/latest)。macOS 首发，Windows 同步支持。
+预编译安装包见 [GitHub Releases](https://github.com/riot-org/Riot/releases/latest)。macOS 首发，Windows 同步支持。
 
 ### 安装 macOS
 
@@ -98,7 +99,7 @@ open /Applications/Riot.app
 ### 从源码跑
 
 ```bash
-git clone https://github.com/caiwuu/Riot.git
+git clone https://github.com/riot-org/Riot.git
 cd Riot
 pnpm install
 pnpm tauri dev
@@ -119,12 +120,13 @@ pnpm tauri dev
 | 斜杠命令 | `<配置目录>/commands/*.md` | `<项目>/.riot/commands/` |
 | Hooks | `<配置目录>/hooks.json` | `<项目>/.riot/hooks.json`（两层都跑） |
 | MCP | 设置 → MCP | — |
-| 能力包 | 设置 → 能力包（文档运行时等） | — |
+| 插件 | 设置 → 插件（市场 / Git 地址 / 链接本地目录）；装在 `<配置目录>/plugins/<id>/` | — |
 
 - 输入框敲 `/` 调斜杠命令。`$ARGUMENTS` 是整段参数，`$1`–`$9` 是第 N 个。子目录是命名空间：`commands/git/pr.md` → `/git:pr`。
 - Skills 渐进披露：清单进上下文，正文用到才读。
 - Hooks 对齐 `PreToolUse`、`PostToolUse`、`Stop`、`UserPromptSubmit`。**exit 2 = 拦下**。
-- MCP 走 stdio，工具和内置工具同一套权限管线。
+- MCP 走 stdio（插件的 `mcp.json` 还可声明 Streamable HTTP 远端服务器），工具和内置工具同一套权限管线。
+- 插件目录里放 `plugin.json` + `skills/`、`commands/`、`hooks/hooks.json`、`mcp.json`。技能和命令自动带 `<插件>:` 前缀。安装前会列出它带的全部组件让你确认。
 - API key 单独存在 `auth.json`（权限 0600），不进普通配置。
 
 ## 开发

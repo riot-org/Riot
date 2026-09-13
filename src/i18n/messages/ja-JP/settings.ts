@@ -25,9 +25,6 @@ export default {
   "settings.tab.mcp": "MCP",
   "settings.tab.mcp.title": "MCP サーバー",
   "settings.tab.mcp.desc": "外部のツールサーバーを接続します。接続後はモデルが直接呼び出せます。",
-  "settings.tab.packs": "パック",
-  "settings.tab.packs.title": "パック",
-  "settings.tab.packs.desc": "任意でダウンロードできるランタイム。インストールすると関連するツールと Skills が自動登録されます。",
   "settings.tab.skills": "Skills",
   "settings.tab.skills.title": "Skills",
   "settings.tab.skills.desc": "SKILL.md として書かれたスキル。モデルが必要に応じて読み込みます。",
@@ -272,4 +269,8 @@ export default {
     "モデルがこのプロジェクトの他のセッションを参照できるようにします。「前回のあの問題は結局どう解決したか」に答え、そのセッションへのリンクを示します。抜粋はプロジェクトごとに Riot 自身のデータフォルダに保存され、プロジェクトには入りません。オフにするとプロンプトで言及しなくなりますが、各セッション自身の抜粋は維持されます —— コンテキスト圧縮後、モデルはそれを使って要約で消えた原文を取り戻します。抜粋はセッションと一緒に削除されます。",
   "settings.permission.rules": "セッション内ルール",
   "settings.permission.rules.hint": "「常に許可」をクリックして記憶したルール（例：{example}）は現在のセッション内だけ有効で、セッションを閉じると消えます。",
+
+  "settings.tab.plugins": "プラグイン",
+  "settings.tab.plugins.title": "プラグイン",
+  "settings.tab.plugins.desc": "スキル、コマンド、Hooks、MCP サーバーをひとつのインストール可能なパッケージにまとめます。Agent Plugins オープン標準、Claude Code、Cursor のプラグイン形式に対応。",
 } satisfies Dict<typeof zh>;

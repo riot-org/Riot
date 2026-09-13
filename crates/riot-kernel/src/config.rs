@@ -838,10 +838,108 @@ pub struct AppConfig {
     /// [`REMOTE_TOKEN_KEY`]。
     #[serde(default)]
     pub remote: RemoteConfig,
+    /// 插件注册表：装了哪些、开没开、从哪装的。
+    ///
+    /// 目录里有什么由内核每轮现读（`riot_kernel::plugins`），这里只记
+    /// "宿主认哪些"。两者分开是因为启停是**设置**（用户点的开关，要跨重启
+    /// 保留），而目录内容是**事实**（改了下一轮就该生效，缓存只会让它漂移）。
+    #[serde(default)]
+    pub plugins: Vec<PluginEntry>,
+    /// 插件市场。缺省一条官方的；用户可以加自己的（一个带 `marketplace.json`
+    /// 的 git 仓库，或直接一个 JSON 地址）。
+    #[serde(default = "default_marketplaces")]
+    pub plugin_marketplaces: Vec<MarketplaceConfig>,
 }
 
 const fn default_true() -> bool {
     true
+}
+
+/// 一个已登记的插件。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginEntry {
+    /// 插件 id = 清单里的 `name`。安装目录按它推导（[`plugin_dir`]）。
+    pub id: String,
+    /// 关掉 = 技能、命令、hooks、MCP、PATH 全部摘下，目录留着。
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    /// 安装时清单里的版本。升级检查拿它和市场条目比。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub version: String,
+    pub source: PluginSource,
+    /// 来自哪个市场（[`MarketplaceConfig::id`]）。有值时升级按市场里的
+    /// 同名条目重新解析来源，市场把下载地址换了也跟得上。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marketplace: Option<String>,
+    /// 「链接本地目录」的插件：根就是这个路径，不拷贝。安装的插件没有这项。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_path: Option<String>,
+}
+
+/// 插件是怎么来的。升级要按同一条路再走一遍。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum PluginSource {
+    /// 开发者链接的本地目录（`linked_path`）。没有升级这回事：改完即生效。
+    Local,
+    /// git 仓库（可选分支/标签、可选子目录）。`commit` 记装的是哪一版。
+    Git {
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        git_ref: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subdir: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        commit: Option<String>,
+    },
+    /// 压缩包（tar.zst），按平台分发。大体积二进制走这条 —— 文档运行时。
+    Archive {
+        url: String,
+        sha256: String,
+        #[serde(default)]
+        size: u64,
+    },
+    /// 从旧的「能力包」迁移过来的，没有可回溯的来源。升级走市场里的
+    /// 同名条目（`marketplace` 有值），否则只能卸了重装。
+    Legacy,
+}
+
+/// 一个插件市场：一个含 `marketplace.json` 的 git 仓库，或一个 JSON 地址。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketplaceConfig {
+    pub id: String,
+    /// `owner/repo`（GitHub 简写）、完整 git 地址、或以 `.json` 结尾的 https 地址。
+    pub source: String,
+    #[serde(default = "yes")]
+    pub enabled: bool,
+}
+
+/// 官方市场的 id。迁移旧能力包时把 `doc-runtime` 挂到它下面，升级才有出处。
+pub const OFFICIAL_MARKETPLACE: &str = "riot";
+/// 官方目录仓库。只放 `marketplace.json`，每个插件自己一个仓库。
+pub const OFFICIAL_MARKETPLACE_SOURCE: &str = "riot-org/riot-marketplace";
+
+fn default_marketplaces() -> Vec<MarketplaceConfig> {
+    vec![MarketplaceConfig {
+        id: OFFICIAL_MARKETPLACE.to_owned(),
+        source: OFFICIAL_MARKETPLACE_SOURCE.to_owned(),
+        enabled: true,
+    }]
+}
+
+/// 个人仓库时代的官方目录。加载时改写成 [`OFFICIAL_MARKETPLACE_SOURCE`]。
+fn is_legacy_official_marketplace(source: &str) -> bool {
+    let s = source.trim().trim_end_matches('/').trim_end_matches(".git");
+    matches!(
+        s,
+        "caiwuu/riot-pkg"
+            | "https://github.com/caiwuu/riot-pkg"
+            | "http://github.com/caiwuu/riot-pkg"
+            | "riot-org/riot-pkg"
+            | "https://github.com/riot-org/riot-pkg"
+    )
 }
 
 /// 远程访问服务的配置。
@@ -1099,6 +1197,8 @@ impl Default for AppConfig {
             sandbox_allow_read: Vec::new(),
             session_recall: true,
             remote: RemoteConfig::default(),
+            plugins: Vec::new(),
+            plugin_marketplaces: default_marketplaces(),
         }
     }
 }
@@ -1489,15 +1589,59 @@ pub fn artifacts_root(config_path: &Path) -> PathBuf {
         .join("artifacts")
 }
 
-/// 可下载能力包的根目录，一个包一个子目录。
+/// 安装的插件的根目录，一个插件一个子目录（目录名 = 插件 id）。
 ///
-/// `[约束]` 推导规则只能有这一份。安装、卸载、技能扫描、PATH 注入四处都要
-/// 按它定位 —— 各写各的话，改一处就会出现"设置页说没装、模型却能用"这种
-/// 谁也说不清的状态，而每个包是几百 MB。
+/// `[约束]` 推导规则只能有这一份。安装、卸载、每轮的组件发现三处都要按它
+/// 定位 —— 各写各的话，改一处就会出现"设置页说没装、模型却能用"这种谁也
+/// 说不清的状态。点开头的子目录（`.cache`、`.staging-*`、`.marketplaces`）
+/// 是安装机制的中间物，不是插件。
 ///
 /// 参数化 `config_path` 的理由同 [`browser_profile_dir`]。
-pub fn packs_dir(config_path: &Path) -> PathBuf {
+pub fn plugins_dir(config_path: &Path) -> PathBuf {
+    config_path
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join("plugins")
+}
+
+/// 一个已安装插件的目录。链接的插件不走这里（根在 `linked_path`）。
+pub fn plugin_dir(config_path: &Path, id: &str) -> PathBuf {
+    plugins_dir(config_path).join(id)
+}
+
+/// 旧的「能力包」根目录。只剩一个用途：启动时把里面的东西迁成插件。
+pub fn legacy_packs_dir(config_path: &Path) -> PathBuf {
     config_path.parent().unwrap_or(Path::new(".")).join("packs")
+}
+
+impl PluginEntry {
+    /// 这个插件的根目录：链接的用链接路径，安装的按 id 推导。
+    pub fn root(&self, config_path: &Path) -> PathBuf {
+        match &self.linked_path {
+            Some(p) => PathBuf::from(p),
+            None => plugin_dir(config_path, &self.id),
+        }
+    }
+}
+
+impl AppConfig {
+    /// 本轮生效的插件清单（启用的，按 id 排序），给 `TurnConfig::plugins`。
+    ///
+    /// 排序是硬要求：技能清单进工具 prompt、进缓存前缀，插件顺序抖一下
+    /// 缓存就失效。
+    pub fn plugin_refs(&self, config_path: &Path) -> Vec<riot_protocol::PluginRef> {
+        let mut out: Vec<riot_protocol::PluginRef> = self
+            .plugins
+            .iter()
+            .filter(|p| p.enabled)
+            .map(|p| riot_protocol::PluginRef {
+                id: p.id.clone(),
+                root: p.root(config_path),
+            })
+            .collect();
+        out.sort_by(|a, b| a.id.cmp(&b.id));
+        out
+    }
 }
 
 /// 密钥文件。和 `config.json` 同目录但分开存 —— 分享配置时不至于连密钥一起分享。
@@ -1764,6 +1908,14 @@ fn normalize(mut c: AppConfig) -> AppConfig {
     c.compact_threshold_tokens = c
         .compact_threshold_tokens
         .clamp(MIN_COMPACT_THRESHOLD, MAX_COMPACT_THRESHOLD);
+
+    // 官方目录从个人仓库迁到组织之后，已经写进 config.json 的旧地址跟着改。
+    // 不改的话设置页还指着 301，用户会以为市场挂了。
+    for m in &mut c.plugin_marketplaces {
+        if is_legacy_official_marketplace(&m.source) {
+            m.source = OFFICIAL_MARKETPLACE_SOURCE.to_owned();
+        }
+    }
     c
 }
 
@@ -1837,6 +1989,8 @@ fn migrate(old: LegacyConfig) -> AppConfig {
         sandbox_allow_read: Vec::new(),
         session_recall: true,
         remote: RemoteConfig::default(),
+        plugins: Vec::new(),
+        plugin_marketplaces: default_marketplaces(),
     }
 }
 
@@ -1921,6 +2075,26 @@ mod tests {
             OpenaiApi::ChatCompletions,
             "老配置没有 openaiApi，必须当 Chat Completions"
         );
+    }
+
+    #[test]
+    fn 旧官方市场地址加载时改写() {
+        let json = r#"{
+            "providers": [{
+                "id": "zp", "name": "智谱", "protocol": "openai",
+                "baseUrl": "https://x.test", "apiKeyEnv": "K",
+                "models": ["glm-4.6v"]
+            }],
+            "activeProvider": "zp",
+            "activeModel": "glm-4.6v",
+            "pluginMarketplaces": [
+                { "id": "riot", "source": "caiwuu/riot-pkg" },
+                { "id": "mine", "source": "someone/other" }
+            ]
+        }"#;
+        let c = parse(json);
+        assert_eq!(c.plugin_marketplaces[0].source, OFFICIAL_MARKETPLACE_SOURCE);
+        assert_eq!(c.plugin_marketplaces[1].source, "someone/other");
     }
 
     /// 短暂存在过的"服务方级 vision"要铺到它的每个模型上。

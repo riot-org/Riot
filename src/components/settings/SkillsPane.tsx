@@ -13,7 +13,7 @@ import { Card, CardBlock, Group, Row } from "./layout";
 const SOURCE_TIER: Record<SkillInfo["source"], MessageKey> = {
   builtin: "settings.ext.tier.builtin",
   project: "settings.ext.tier.project",
-  pack: "settings.ext.tier.pack",
+  plugin: "settings.ext.tier.plugin",
   global: "settings.ext.tier.global",
 };
 
@@ -110,7 +110,9 @@ export function SkillsPane({ status, activeRoot }: { status: ConfigStatus; activ
                 <div className="skill-item-head">
                   <span className="skill-name">{s.name}</span>
                   <span className="skill-source">
-                    {t(SOURCE_TIER[s.source])}
+                    {s.source === "plugin" && s.plugin
+                      ? t("settings.ext.tier.pluginNamed", { plugin: s.plugin })
+                      : t(SOURCE_TIER[s.source])}
                   </span>
                 </div>
                 <p className={s.error ? "form-error" : "hint"} style={{ margin: "2px 0 0" }}>

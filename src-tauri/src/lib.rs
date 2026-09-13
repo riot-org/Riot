@@ -27,9 +27,9 @@ pub mod env_probe;
 pub mod kernel;
 mod nav_guard;
 pub mod notification;
-pub mod packs;
 pub mod pasteboard;
 pub mod persist;
+pub mod plugins;
 pub mod preview;
 pub mod remote;
 pub mod schedule;
@@ -284,16 +284,30 @@ async fn redo_checkpoint(
     state.redo_checkpoint(&session_id).await
 }
 
-/// 可用的斜杠命令（内置 + 项目 + 全局）。`root` 为 null 时只列内置和全局。
+/// 可用的斜杠命令（内置 + 项目 + 全局 + 插件）。`root` 为 null 时不列项目级。
 #[tauri::command]
-async fn slash_commands(root: Option<String>) -> HostResult<Vec<slash::SlashCommand>> {
-    Ok(slash::discover(root.as_ref().map(std::path::Path::new)))
+async fn slash_commands(
+    state: tauri::State<'_, AppState>,
+    root: Option<String>,
+) -> HostResult<Vec<slash::SlashCommand>> {
+    let plugins = state.loaded_plugins().await;
+    Ok(slash::discover(
+        root.as_ref().map(std::path::Path::new),
+        &plugins,
+    ))
 }
 
-/// 配置里的 hooks 清单（含解析失败的文件）。给设置页看。
+/// 配置里的 hooks 清单（含解析失败的文件、插件带的）。给设置页看。
 #[tauri::command]
-async fn hooks_list(root: Option<String>) -> HostResult<Vec<hooks::HookInfo>> {
-    Ok(hooks::list(root.as_ref().map(std::path::Path::new)))
+async fn hooks_list(
+    state: tauri::State<'_, AppState>,
+    root: Option<String>,
+) -> HostResult<Vec<hooks::HookInfo>> {
+    let plugins = state.loaded_plugins().await;
+    Ok(hooks::list(
+        root.as_ref().map(std::path::Path::new),
+        &plugins,
+    ))
 }
 
 /// 展开一条自定义命令：`/name args` → 发给模型的 prompt。
@@ -754,10 +768,17 @@ async fn mcp_restart(state: tauri::State<'_, AppState>, server_id: String) -> Ho
 }
 
 /// 当前可用的技能清单（含解析失败的，带原因）。
-/// `root` 传当前会话的项目根；不传只列全局技能。
+/// `root` 传当前会话的项目根；不传只列全局 + 插件 + 内置技能。
 #[tauri::command]
-async fn skills_list(root: Option<String>) -> HostResult<Vec<skills::SkillInfo>> {
-    Ok(skills::list(root.as_deref().map(std::path::Path::new)))
+async fn skills_list(
+    state: tauri::State<'_, AppState>,
+    root: Option<String>,
+) -> HostResult<Vec<skills::SkillInfo>> {
+    let plugins = state.loaded_plugins().await;
+    Ok(skills::list(
+        root.as_deref().map(std::path::Path::new),
+        &plugins,
+    ))
 }
 
 /// 当前 MCP 服务器的标准 JSON（`{"mcpServers": {...}}`，生态通用格式）。
@@ -795,67 +816,108 @@ async fn mcp_import_json(
     Ok(config::ConfigStatus::of(config))
 }
 
-// ── 能力包 ────────────────────────────────────────────
+// ── 插件 ──────────────────────────────────────────────
 
-/// 能力包清单：装了什么、有什么可装。设置页轮询它。
+/// 已登记的插件：装了什么、开没开、各带了什么、哪里坏了。设置页看。
 #[tauri::command]
-async fn packs_status() -> HostResult<Vec<packs::PackStatus>> {
-    Ok(packs::status().await)
+async fn plugins_status(
+    state: tauri::State<'_, AppState>,
+) -> HostResult<Vec<plugins::PluginStatus>> {
+    Ok(state.plugins_status().await)
 }
 
-/// 下载并安装一个能力包，进度通过 `on_progress` 推给前端。
+/// 市场清单。`refresh` 强制重拉，否则有缓存用缓存。
+#[tauri::command]
+async fn plugins_market(
+    state: tauri::State<'_, AppState>,
+    refresh: bool,
+) -> HostResult<Vec<plugins::Marketplace>> {
+    Ok(state.plugins_market(refresh).await)
+}
+
+/// 准备安装：取下来、读清单、给确认页一份预览。不改任何配置。
+#[tauri::command]
+async fn plugins_prepare(
+    state: tauri::State<'_, AppState>,
+    source: plugins::SourceRequest,
+) -> HostResult<plugins::PluginPreview> {
+    state.plugins_prepare(source).await
+}
+
+/// 用户确认后真的装。进度通过 `on_progress` 推给前端。
 ///
 /// 装完立刻接线，不要求重启：MCP 服务器现连，技能目录每轮重扫，PATH 注入
-/// 每轮现装。让用户重启一次应用才能用刚下好的东西，是很容易被当成"没装上"的。
+/// 每轮现装。让用户重启一次应用才能用刚装好的东西，是很容易被当成"没装上"的。
 #[tauri::command]
-async fn packs_install(
+async fn plugins_commit(
     state: tauri::State<'_, AppState>,
-    id: String,
-    on_progress: Channel<packs::PackProgress>,
+    token: String,
+    on_progress: Channel<plugins::PluginProgress>,
 ) -> HostResult<()> {
     let sink = on_progress.clone();
-    let result = packs::install(&id, move |p| {
-        // 前端不听了就没必要嚷嚷，但安装本身要继续走完。
-        let _ = sink.send(p);
-    })
-    .await;
-
-    match result {
-        Ok(_) => {
-            sync_packs_into_config(&state).await;
-            Ok(())
-        }
-        Err(e) => {
-            // 失败也要推一条终态。只靠命令的 Err 返回的话，进度条会永远停在
-            // 最后一个百分比上，用户不知道是卡住了还是失败了。
-            let ui = e.to_ui();
-            let _ = on_progress.send(packs::PackProgress::Failed { error: ui.clone() });
-            Err(HostError::Ui(ui))
-        }
+    let result = state
+        .plugins_commit(&token, move |p| {
+            // 前端不听了就没必要嚷嚷，但安装本身要继续走完。
+            let _ = sink.send(p);
+        })
+        .await;
+    if let Err(e) = &result {
+        // 失败也要推一条终态。只靠命令的 Err 返回的话，进度条会永远停在
+        // 最后一个百分比上，用户不知道是卡住了还是失败了。
+        let _ = on_progress.send(plugins::PluginProgress::Failed { error: e.to_ui() });
     }
+    result
 }
 
-/// 卸载一个能力包，连带摘掉它注册的 MCP 服务器。
+/// 放弃一次准备好的安装（确认页点了取消）。
 #[tauri::command]
-async fn packs_uninstall(state: tauri::State<'_, AppState>, id: String) -> HostResult<()> {
-    packs::uninstall(&id).map_err(|e| e.to_ui())?;
-    sync_packs_into_config(&state).await;
+async fn plugins_discard(state: tauri::State<'_, AppState>, token: String) -> HostResult<()> {
+    state.plugins_discard(&token).await;
     Ok(())
 }
 
-/// 把"当前装了哪些包"落进配置并重连 MCP。装、卸、启动三处共用。
-async fn sync_packs_into_config(state: &AppState) {
-    let mut config = state.config().await;
-    if !packs::sync_mcp(&mut config) {
-        return;
+/// 启停一个插件。关掉 = 它的技能、命令、hooks、MCP、PATH 全部摘下，目录留着。
+#[tauri::command]
+async fn plugins_set_enabled(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    enabled: bool,
+) -> HostResult<()> {
+    state.plugins_set_enabled(&id, enabled).await
+}
+
+/// 卸载一个插件，连带摘掉它带的 MCP 服务器。
+#[tauri::command]
+async fn plugins_uninstall(state: tauri::State<'_, AppState>, id: String) -> HostResult<()> {
+    state.plugins_uninstall(&id).await
+}
+
+/// 升级到来源里的最新版。
+#[tauri::command]
+async fn plugins_update(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    on_progress: Channel<plugins::PluginProgress>,
+) -> HostResult<()> {
+    let sink = on_progress.clone();
+    let result = state
+        .plugins_update(&id, move |p| {
+            let _ = sink.send(p);
+        })
+        .await;
+    if let Err(e) = &result {
+        let _ = on_progress.send(plugins::PluginProgress::Failed { error: e.to_ui() });
     }
-    // 存不下也要让本次生效 —— 配置文件写不进去是另一个问题，不该顺带
-    // 把刚装好的能力包也变成不可用。
-    if let Err(e) = config::save(&config) {
-        tracing::warn!(error = %e, "failed to persist pack MCP config");
-    }
-    state.set_config(config).await;
-    state.reconcile_mcp().await;
+    result
+}
+
+/// 整体替换市场列表。
+#[tauri::command]
+async fn plugins_set_marketplaces(
+    state: tauri::State<'_, AppState>,
+    marketplaces: Vec<config::MarketplaceConfig>,
+) -> HostResult<()> {
+    state.plugins_set_marketplaces(marketplaces).await
 }
 
 /// 保存某个 provider 的 API key 到 auth.json（0600）。空字符串表示删除。
@@ -1681,9 +1743,15 @@ pub fn run() {
             sandbox_status,
             sandbox_install,
             sandbox_uninstall,
-            packs_status,
-            packs_install,
-            packs_uninstall,
+            plugins_status,
+            plugins_market,
+            plugins_prepare,
+            plugins_commit,
+            plugins_discard,
+            plugins_set_enabled,
+            plugins_uninstall,
+            plugins_update,
+            plugins_set_marketplaces,
             add_project,
             create_session,
             probe_dirs,
@@ -1729,10 +1797,9 @@ pub fn run() {
             schedule::spawn_ticker(app.handle().clone());
             let state = app.state::<AppState>().inner().clone();
             tauri::async_runtime::spawn(async move {
-                // 先按已装的能力包对齐 MCP 配置，再连。分两步的话，包里的
-                // 服务器要等到用户下次进设置页才会起来。用户手工删过配置、
-                // 或者直接拷贝了一份包目录进来，都靠这一步兜住。
-                sync_packs_into_config(&state).await;
+                // 先把旧的能力包目录迁成插件，再连 MCP：插件带的服务器由
+                // 启用中的插件目录派生，迁移完才有得派。
+                state.migrate_legacy_packs().await;
                 state.reconcile_mcp().await;
             });
             // 远程访问：配置里开着就监听。放 setup 而不是 restore：起

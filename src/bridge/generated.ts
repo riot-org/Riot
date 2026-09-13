@@ -956,6 +956,36 @@ export type Repeat =
       weekday: number;
     };
 /**
+ * MCP 服务器怎么连。
+ *
+ * 两种传输的信任模型不同：stdio 是本机起一个子进程；HTTP 是连到一个
+ * 远端。前者受进程组 / Job Object 管，后者受网络中断影响。分开成变体
+ * 而不是在一个平铺结构里靠"url 非空"猜 —— 猜错的表现是服务器起不来
+ * 而报错完全指不到原因。
+ */
+export type McpTransport =
+  | {
+      args: string[];
+      command: string;
+      /**
+       * 子进程的工作目录。`None` = 继承宿主。插件带的服务器把它设成
+       * 插件根（Agent Plugins 规范 §11.7）：包内相对路径才有意义。
+       */
+      cwd?: string | null;
+      env: [unknown, unknown][];
+      kind: "stdio";
+    }
+  | {
+      headers: [unknown, unknown][];
+      kind: "http";
+      /**
+       * 走 2024-11-05 版的 HTTP+SSE（GET 打开事件流、POST 到 endpoint
+       * 事件给的地址），而不是 Streamable HTTP。
+       */
+      legacy_sse?: boolean;
+      url: string;
+    };
+/**
  * 内核 → 宿主，对 [`RpcRequest`] 的应答。
  */
 export type RpcResponse =
@@ -1447,6 +1477,15 @@ export interface TurnConfig {
    */
   multitask?: boolean;
   /**
+   * 本轮生效的插件（已安装且启用的），按 id 排序。
+   *
+   * 宿主是插件注册表的权威（装了什么、开没开都记在它的配置里），内核
+   * 只拿到"去哪些目录读"。目录里的 manifest、技能、命令、hooks 由内核
+   * 每轮现读 —— 和 SKILL.md、hooks.json 同一条"改完下一轮生效"的规矩。
+   * 插件的 MCP 服务器不在这里：连接是应用级的，走 `mcp.reconcile`。
+   */
+  plugins?: PluginRef[];
+  /**
    * 会话级 Python 虚拟环境根目录。
    */
   python_venv?: string | null;
@@ -1543,6 +1582,19 @@ export interface TurnLimits {
    */
   sandbox_allow_read?: string[];
 }
+/**
+ * 一个生效中的插件：id 加它的根目录。
+ *
+ * `root` 是**解析后的绝对路径**。安装的插件在配置目录下，开发者「链接
+ * 本地目录」的插件在任何地方 —— 内核不关心区别，两者都只是一个目录。
+ */
+export interface PluginRef {
+  /**
+   * 插件 id（manifest 的 `name`）。技能和命令按它加命名空间前缀。
+   */
+  id: string;
+  root: string;
+}
 export interface PermissionRule {
   decision: RuleDecision;
   /**
@@ -1629,13 +1681,11 @@ export interface ScheduledWake {
  * 内核只管照单连接 —— 内核不读配置文件。
  */
 export interface McpServerSpec {
-  args: string[];
-  command: string;
-  env: [unknown, unknown][];
   /**
    * 稳定标识,进工具名(`mcp__<id>__…`),也是权限规则的一部分。
    */
   id: string;
+  transport: McpTransport;
 }
 /**
  * 一条还在等用户回答的权限询问（会话快照用）。

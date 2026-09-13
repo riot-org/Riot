@@ -1344,41 +1344,17 @@
     "McpServerSpec": {
       "description": "MCP 服务器的启动描述。宿主从设置里组好(过滤掉未启用/没填完的),\n内核只管照单连接 —— 内核不读配置文件。",
       "properties": {
-        "args": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "command": {
-          "type": "string"
-        },
-        "env": {
-          "items": {
-            "maxItems": 2,
-            "minItems": 2,
-            "prefixItems": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "string"
-              }
-            ],
-            "type": "array"
-          },
-          "type": "array"
-        },
         "id": {
           "description": "稳定标识,进工具名(`mcp__<id>__…`),也是权限规则的一部分。",
           "type": "string"
+        },
+        "transport": {
+          "$ref": "#/$defs/McpTransport"
         }
       },
       "required": [
         "id",
-        "command",
-        "args",
-        "env"
+        "transport"
       ],
       "type": "object"
     },
@@ -1422,6 +1398,98 @@
         "tools"
       ],
       "type": "object"
+    },
+    "McpTransport": {
+      "description": "MCP 服务器怎么连。\n\n两种传输的信任模型不同：stdio 是本机起一个子进程；HTTP 是连到一个\n远端。前者受进程组 / Job Object 管，后者受网络中断影响。分开成变体\n而不是在一个平铺结构里靠\"url 非空\"猜 —— 猜错的表现是服务器起不来\n而报错完全指不到原因。",
+      "oneOf": [
+        {
+          "description": "本机子进程，stdin/stdout 走换行分隔的 JSON-RPC。",
+          "properties": {
+            "args": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "command": {
+              "type": "string"
+            },
+            "cwd": {
+              "description": "子进程的工作目录。`None` = 继承宿主。插件带的服务器把它设成\n插件根（Agent Plugins 规范 §11.7）：包内相对路径才有意义。",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "env": {
+              "items": {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "type": "array"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "stdio",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "command",
+            "args",
+            "env"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "远端 HTTP：MCP 的 Streamable HTTP，或旧的 HTTP+SSE。",
+          "properties": {
+            "headers": {
+              "items": {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "type": "array"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "http",
+              "type": "string"
+            },
+            "legacy_sse": {
+              "default": false,
+              "description": "走 2024-11-05 版的 HTTP+SSE（GET 打开事件流、POST 到 endpoint\n事件给的地址），而不是 Streamable HTTP。",
+              "type": "boolean"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "url",
+            "headers"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "Message": {
       "oneOf": [
@@ -1982,6 +2050,23 @@
           "type": "object"
         }
       ]
+    },
+    "PluginRef": {
+      "description": "一个生效中的插件：id 加它的根目录。\n\n`root` 是**解析后的绝对路径**。安装的插件在配置目录下，开发者「链接\n本地目录」的插件在任何地方 —— 内核不关心区别，两者都只是一个目录。",
+      "properties": {
+        "id": {
+          "description": "插件 id（manifest 的 `name`）。技能和命令按它加命名空间前缀。",
+          "type": "string"
+        },
+        "root": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "root"
+      ],
+      "type": "object"
     },
     "ProgressPayload": {
       "oneOf": [
@@ -5145,6 +5230,14 @@
           "default": false,
           "description": "多任务模式（Cursor Multitask 同款）：主 agent 只协调，实质工作全部\n交给后台子 agent，委派完结束回合、由完成通知叫醒。宿主是权威，\n每轮现传；内核据此在消息侧注入协调者准则。",
           "type": "boolean"
+        },
+        "plugins": {
+          "default": [],
+          "description": "本轮生效的插件（已安装且启用的），按 id 排序。\n\n宿主是插件注册表的权威（装了什么、开没开都记在它的配置里），内核\n只拿到\"去哪些目录读\"。目录里的 manifest、技能、命令、hooks 由内核\n每轮现读 —— 和 SKILL.md、hooks.json 同一条\"改完下一轮生效\"的规矩。\n插件的 MCP 服务器不在这里：连接是应用级的，走 `mcp.reconcile`。",
+          "items": {
+            "$ref": "#/$defs/PluginRef"
+          },
+          "type": "array"
         },
         "python_venv": {
           "description": "会话级 Python 虚拟环境根目录。",

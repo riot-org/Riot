@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-plugins-market"
+description = "Enables the plugins_market command without any pre-configured scope."
+commands.allow = ["plugins_market"]
+
+[[permission]]
+identifier = "deny-plugins-market"
+description = "Denies the plugins_market command without any pre-configured scope."
+commands.deny = ["plugins_market"]

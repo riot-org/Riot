@@ -72,8 +72,9 @@ pub use tool::{
     ToolContext, ToolOutcome, UiPayload, ValidationError,
 };
 pub use turn::{
-    ApiProtocol, EndpointSampling, ImageInput, ModelEndpoint, Nudge, OpenaiApi, QueuedSummary,
-    SandboxKind, ScheduledWake, TurnConfig, TurnInput, TurnLimits, VisionSetup, WebSetup,
+    ApiProtocol, EndpointSampling, ImageInput, ModelEndpoint, Nudge, OpenaiApi, PluginRef,
+    QueuedSummary, SandboxKind, ScheduledWake, TurnConfig, TurnInput, TurnLimits, VisionSetup,
+    WebSetup,
 };
 pub use vision::{DescribeRequest, NoVision, VisionAccess, VisionError};
 pub use web::{

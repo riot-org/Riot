@@ -420,7 +420,7 @@
 | `crates/riot-kernel/src/config.rs` | 2267 |
 | `crates/riot-kernel/src/models.rs` | 325 |
 | `crates/riot-kernel/src/env.rs` | 210 |
-| `crates/riot-kernel/src/packs.rs` | 184 |
+| `crates/riot-kernel/src/plugins/` | — |
 
 **审查要点**
 - 配置来源合并优先级(默认值 < 全局 < 项目 < 会话?)与文档一致
@@ -543,14 +543,14 @@
 - netlog 记录的内容(URL 参数里的 token 会不会落盘);日志轮转
 - taps 的事件监听范围
 
-### ☐ F5 · 终端 / 输入 / 能力包 —— 🟠 高 · 约 3.5k 行
+### ☐ F5 · 终端 / 输入 / 插件 —— 🟠 高 · 约 3.5k 行
 
 | 文件 | 行数 |
 |---|---|
 | `src-tauri/src/term.rs` | 901 |
-| `src-tauri/src/packs/download.rs` | 640 |
-| `src-tauri/src/packs/mod.rs` | 540 |
-| `src-tauri/src/packs/install.rs` | 436 |
+| `src-tauri/src/plugins/download.rs` | — |
+| `src-tauri/src/plugins/mod.rs` | — |
+| `src-tauri/src/plugins/install.rs` | — |
 | `src-tauri/src/askpass.rs` | 364 |
 | `src-tauri/src/term_access.rs` | 331 |
 | `src-tauri/src/vibrancy.rs` | 178 |
@@ -559,7 +559,7 @@
 **审查要点**
 - term:PTY 会话与内核工具执行的关系;term_access 的访问控制;转义序列注入(终端输出渲染到 UI)
 - askpass:凭据从输入到使用的全路径;内存中是否及时清零;绝不落日志
-- packs:下载校验(哈希/签名,对照 `scripts/build-doc-pack.mjs` 的产出);**解压路径穿越(zip slip)**;安装目录权限;降级攻击(旧版本包重放)
+- plugins:下载校验(哈希);**解压路径穿越(zip slip)**;安装目录权限;降级攻击(旧版本包重放)
 - pasteboard:剪贴板读取的触发条件(不能静默常驻读)
 
 ---
@@ -639,7 +639,7 @@
 | `src/components/settings/McpPane.tsx` | 485 |
 | `src/components/settings/PermissionPane.tsx` | 326 |
 | `src/components/settings/ProviderPane.tsx` | 293 |
-| `src/components/settings/PacksPane.tsx` | 197 |
+| `src/components/settings/PluginsPane.tsx` | — |
 | `src/components/settings/WebPane.tsx` | 169 |
 | `src/components/settings/SkillsPane.tsx` | 120 |
 | `src/components/settings/AboutPane.tsx` | 116 |
@@ -686,7 +686,7 @@
 | 文件 | 行数 | 说明 |
 |---|---|---|
 | `scripts/mutate.py` | 888 | 变异测试脚本 |
-| `scripts/build-doc-pack.mjs` | 373 | 对照 F5 packs 校验逻辑 |
+| [`plugin-doc-runtime`](https://github.com/riot-org/plugin-doc-runtime) | — | 文档插件源码与打包，对照 §15.6 |
 | `scripts/build-browser.sh` / `.ps1` | ~150 | |
 | `scripts/check-windows-sandbox.sh` | 80 | 对照 B3 |
 | `scripts/stage-kernel.mjs` / `stage-browser.mjs` | 85 | |

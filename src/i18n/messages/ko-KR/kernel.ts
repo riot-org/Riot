@@ -113,4 +113,21 @@ export default {
   "kernel.config.providerNotFound": "제공자 「{id}」를 찾을 수 없습니다.",
   "kernel.config.noModelSelected":
     "「{name}」에 아직 선택된 모델이 없습니다. 설정에서 모델을 추가하고 선택하거나, 입력창의 모델 메뉴에서 선택하세요.",
+
+  "kernel.plugin.noManifest": "디렉터리에 플러그인 매니페스트가 없습니다(plugin.json, .claude-plugin/plugin.json 또는 .cursor-plugin/plugin.json).",
+  "kernel.plugin.badJson": "매니페스트가 유효한 JSON이 아닙니다.",
+  "kernel.plugin.missingSchema": "표준 매니페스트에 $schema가 없습니다.",
+  "kernel.plugin.badSchema": "지원하지 않는 매니페스트 버전: {schema}",
+  "kernel.plugin.badName": "플러그인 이름 “{name}”이 올바르지 않습니다: 소문자, 숫자, 하이픈, 점만 사용할 수 있습니다.",
+  "kernel.plugin.badField": "매니페스트 필드 “{field}”의 형식이 잘못되었습니다.",
+  "kernel.plugin.unknownField": "매니페스트에 알 수 없는 필드 “{field}”이(가) 있어 무시했습니다.",
+  "kernel.plugin.pathMissing": "경로가 존재하지 않습니다: {path}",
+  "kernel.plugin.pathUnreadable": "경로를 읽을 수 없습니다: {path}",
+  "kernel.plugin.pathEscapes": "경로가 플러그인 디렉터리를 벗어납니다: {path}",
+  "kernel.plugin.componentNotDir": "{path}은(는) 디렉터리가 아닙니다.",
+  "kernel.plugin.componentNotFound": "{path}이(가) 존재하지 않습니다.",
+  "kernel.plugin.mcpInvalid": "MCP 설정이 잘못되었습니다.",
+  "kernel.plugin.mcpServerInvalid": "MCP 서버 “{name}”의 설정이 잘못되었습니다.",
+  "kernel.plugin.extInvalid": "dev.riot 확장 데이터가 잘못되었습니다.",
+  "kernel.mcp.httpFailed": "MCP 서버 {url}에 연결할 수 없습니다.",
 } satisfies Dict<typeof zh>;

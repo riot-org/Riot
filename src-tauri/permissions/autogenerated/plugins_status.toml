@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-plugins-status"
+description = "Enables the plugins_status command without any pre-configured scope."
+commands.allow = ["plugins_status"]
+
+[[permission]]
+identifier = "deny-plugins-status"
+description = "Denies the plugins_status command without any pre-configured scope."
+commands.deny = ["plugins_status"]

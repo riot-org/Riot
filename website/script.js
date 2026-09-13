@@ -7,8 +7,8 @@
  * 发 Riot_0.1.1 时资产会变成 Riot_0.1.1_aarch64.dmg，写死 0.1.0 就会下到旧包。
  * 没拉到接口时退回 /releases/latest 页面，不要链到某个过期文件名。
  */
-const RELEASES_PAGE = "https://github.com/caiwuu/Riot/releases/latest";
-const RELEASES_API = "https://api.github.com/repos/caiwuu/Riot/releases/latest";
+const RELEASES_PAGE = "https://github.com/riot-org/Riot/releases/latest";
+const RELEASES_API = "https://api.github.com/repos/riot-org/Riot/releases/latest";
 const RELEASE_CACHE = "riot.latest-release.v3"; // 换键即可作废所有旧格式缓存
 const RELEASE_TTL = 10 * 60 * 1000; // 缓存 10 分钟：长开的标签页里也能拿到新版本
 

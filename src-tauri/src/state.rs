@@ -337,6 +337,12 @@ struct Inner {
     /// Tauri 应用句柄。setup 时挂上；系统通知和全局 emit 靠它。
     /// 单元测试不挂 —— 拿不到就静默跳过那两件事。
     app: std::sync::OnceLock<tauri::AppHandle>,
+    /// 准备好、等用户在确认页点头的插件安装。令牌 → 待装。用户点"取消"
+    /// 或关掉设置时收掉临时目录。
+    pending_installs: Mutex<HashMap<String, crate::plugins::Pending>>,
+    /// 最近一次拉到的市场清单。设置页列插件时拿它标"可升级"，不为此再
+    /// 走一次网络。
+    market_cache: Mutex<Option<Vec<crate::plugins::Marketplace>>>,
 }
 
 /// 定时任务的内存状态。
@@ -381,6 +387,8 @@ impl Inner {
             env_alerts: crate::env_probe::AlertSeen::default(),
             schedules: Mutex::default(),
             app: std::sync::OnceLock::new(),
+            pending_installs: Mutex::default(),
+            market_cache: Mutex::default(),
         }
     }
 }
@@ -1751,6 +1759,7 @@ impl AppState {
             system_prompt_extra: system_prompt,
             thinking,
             multitask,
+            plugins: config.plugin_refs(&self.0.config_path),
         })
     }
 
@@ -1895,7 +1904,234 @@ impl AppState {
         args: &str,
     ) -> HostResult<Option<String>> {
         let root = self.session_root(session_id).await?;
-        Ok(crate::slash::expand(Some(&root), name, args))
+        let plugins = self.loaded_plugins().await;
+        Ok(crate::slash::expand(Some(&root), &plugins, name, args))
+    }
+
+    // ── 插件 ──────────────────────────────────────────
+
+    /// 启用中的插件，按内核那份加载器读好。设置页列技能 / 命令 / hooks
+    /// 和展开斜杠命令都用它 —— 和内核每轮看到的是同一个解释。
+    pub async fn loaded_plugins(&self) -> Vec<riot_kernel::plugins::Loaded> {
+        let config = self.config().await;
+        let config_path = self.0.config_path.clone();
+        tokio::task::spawn_blocking(move || crate::plugins::loaded_enabled(&config, &config_path))
+            .await
+            .unwrap_or_default()
+    }
+
+    /// 存配置 + 重连 MCP。插件注册表每变一次都要走这一趟：启停、装、卸
+    /// 都可能让某个 MCP 服务器该起或该停。
+    async fn commit_plugin_config(&self, config: AppConfig) {
+        if let Err(e) = crate::config::save_at(&self.0.config_path, &config) {
+            // 存不下也要让本次生效 —— 配置文件写不进去是另一个问题，不该
+            // 顺带把刚装好的插件也变成不可用。
+            tracing::warn!(error = %e, "插件注册表没能写进配置");
+        }
+        self.set_config(config).await;
+        self.reconcile_mcp().await;
+    }
+
+    /// 启动时：把旧的能力包目录迁成插件。
+    pub async fn migrate_legacy_packs(&self) {
+        let mut config = self.config().await;
+        let config_path = self.0.config_path.clone();
+        let (changed, config) = tokio::task::spawn_blocking(move || {
+            let changed = crate::plugins::migrate_legacy_packs(&mut config, &config_path);
+            (changed, config)
+        })
+        .await
+        .unwrap_or_else(|_| (false, AppConfig::default()));
+        if changed {
+            if let Err(e) = crate::config::save_at(&self.0.config_path, &config) {
+                tracing::warn!(error = %e, "迁移结果没能写进配置");
+            }
+            self.set_config(config).await;
+        }
+    }
+
+    /// 设置页的插件清单。可升级标记用最近一次拉到的市场清单，不走网络。
+    pub async fn plugins_status(&self) -> Vec<crate::plugins::PluginStatus> {
+        let config = self.config().await;
+        let config_path = self.0.config_path.clone();
+        let market = self.market_entries_cached().await;
+        tokio::task::spawn_blocking(move || {
+            crate::plugins::status_all(&config, &config_path, &market)
+        })
+        .await
+        .unwrap_or_default()
+    }
+
+    async fn market_entries_cached(&self) -> Vec<crate::plugins::MarketEntry> {
+        self.0
+            .market_cache
+            .lock()
+            .await
+            .as_ref()
+            .map(|ms| ms.iter().flat_map(|m| m.plugins.iter().cloned()).collect())
+            .unwrap_or_default()
+    }
+
+    /// 拉市场。`refresh == false` 且有缓存就直接给缓存。
+    pub async fn plugins_market(&self, refresh: bool) -> Vec<crate::plugins::Marketplace> {
+        if !refresh && let Some(cached) = self.0.market_cache.lock().await.clone() {
+            return cached;
+        }
+        let config = self.config().await;
+        let fetched =
+            crate::plugins::fetch_markets(&config.plugin_marketplaces, &self.0.config_path).await;
+        *self.0.market_cache.lock().await = Some(fetched.clone());
+        fetched
+    }
+
+    /// 准备一次安装（取下来、读清单、出预览）。确认页看完再 `plugins_commit`。
+    pub async fn plugins_prepare(
+        &self,
+        req: crate::plugins::SourceRequest,
+    ) -> HostResult<crate::plugins::PluginPreview> {
+        let config = self.config().await;
+        // 市场来源要清单；缓存里没有就拉一次。
+        let market = if matches!(req, crate::plugins::SourceRequest::Market { .. }) {
+            self.plugins_market(false)
+                .await
+                .iter()
+                .flat_map(|m| m.plugins.iter().cloned())
+                .collect()
+        } else {
+            self.market_entries_cached().await
+        };
+        let (pending, preview) =
+            crate::plugins::prepare(req, &config, &self.0.config_path, &market)
+                .await
+                .map_err(|e| HostError::Ui(e.to_ui()))?;
+        self.0
+            .pending_installs
+            .lock()
+            .await
+            .insert(preview.token.clone(), pending);
+        Ok(preview)
+    }
+
+    /// 用户点了确认。装完写注册表、重连 MCP。
+    pub async fn plugins_commit(
+        &self,
+        token: &str,
+        progress: impl Fn(crate::plugins::PluginProgress) + Send + Sync,
+    ) -> HostResult<()> {
+        let pending = self
+            .0
+            .pending_installs
+            .lock()
+            .await
+            .remove(token)
+            .ok_or_else(|| ui_error!("host.plugin.pendingExpired"))?;
+        let id = pending.id.clone();
+        let entry = crate::plugins::commit(pending, &self.0.config_path, &progress)
+            .await
+            .map_err(|e| HostError::Ui(e.to_ui()))?;
+        let mut config = self.config().await;
+        match config.plugins.iter_mut().find(|p| p.id == id) {
+            Some(slot) => {
+                // 升级 / 换来源：保留用户的启停选择。
+                let enabled = slot.enabled;
+                *slot = entry;
+                slot.enabled = enabled;
+            }
+            None => config.plugins.push(entry),
+        }
+        config.plugins.sort_by(|a, b| a.id.cmp(&b.id));
+        self.commit_plugin_config(config).await;
+        Ok(())
+    }
+
+    /// 放弃一次准备好的安装。
+    pub async fn plugins_discard(&self, token: &str) {
+        if let Some(p) = self.0.pending_installs.lock().await.remove(token) {
+            crate::plugins::discard(p);
+        }
+    }
+
+    pub async fn plugins_set_enabled(&self, id: &str, enabled: bool) -> HostResult<()> {
+        let mut config = self.config().await;
+        let slot = config
+            .plugins
+            .iter_mut()
+            .find(|p| p.id == id)
+            .ok_or_else(|| ui_error!("host.plugin.notInstalled", id = id))?;
+        slot.enabled = enabled;
+        self.commit_plugin_config(config).await;
+        Ok(())
+    }
+
+    pub async fn plugins_uninstall(&self, id: &str) -> HostResult<()> {
+        let mut config = self.config().await;
+        let Some(pos) = config.plugins.iter().position(|p| p.id == id) else {
+            return Ok(()); // 幂等
+        };
+        let entry = config.plugins.remove(pos);
+        let config_path = self.0.config_path.clone();
+        tokio::task::spawn_blocking(move || crate::plugins::uninstall(&entry, &config_path))
+            .await
+            .map_err(|e| ui_error!("host.plugin.taskFailed"; e))?
+            .map_err(|e| HostError::Ui(e.to_ui()))?;
+        self.commit_plugin_config(config).await;
+        Ok(())
+    }
+
+    /// 升级：按来源重新取一份、直接落地（不再过确认页 —— 用户装它时已经
+    /// 看过一遍，升级改的只是版本）。
+    pub async fn plugins_update(
+        &self,
+        id: &str,
+        progress: impl Fn(crate::plugins::PluginProgress) + Send + Sync,
+    ) -> HostResult<()> {
+        let config = self.config().await;
+        let entry = config
+            .plugins
+            .iter()
+            .find(|p| p.id == id)
+            .ok_or_else(|| ui_error!("host.plugin.notInstalled", id = id))?;
+        let req = crate::plugins::update_request(entry)
+            .ok_or_else(|| ui_error!("host.plugin.notUpdatable", id = id))?;
+        if matches!(req, crate::plugins::SourceRequest::Git { .. }) {
+            progress(crate::plugins::PluginProgress::Cloning);
+        }
+        let preview = self.plugins_prepare(req).await?;
+        if preview.plugin.id != id {
+            // 市场里同名条目指向了另一个插件，或仓库改了名字。不装 —— 装了
+            // 会多出一个 id、旧的还在。
+            self.plugins_discard(&preview.token).await;
+            return Err(HostError::Ui(ui_error!(
+                "host.plugin.idMismatch",
+                expected = id,
+                actual = preview.plugin.id
+            )));
+        }
+        self.plugins_commit(&preview.token, progress).await
+    }
+
+    pub async fn plugins_set_marketplaces(
+        &self,
+        marketplaces: Vec<riot_kernel::config::MarketplaceConfig>,
+    ) -> HostResult<()> {
+        let mut config = self.config().await;
+        // id 唯一、非空；来源非空。
+        let mut seen = std::collections::HashSet::new();
+        for m in &marketplaces {
+            if m.id.trim().is_empty() || m.source.trim().is_empty() || !seen.insert(m.id.clone()) {
+                return Err(HostError::Ui(ui_error!(
+                    "host.plugin.badMarketplace",
+                    id = &m.id
+                )));
+            }
+        }
+        config.plugin_marketplaces = marketplaces;
+        if let Err(e) = crate::config::save_at(&self.0.config_path, &config) {
+            tracing::warn!(error = %e, "市场列表没能写进配置");
+        }
+        self.set_config(config).await;
+        *self.0.market_cache.lock().await = None;
+        Ok(())
     }
 
     /// 排队面板：当前排着的插话。
@@ -2265,7 +2501,7 @@ impl AppState {
     /// 连接进度通过 [`Self::mcp_statuses`] 查询。
     pub async fn reconcile_mcp(&self) {
         let config = self.config().await;
-        let servers: Vec<riot_protocol::rpc::McpServerSpec> = config
+        let mut servers: Vec<riot_protocol::rpc::McpServerSpec> = config
             .mcp_servers
             .iter()
             // 空命令 = 刚添加还没填完的中间状态，跳过而不是报错 ——
@@ -2273,11 +2509,28 @@ impl AppState {
             .filter(|s| s.enabled && !s.command.trim().is_empty())
             .map(|s| riot_protocol::rpc::McpServerSpec {
                 id: s.id.clone(),
-                command: s.command.clone(),
-                args: s.args.clone(),
-                env: s.env.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+                transport: riot_protocol::rpc::McpTransport::Stdio {
+                    command: s.command.clone(),
+                    args: s.args.clone(),
+                    env: s.env.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+                    cwd: None,
+                },
             })
             .collect();
+        // 插件带的服务器：按启用中的插件目录现读、派生，不写进配置。
+        // 用户自己配的同 id 服务器优先（id 形状是 `<插件>--<名字>`，撞上
+        // 只可能是故意的）。
+        let config_path = self.0.config_path.clone();
+        let cfg = config.clone();
+        let derived =
+            tokio::task::spawn_blocking(move || crate::plugins::mcp_specs(&cfg, &config_path))
+                .await
+                .unwrap_or_default();
+        for spec in derived {
+            if !servers.iter().any(|s| s.id == spec.id) {
+                servers.push(spec);
+            }
+        }
         if let Err(e) = self.kernel_call(RpcRequest::McpReconcile { servers }).await {
             tracing::warn!(error = %e, "MCP 清单没送到内核");
         }

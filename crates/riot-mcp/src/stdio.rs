@@ -161,8 +161,17 @@ impl process_wrap::tokio::CommandWrapper for NoWindow {
 /// 拉起服务器进程。stderr 由后台任务转进日志 —— MCP 规范允许服务器往
 /// stderr 打日志，不接的话管道写满 64KB 后服务器会整个卡住。
 pub(crate) fn spawn_server(spec: &ServerSpec) -> std::io::Result<SpawnedServer> {
-    let mut cmd = tokio::process::Command::new(&spec.command);
-    cmd.args(&spec.args)
+    let riot_protocol::rpc::McpTransport::Stdio {
+        command,
+        args,
+        env,
+        cwd,
+    } = &spec.transport
+    else {
+        return Err(std::io::Error::other("not a stdio server"));
+    };
+    let mut cmd = tokio::process::Command::new(command);
+    cmd.args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -171,12 +180,17 @@ pub(crate) fn spawn_server(spec: &ServerSpec) -> std::io::Result<SpawnedServer> 
         // `[约束]` 先清空再按白名单填。追加式的 `env(k, v)` 会让子进程
         // 继承宿主的全部环境，包括从环境变量读来的 API key。
         .env_clear();
+    // 插件带的服务器把工作目录设成插件根（Agent Plugins §11.7）：它们的
+    // 相对路径都是按包根写的。没设的继承宿主。
+    if let Some(cwd) = cwd {
+        cmd.current_dir(cwd);
+    }
 
     // 名字不是合法 UTF-8 的变量直接跳过（白名单里全是 ASCII 名，不可能
     // 命中）。值保持 OsString —— PATH 里出现非 UTF-8 分量在真实机器上
     // 是有的，按 UTF-8 过滤会把它整条丢掉，服务器随即找不到解释器。
     let host = std::env::vars_os().filter_map(|(k, v)| Some((k.into_string().ok()?, v)));
-    for (k, v) in child_env(host, &spec.env) {
+    for (k, v) in child_env(host, env) {
         cmd.env(k, v);
     }
 

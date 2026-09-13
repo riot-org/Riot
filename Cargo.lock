@@ -4058,7 +4058,9 @@ version = "0.1.4"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
+ "futures",
  "process-wrap",
+ "reqwest 0.12.28",
  "riot-permissions",
  "riot-protocol",
  "riot-tools",
@@ -4069,6 +4071,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "url",
  "windows 0.62.2",
 ]
 

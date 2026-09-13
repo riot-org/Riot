@@ -301,8 +301,50 @@ export function McpPane({
         onError={setError}
       />
 
+      <PluginServers live={live} configured={servers} />
+
       {error ? <FormError text={error} /> : null}
     </>
+  );
+}
+
+/**
+ * 插件带的服务器：由启用中的插件目录派生，**不在配置里**，这页只能看状态、
+ * 重连。要停掉它去插件页停用那个插件 —— 单独关一个插件里的服务器等于把
+ * 插件装一半，模型拿到的技能会指着一个不存在的工具。
+ */
+function PluginServers({ live, configured }: { live: McpServerStatus[]; configured: McpServerConfig[] }) {
+  const { t, tn } = useT();
+  const own = new Set(configured.map((s) => s.id));
+  const derived = live.filter((l) => !own.has(l.id));
+  if (derived.length === 0) return null;
+  return (
+    <Group title={t("settings.mcp.fromPlugins")} desc={t("settings.mcp.fromPlugins.desc")}>
+      <ul className="mcp-list">
+        {derived.map((st) => {
+          const meta =
+            st.state === "connected"
+              ? tn("settings.mcp.toolCount", st.tools.length)
+              : st.state === "connecting"
+                ? t("settings.mcp.status.connecting")
+                : st.error
+                  ? renderUiError(st.error)
+                  : t("settings.mcp.status.failedShort");
+          return (
+            <li key={st.id}>
+              <div className="mcp-row" title={st.id}>
+                <span className={`mcp-dot ${st.state}`} />
+                <span className="mcp-row-name">{st.id}</span>
+                <span className="mcp-row-meta">{meta}</span>
+                <button className="btn-compact ghost" onClick={() => void mcpRestart(st.id).catch(() => {})}>
+                  {t("settings.mcp.reconnect")}
+                </button>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </Group>
   );
 }
 

@@ -371,6 +371,7 @@ impl SessionManager {
             .await;
         session.set_thinking(config.thinking).await;
         session.set_multitask(config.multitask);
+        session.set_plugins(config.plugins.clone()).await;
 
         // 能力现装(和内嵌期 send_turn 同一套,只是从 setup 而非 AppConfig)。
         let web = Arc::new(crate::web::HostWeb::from_setup(&config.web));
@@ -382,7 +383,8 @@ impl SessionManager {
                 .unwrap_or_else(|| Arc::new(riot_protocol::permission::NoClassifier));
 
         let mut extra_tools = self.mcp.tools().await;
-        let skills = crate::skills::discover(&session.cwd);
+        let plugins = session.load_plugins().await;
+        let skills = crate::skills::discover(&session.cwd, &plugins);
         let model_cards = skills.model_cards();
         if !model_cards.is_empty() {
             extra_tools.push(Arc::new(riot_tools::tools::skill::SkillTool::new(
@@ -430,7 +432,8 @@ impl SessionManager {
 
         // UserPromptSubmit hooks:能拦下这条消息或给它附加上下文。
         let mut extra_context = Vec::new();
-        let engine = crate::hooks::HookEngine::load(&session.cwd, session_id);
+        let engine =
+            crate::hooks::HookEngine::load(&session.cwd, session_id, &session.load_plugins().await);
         if engine.has_user_prompt_submit() {
             for o in engine.user_prompt_submit(&input.text).await {
                 match o {
@@ -670,9 +673,7 @@ impl SessionManager {
             .into_iter()
             .map(|s| riot_mcp::ServerSpec {
                 id: s.id,
-                command: s.command,
-                args: s.args,
-                env: s.env,
+                transport: s.transport,
             })
             .collect();
         self.mcp.reconcile(specs).await;

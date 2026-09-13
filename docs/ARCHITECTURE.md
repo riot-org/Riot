@@ -22,7 +22,7 @@
 12. [内核 RPC 协议](#12-内核-rpc-协议)
 13. [前端架构](#13-前端架构)
 14. [TS→Rust 翻译对照](#14-tsrust-翻译对照)
-15. [可下载能力包](#15-可下载能力包)
+15. [插件](#15-插件)
 
 ---
 
@@ -1914,65 +1914,111 @@ loop {
 
 ---
 
-## 15. 可下载能力包
+## 15. 插件
 
-有些能力的依赖大到不能进安装包。文档处理是第一个:要能创建和编辑 docx/xlsx/pptx/pdf,就得带上 Python(含 python-docx 一系)、Node(含渲染用的原生绑定)、LibreOffice 和一套 CJK 字体 —— 未压缩接近 900MB,而大多数用户用不到。
+插件是把技能、斜杠命令、hooks、MCP 服务器、进 PATH 的可执行文件打成**一个可安装、可启停、可升级的目录**。文档能力（Word / Excel / PPT / PDF）就是第一个插件：它要带上 Python、Node、LibreOffice 和一套 CJK 字体，未压缩接近 900MB，不能进安装包，只能按需装。
 
-`[约束]` **目标用户的机器上没有开发环境。**这不是"最好能支持",而是这个子系统存在的全部理由 —— 如果可以要求用户先装 Python,那直接写文档说明就行了。由此推出三条硬性要求:包内所有二进制互相之间用**相对路径**引用;安装过程**不编译任何东西**;不依赖系统的 python / node / brew / apt。
+### 15.1 不自造格式
 
-### 15.1 磁盘布局与安装
+`[取舍]` **Riot 读现成的三种插件格式，不定义自己的。** 生态的成本在开发者那边：每多一种格式，他就得多维护一份拷贝。三种格式的组件几乎一样（技能、命令、hooks、MCP），差的只是清单放哪、叫什么、严不严：
+
+| 格式 | 清单 | 说明 |
+| --- | --- | --- |
+| [Agent Plugins](https://agent-plugins.org) 开放标准 1.0 | `plugin.json` | 闭合 schema：`$schema` 必填，未知字段报告后忽略，其它违规整个拒绝。只定义技能和 MCP 两种可移植组件 |
+| Claude Code | `.claude-plugin/plugin.json` | 宽松；`commands/`、`agents/`、`hooks/hooks.json`、`.mcp.json`；可用清单字段改位置或内联 |
+| Cursor | `.cursor-plugin/plugin.json` | 同 CC，多 `rules/` |
+
+一个目录里可以同时有几份（作者为多客户端兼容会这么做）：身份按标准 > CC > Cursor 取第一份，组件位置的覆盖从每一份里收 —— 标准清单里写不了 hooks / commands，作者只能写在 CC 那份里。
+
+Riot 自己的额外能力放在标准规定的**客户端扩展命名空间** `dev.riot`（反写自应用标识 `dev.riot.desktop`）下：`plugin.json` 的 `extensions["dev.riot"]`，或同名顶层目录。目前四个字段：`platforms`（平台白名单）、`env`（注入工具子进程的环境变量）、`pathPrepend`（进 PATH 的目录）、`selfCheck`（装完实跑的命令）。别的客户端按规范忽略它们。
+
+`[约束]` **技能和命令一律加 `<插件>:` 前缀**（和 CC 一致）。两个插件都带 `review` 是常态，不加前缀的话后装的静默消失，而设置页两条都列着。插件的 MCP 服务器 id 是 `<插件>--<名字>`，进工具名（`mcp__<id>__<tool>`）和权限规则。
+
+### 15.2 读的一半在内核，装的一半在宿主
+
+`riot_kernel::plugins` 是加载器：读清单、按固定位置发现组件、做路径包含检查、展开占位符、读出运行时注入。**宿主装插件时用同一份加载器做校验和预览，内核每轮用它发现组件** —— 两边看到的必须是同一个解释，否则"安装时说没问题、用起来却不生效"没人查得出来。
+
+宿主是注册表的权威：`AppConfig::plugins` 记装了什么、开没开、从哪装的。每轮随 `TurnConfig::plugins` 把**启用中**的插件根传给内核（按 id 排序 —— 技能清单进工具 prompt、进缓存前缀，插件顺序抖一下缓存就失效）。内核不缓存目录内容：清单、技能、hooks 每轮现读，和 SKILL.md、hooks.json 同一条"改完下一轮生效"的规矩。这让「链接本地目录」这条开发者路径的热重载是**免费**的。
+
+四条接线都复用已有机制，不新增架构：
+
+| 组件 | 接到哪 | 优先级 |
+| --- | --- | --- |
+| `skills/<名>/SKILL.md` | `skills::discover` 多一层 | 项目 > 全局 > **插件** > 内置 |
+| `commands/**/*.md` | `slash::discover` 多一层 | 内置 > 项目 > 全局 > **插件** > 技能 |
+| `hooks/hooks.json`、`dev.riot/hooks/hooks.json` | `HookEngine::load` 拼接 | 都跑，不覆盖 |
+| `mcp.json` / `.mcp.json` | 宿主派生成 `mcp.reconcile` 的清单 | 用户自己配的同 id 优先 |
+| `bin/`、`dev.riot.pathPrepend`、`dev.riot.env` | `PluginRunner` 装饰器（原能力包那层） | 插件 → venv → 沙箱 → base，从外到里 |
+
+插件带的 hook 命令里的 `${PLUGIN_ROOT}` / `${CLAUDE_PLUGIN_ROOT}` 展开成插件根，子进程环境带 `PLUGIN_ROOT` / `PLUGIN_DATA` / `CLAUDE_PLUGIN_ROOT` / `CLAUDE_PLUGIN_DATA` —— CC 插件的脚本按这些名字找自己的文件，不给的话它们全部静默失效。
+
+`agents/`、`rules/`、`lspServers` 这类 Riot 暂不支持的组件**报告给设置页**（`Unsupported`），不静默丢：开发者装了一个带 agents 的 CC 插件，得知道 agents 那半没生效。用到了四个支持事件之外的 hook 事件同理。
+
+### 15.3 安全边界
+
+`[约束]` **插件里任何被读、被执行的路径，解析后必须仍在插件根内**（规范 §4.1，`plugins::paths::contain`）。symlink 可以指向根内的东西，指到根外一律拒绝。一个插件是从网上装来的目录，让它的 `mcp.json` 写一句 `"command": "../../../bin/sh"` 就等于给了它整台机器，而 `../` 在字符串上完全看不出问题。目标不存在也算失败：不存在的东西没法 canonicalize，也就没法证明它在根内。
+
+`[约束]` 插件自己的 `env` 不许设 `PLUGIN_ROOT` / `PLUGIN_DATA`（规范 §9.2）：那两个由我们提供，让插件改写等于让它谎报自己在哪。
+
+`[约束]` **安装前的确认页必须列出它带的全部组件**：hooks 的命令（它们会以用户身份在每次工具调用时跑）、MCP 服务器的命令或地址（它们是独立进程）、进 PATH 的目录。这是插件系统唯一新增的安全面。git 和本地来源先取下来再读真实内容；压缩包几百 MB，预览只能用市场条目的元数据，内容在下载解压后校验，自检不过整个回滚。
+
+插件带的 MCP 工具过和内置工具完全相同的权限管线（`McpTool` 不看来源）；hook 的 `allow` 照旧压不过安全检查和用户写的 ask 规则（§9.2）。
+
+### 15.4 来源、市场、升级
+
+| 来源 | 怎么取 | 升级 |
+| --- | --- | --- |
+| 链接本地目录 | 不拷贝，注册表记路径 | 没有这回事：改完即生效。开发者的路 |
+| git 仓库（可带分支/标签、子目录） | `git clone --depth 1` 到临时目录，取子目录，摘掉 `.git`，原子 rename 进 `plugins/<id>` | 重新 clone |
+| 压缩包（tar.zst，按平台） | 下载（断点续传、sha256）→ 解压到临时目录 → 原子 rename → 自检 | 按市场条目重新下载 |
+| 市场条目 | 解析成上面两种之一 | 市场里的版本变了就标"可升级"，按市场里的**当前**来源重装 —— 地址换了也跟得上 |
+
+市场就是一个含 `marketplace.json` 的 git 仓库（或直接一个 JSON 地址），形状照 Claude Code / Cursor 的市场清单：`{ name, owner, plugins: [{ name, description, version, source }] }`。`source` 的几种写法都认（相对路径、`github`、`git`、`git-subdir`），Riot 多一种 `archive`（按平台给 `url` / `sha256` / `size`）。GitHub 仓库按三个固定路径试 raw 地址，不为读一个文件 clone 一个仓库；别的 git 地址浅 clone 到 `plugins/.marketplaces/`。缺省一条官方市场 [`riot-org/riot-marketplace`](https://github.com/riot-org/riot-marketplace)（只放清单，每个插件自己一个仓库）。
+
+磁盘布局：
 
 ```text
-<config_dir>/riot/packs/
-  doc-runtime/                当前安装。版本从里面的 pack.json 读
-  .cache/<file>.part          断点续传的半成品
-  .staging-<id>-<nonce>/      解压中间态,校验通过后原子 rename 过去
+<config_dir>/riot/plugins/
+  <id>/                         安装的插件（链接的不在这里）
+  .cache/<id>-<version>.tar.zst 下载缓存 / 半成品
+  .staging-<id>-<nonce>/        解压 / clone 中间态，校验通过后原子 rename 过去
+  .marketplaces/<id>/           非 GitHub 市场仓库的浅 clone
+<config_dir>/riot/plugin-data/<id>/   PLUGIN_DATA，跨升级保留
 ```
 
-`[约束]` **解压必须先落到临时目录再 rename。**直接往目标目录解压的话,中途断电或退出会留下一个"看起来装好了、实际缺文件"的包 —— 那比没装更糟:状态显示已安装,用起来却在各种意想不到的地方报错,而且用户完全没有线索。
+`[约束]` **解压必须先落到临时目录再 rename。**直接往目标目录解压的话,中途断电或退出会留下一个"看起来装好了、实际缺文件"的插件 —— 那比没装更糟:状态显示已安装,用起来却在各种意想不到的地方报错,而且用户完全没有线索。
 
-`[约束]` **装完必须实跑一遍包里的关键二进制**(`pack.json` 的 `selfCheck`)。这些二进制是从别处提取的,`soffice` 和 `python3.12` 只有 ad-hoc 签名。真被系统拦下时,失败要发生在用户刚点完"安装"的那一刻,而不是几天后他让模型"做个 PPT"的时候 —— 那时现场是一条模型也看不懂的 Bash 报错。自检用**最小 PATH**(只有包内目录加系统基础目录),否则开发机上的全局 python / node 会把包里缺的东西兜住,自检就白做了。
+`[约束]` **装完必须实跑一遍 `dev.riot.selfCheck` 里的命令。**文档插件里的二进制是从别处提取的,`soffice` 和 `python3.12` 只有 ad-hoc 签名。真被系统拦下时,失败要发生在用户刚点完"安装"的那一刻,而不是几天后他让模型"做个 PPT"的时候 —— 那时现场是一条模型也看不懂的 Bash 报错。自检用**最小 PATH**(只有插件声明的目录加系统基础目录),否则开发机上的全局 python / node 会把插件里缺的东西兜住,自检就白做了。
 
-### 15.2 装完之后的三条接线
+`PLUGIN_DATA` 不放在插件目录**里面**：升级是整目录替换，放里面就一起没了；也不放 `plugins/` 下面：那里一个子目录就是一个插件，多一个 `.data` 会被当成半个插件扫到。
 
-都复用已有机制,不新增架构:
+上一代的「能力包」（`packs/<id>/pack.json`）启动时自动迁成插件：目录挪位置、补一份标准清单和 `mcp.json`、原来自动注册进配置的 MCP 条目摘掉（现在由插件派生）、数据目录跟着走。用户无感；迁不动的留在原地不碰。
 
-| 线     | 机制                                                    | 位置                                                      |
-| ------ | ------------------------------------------------------- | --------------------------------------------------------- |
-| Skills | 技能发现多一个"能力包"层                                | `skills::discover`,优先级 项目 > 全局 > **能力包** > 内置 |
-| MCP    | 按已装的包重建配置里属于包的那些条目,再 `reconcile_mcp` | `packs::sync_mcp`                                         |
-| PATH   | `DocPackRunner` 装饰器,和 `VenvRunner` 同一条链         | `session::build_scheduler`                                |
+### 15.5 文档插件的特殊处
 
-能力包排在全局技能**后面**:用户想改包里带的技能时,在全局目录放一个同名的就能盖掉,不必去改包内容(那会在下次升级时被覆盖)。
+`[约束]` **目标用户的机器上没有开发环境。**这不是"最好能支持",而是这个插件存在的全部理由 —— 如果可以要求用户先装 Python,那直接写文档说明就行了。由此推出三条硬性要求:包内所有二进制互相之间用**相对路径**引用;安装过程**不编译任何东西**;不依赖系统的 python / node / brew / apt。
 
-MCP 条目的归属按 **command 路径是否落在能力包目录下**判断,不靠 id 前缀也不在 `McpServerConfig` 上加字段。id 前缀会泄漏到工具名里(模型会看到 `pack__doc_artifact_tool` 这种东西),加字段则要动一个用户会手编的配置结构。路径是现成的、不会撒谎的事实。`enabled` 跨升级保留 —— 用户特意关掉过的服务器不该因为包升级又自己开回来。
+`[约束]` **插件里的 `python` 和 `node` 绝不进 PATH。**进了的话,用户给会话配了虚拟环境时,一句 `python manage.py` 会拿到插件里这份、找不到项目依赖。为了文档功能把用户原本的工作流弄坏,是不划算的。
 
-### 15.3 只有一部分目录进 PATH
-
-`[约束]` **包里的 `python` 和 `node` 绝不进 PATH。**进了的话,用户给会话配了虚拟环境时,一句 `python manage.py` 会拿到包里这份、找不到项目依赖。为了文档功能把用户原本的工作流弄坏,是不划算的。
-
-所以包里分两个目录:`bin/` 是全套,通过 `RUNTIME_BIN_DIR` 暴露,要用哪个就显式写全路径;`path/` 只有别处不提供、不会遮住任何东西的那几个(`pdftoppm` 一类),只有它会被拼进 PATH。skill 正文里因此统一写 `"$RUNTIME_BIN_DIR/python3"` 而不是 `python3`。
+所以包里分两个目录:`bin/` 是全套,通过 `RUNTIME_BIN_DIR` 暴露,要用哪个就显式写全路径;`path/` 只有别处不提供、不会遮住任何东西的那几个(`pdftoppm` 一类),只有它写进 `dev.riot.pathPrepend`。skill 正文里因此统一写 `"$RUNTIME_BIN_DIR/python3"` 而不是 `python3`。
 
 LibreOffice 连 `path/` 都不进:Windows 上它自己的目录里躺着一个 `python.exe`,而 `soffice.exe` 要靠同目录的 DLL 才能起来 —— 想让它上 PATH 就只能把整个目录塞进去。改成由渲染脚本从 `RUNTIME_BIN_DIR` 解析绝对路径,这个两难就不存在了(Windows 按 exe 所在目录搜 DLL,不需要 PATH 配合)。
 
-### 15.4 平台差异
+包按平台分别制作 —— 原生绑定是按平台编译的,没法交叉产出。`dev.riot.platforms` 只写本平台，装到别的平台上会被拒。Windows 上 `CreateProcess` 不认无扩展名的脚本,所以 Python 侧不能走 shim,包里额外放一份名字到真实 `.exe` 的映射清单。模型敲的命令仍然走 shim,因为 Riot 在 Windows 上用的是 Git for Windows 的 bash。
 
-包按平台分别制作 —— 原生绑定是按平台编译的,没法交叉产出。两边的实质差异只有一处:Windows 上 `CreateProcess` 不认无扩展名的脚本,所以 Python 侧不能走 shim,包里额外放一份名字到真实 `.exe` 的映射清单。模型敲的命令仍然走 shim,因为 Riot 在 Windows 上用的是 Git for Windows 的 bash。
+### 15.6 怎么发出去
 
-### 15.5 怎么发出去
+官方目录是 [`riot-org/riot-marketplace`](https://github.com/riot-org/riot-marketplace)，只放 `marketplace.json`。文档插件源码和打包在 [`riot-org/plugin-doc-runtime`](https://github.com/riot-org/plugin-doc-runtime)。Python / Node / LibreOffice / `@oai/artifact-tool` 不进 git：体积太大，且 artifact-tool 是 Codex 私有包。
 
-包托管在单独的仓库 [`caiwuu/riot-pkg`](https://github.com/caiwuu/riot-pkg),布局是 `<包名>/<平台>/`。包名在平台上层:那个仓库以后不止装文档一个能力,按平台分在最外面的话,一个包的东西会散在各平台目录里。
+`[约束]` **包体走插件仓库的 Releases,不进 git。**GitHub 拒收超过 100MB 的单个文件,而一个包压缩后两百多 MB。Git LFS 的免费额度也撑不住。市场仓库里只留索引。
 
-`[约束]` **包体走 Releases,不进 git。**GitHub 拒收超过 100MB 的单个文件,而一个包压缩后两百多 MB。Git LFS 的免费额度(1GB 存储 + 1GB/月流量)对这个量级也撑不了几次下载。仓库里只留清单。
+运行时底包放在插件仓库 tag=`runtime` 的 Release。换 Codex / LibreOffice 时在插件仓库本机 seed 一次（macOS：`node scripts/build.mjs --seed --upload`；Windows：`powershell -File scripts\seed.ps1`，再 `gh release upload runtime …`）。之后改 skill 只推源码，GitHub Actions（`macos-14` + `windows-2022`）下载底包、叠源码、打 `doc-runtime-v*`。配了 `MARKETPLACE_TOKEN` 会更新官方目录。
 
-清单反过来读**仓库文件**而不是 release 资产:改清单的场合多半是下线某个坏掉的版本或换个下载地址,那种时候不该被迫再发一版。
-
-发布分两段,顺序不能反 —— Riot 一读到新清单就会拿里面的 url 去下载,资产得先在那儿:
-
-1. 各平台机器上跑构建脚本,产物落到 `<包名>/<平台>/`,同时写一份只描述本平台的 `packs.json`;
-2. 任一台机器上跑 `scripts/doc-pack/publish.mjs`,把各平台清单并成根目录那份、比对每个包的 sha256、传资产、最后推清单。
+清单反过来读**市场仓库的文件**而不是 release 资产:改清单的场合多半是下线某个坏掉的版本或换个下载地址,那种时候不该被迫再发一版。
 
 `[约束]` **合并时字段冲突要报错,不能挑一个。**两台构建机写出的版本号对不上,意味着它们跑的不是同一批;挑哪边都会让另一个平台的用户装到版本号名不副实的包,而症状要到运行时才出现。
+
+上游 skill 大改时在插件仓库跑 `node scripts/import-skills.mjs`，审完再提交。装完冒烟：`node scripts/verify.mjs <插件目录>`。
 
 ---
 

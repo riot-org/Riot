@@ -115,4 +115,21 @@ export default {
   "kernel.config.providerNotFound": "找不到服务方「{id}」。",
   "kernel.config.noModelSelected":
     "「{name}」还没有选中模型。在设置里添加一个模型并点选，或在输入框的模型菜单里选择。",
+
+  "kernel.plugin.noManifest": "目录里没有插件清单（plugin.json、.claude-plugin/plugin.json 或 .cursor-plugin/plugin.json）。",
+  "kernel.plugin.badJson": "清单不是合法 JSON。",
+  "kernel.plugin.missingSchema": "标准清单缺 $schema 字段。",
+  "kernel.plugin.badSchema": "不支持的清单版本：{schema}",
+  "kernel.plugin.badName": "插件名「{name}」不合法：只能用小写字母、数字、连字符和点。",
+  "kernel.plugin.badField": "清单字段「{field}」的类型不对。",
+  "kernel.plugin.unknownField": "清单里有未知字段「{field}」，已忽略。",
+  "kernel.plugin.pathMissing": "路径不存在：{path}",
+  "kernel.plugin.pathUnreadable": "路径读不了：{path}",
+  "kernel.plugin.pathEscapes": "路径逃出了插件目录：{path}",
+  "kernel.plugin.componentNotDir": "{path} 不是目录。",
+  "kernel.plugin.componentNotFound": "{path} 不存在。",
+  "kernel.plugin.mcpInvalid": "MCP 配置无效。",
+  "kernel.plugin.mcpServerInvalid": "MCP 服务器「{name}」的配置无效。",
+  "kernel.plugin.extInvalid": "dev.riot 扩展字段无效。",
+  "kernel.mcp.httpFailed": "连不上 MCP 服务器 {url}。",
 };

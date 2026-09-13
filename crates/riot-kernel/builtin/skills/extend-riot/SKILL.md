@@ -1,6 +1,6 @@
 ---
 name: extend-riot
-description: 用户想加技能、斜杠命令、hook、或项目约定时用。四种扩展点的目录、frontmatter 字段、以及一批模型猜不到的格式限制和优先级规则。
+description: 用户想加技能、斜杠命令、hook、或项目约定时用。四种扩展点的目录、frontmatter 字段、以及一批模型猜不到的格式限制和优先级规则。要打成可分发的插件时转 create-plugin。
 ---
 
 # 扩展 Riot
@@ -9,7 +9,9 @@ description: 用户想加技能、斜杠命令、hook、或项目约定时用。
 目录（设置 → 关于里能看到，macOS 是 `~/Library/Application Support/riot`），
 项目级的放 `<项目>/.riot/`。
 
-同名时**项目级赢**（和 git 的 local > global 同一直觉）。
+同名时**项目级赢**（和 git 的 local > global 同一直觉）。插件带的排在全局
+之后、内置之前，且技能和命令自动带 `<插件>:` 前缀 —— 要把这些东西打包给
+别人装、或从 Claude Code / Cursor 的插件里搬过来，用 `create-plugin` 技能。
 
 ## 技能 SKILL.md
 

@@ -268,10 +268,10 @@ impl ActiveSandbox {
 /// 两者正交、能自由组合，而"不沙箱"这条路径上一行沙箱代码都不会跑到。
 ///
 /// `[约束]` 这一层必须装在执行器链条的**最里层**（紧贴真正起进程的那个），
-/// venv / 能力包在它外面。两个平台都是「改写 spec 再交给 `inner`」，而
+/// venv / 插件在它外面。两个平台都是「改写 spec 再交给 `inner`」，而
 /// 改写会把 `spec.env` 翻走（Windows 翻成 `--env`）—— 装在最外层的话，
 /// 里面那些改环境变量的装饰器一个都跑不到，表现是「一开沙箱（默认开），
-/// 会话设的 Python venv 和能力包就静默失效」。装在最里层则外层改完 env 的
+/// 会话设的 Python venv 和插件就静默失效」。装在最里层则外层改完 env 的
 /// spec 原样落到这里。
 pub struct SandboxedRunner {
     // 三个平台都读它：macOS 垫 sandbox-exec、Windows 垫 srt-win，都交给它

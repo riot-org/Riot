@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-use riot_kernel::packs::{InstalledPack, PackManifest};
+use riot_kernel::plugins::Loaded;
 use riot_protocol::{UiError, ui_error};
 
 /// 安装链路的错误。`Display` 是给日志的英文；给前端看的形态见 [`Self::to_ui`]。
@@ -16,11 +16,11 @@ use riot_protocol::{UiError, ui_error};
 /// 不翻译，前端放在译文后面的次要位置。
 #[derive(Debug, thiserror::Error)]
 pub enum InstallError {
-    #[error("manifest: {0}")]
-    Manifest(String),
-    #[error("pack `{0}` is not in the manifest")]
+    #[error("marketplace: {0}")]
+    Marketplace(String),
+    #[error("plugin `{0}` is not in the marketplace")]
     NotFound(String),
-    #[error("no pack for platform {0}")]
+    #[error("no build for platform {0}")]
     Unsupported(String),
     #[error("network: {0}")]
     Network(String),
@@ -29,10 +29,18 @@ pub enum InstallError {
     /// 第一项是"当时在做什么"（英文短语），进细节里。
     #[error("{0}: {1}")]
     Io(String, #[source] std::io::Error),
-    #[error("bad pack layout: {0}")]
+    #[error("bad plugin layout: {0}")]
     Layout(String),
+    /// 清单读不了、名字非法之类：插件目录本身不合规。
+    #[error("invalid plugin: {0}")]
+    Invalid(UiError),
     #[error("self-check failed: {0}")]
     SelfCheck(String),
+    #[error("git: {0}")]
+    Git(String),
+    /// 已经装了同 id 的插件，而这次不是升级。
+    #[error("plugin `{0}` is already installed")]
+    AlreadyInstalled(String),
     /// 解压 / 自检那个 blocking 任务本身没能跑完（panic 或 runtime 正在关）。
     /// 和"包坏了"分开，不然用户会去重下一个没问题的包。
     #[error("task: {0}")]
@@ -43,34 +51,60 @@ impl InstallError {
     /// 前端要的形态：按"发生了什么"给键，原始原因留作细节。
     pub fn to_ui(&self) -> UiError {
         match self {
-            InstallError::Manifest(d) => ui_error!("host.pack.manifestFailed"; d),
-            InstallError::NotFound(id) => ui_error!("host.pack.notInManifest", id = id),
+            InstallError::Marketplace(d) => ui_error!("host.plugin.marketplaceFailed"; d),
+            InstallError::NotFound(id) => ui_error!("host.plugin.notInMarketplace", id = id),
             InstallError::Unsupported(p) => {
-                ui_error!("host.pack.unsupportedPlatform", platform = p)
+                ui_error!("host.plugin.unsupportedPlatform", platform = p)
             }
-            InstallError::Network(d) => ui_error!("host.pack.downloadFailed"; d),
+            InstallError::Network(d) => ui_error!("host.plugin.downloadFailed"; d),
             InstallError::Checksum { expected, actual } => {
-                ui_error!("host.pack.checksumMismatch"; format!("expected {expected}, got {actual}"))
+                ui_error!("host.plugin.checksumMismatch"; format!("expected {expected}, got {actual}"))
             }
-            InstallError::Io(what, e) => ui_error!("host.pack.ioFailed"; format!("{what}: {e}")),
-            InstallError::Layout(d) => ui_error!("host.pack.badLayout"; d),
-            InstallError::SelfCheck(d) => ui_error!("host.pack.selfCheckFailed"; d),
-            InstallError::Task(d) => ui_error!("host.pack.taskFailed"; d),
+            InstallError::Io(what, e) => ui_error!("host.plugin.ioFailed"; format!("{what}: {e}")),
+            InstallError::Layout(d) => ui_error!("host.plugin.badLayout"; d),
+            InstallError::Invalid(e) => e.clone(),
+            InstallError::SelfCheck(d) => ui_error!("host.plugin.selfCheckFailed"; d),
+            InstallError::Git(d) => ui_error!("host.plugin.gitFailed"; d),
+            InstallError::AlreadyInstalled(id) => {
+                ui_error!("host.plugin.alreadyInstalled", id = id)
+            }
+            InstallError::Task(d) => ui_error!("host.plugin.taskFailed"; d),
         }
     }
 }
 
-/// 解压 tar.zst 并原子替换掉 `dest`。返回最终的包根目录。
+/// 目录里有没有一份我们认的清单。解压完、clone 完都拿它判"这到底是不是
+/// 一个插件"—— 报错时把实际看到的东西列出来，"下错了文件"和"多裹了一层
+/// 目录"的排查方向相反。
+pub fn has_manifest(dir: &Path) -> bool {
+    riot_kernel::plugins::Format::ALL
+        .iter()
+        .any(|f| dir.join(f.manifest_path()).is_file())
+}
+
+/// 解压 tar.zst 并原子替换掉 `dest`。返回最终的插件根目录。
 ///
 /// 先解到同一个文件系统上的临时目录再 rename:直接往 `dest` 里解压的话,
-/// 解到一半断电或用户退出,留下的是一个"看起来装好了、实际缺文件"的包 ——
+/// 解到一半断电或用户退出,留下的是一个"看起来装好了、实际缺文件"的插件 ——
 /// 那比没装更糟,因为状态显示已安装,用起来却在各种地方随机报错。
 pub fn unpack(archive: &Path, dest: &Path) -> Result<PathBuf, InstallError> {
+    let staging = staging_dir_for(dest)?;
+    // 出任何岔子都要把临时目录收掉,否则失败几次就在用户盘上堆了几个 GB。
+    let result = extract_into(archive, &staging).and_then(|()| swap_in(&staging, dest));
+    if result.is_err() {
+        let _ = std::fs::remove_dir_all(&staging);
+    }
+    result?;
+    Ok(dest.to_path_buf())
+}
+
+/// 在 `dest` 旁边开一个空的临时目录（同一文件系统，rename 才是原子的）。
+pub fn staging_dir_for(dest: &Path) -> Result<PathBuf, InstallError> {
     let parent = dest
         .parent()
         .ok_or_else(|| InstallError::Layout(format!("{} has no parent dir", dest.display())))?;
-    std::fs::create_dir_all(parent).map_err(|e| InstallError::Io("create packs dir".into(), e))?;
-
+    std::fs::create_dir_all(parent)
+        .map_err(|e| InstallError::Io("create plugins dir".into(), e))?;
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
@@ -82,14 +116,7 @@ pub fn unpack(archive: &Path, dest: &Path) -> Result<PathBuf, InstallError> {
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging)
         .map_err(|e| InstallError::Io("create staging dir".into(), e))?;
-
-    // 出任何岔子都要把临时目录收掉,否则失败几次就在用户盘上堆了几个 GB。
-    let result = extract_into(archive, &staging).and_then(|()| swap_in(&staging, dest));
-    if result.is_err() {
-        let _ = std::fs::remove_dir_all(&staging);
-    }
-    result?;
-    Ok(dest.to_path_buf())
+    Ok(staging)
 }
 
 fn extract_into(archive: &Path, staging: &Path) -> Result<(), InstallError> {
@@ -134,7 +161,7 @@ fn extract_into(archive: &Path, staging: &Path) -> Result<(), InstallError> {
         #[cfg(unix)]
         if unpacked && is_file && mode & 0o6000 != 0 {
             // setuid / setgid 位一律掩掉。归档里的这两位会被原样保留（可执行
-            // 位必须保留，见上面），于是"下载一个包"就变成了"在用户机器上放
+            // 位必须保留，见上面），于是"下载一个插件"就变成了"在用户机器上放
             // 一个 setuid 程序"—— 归档是远端来的，包体内容变了签名不会变。
             // 掉的只是这两位，rwx 照旧。
             if let Some(p) = path.as_ref() {
@@ -145,7 +172,7 @@ fn extract_into(archive: &Path, staging: &Path) -> Result<(), InstallError> {
                     return Err(InstallError::Io("strip setuid bit".into(), e));
                 }
                 tracing::warn!(path = %target.display(), mode = format!("{mode:o}"),
-                    "pack entry had setuid/setgid bits; masked");
+                    "archive entry had setuid/setgid bits; masked");
             }
         }
         #[cfg(not(unix))]
@@ -154,26 +181,31 @@ fn extract_into(archive: &Path, staging: &Path) -> Result<(), InstallError> {
     Ok(())
 }
 
-/// 把解压结果搬到最终位置。
-fn swap_in(staging: &Path, dest: &Path) -> Result<(), InstallError> {
+/// 把解压 / clone 结果搬到最终位置。`staging` 里可以直接是插件根，也可以
+/// 裹一层顶层目录（压缩包常这样）。
+pub fn swap_in(staging: &Path, dest: &Path) -> Result<(), InstallError> {
     // 压缩包里裹了一层带版本和平台的顶层目录,剥掉它 —— 定位器按固定路径
-    // 找包,路径里带版本号的话每次升级都要改代码。
+    // 找插件,路径里带版本号的话每次升级都要改代码。
     //
     // 判断"是不是只有一层"时要跳过点开头的东西。macOS 的 tar 会为带扩展属性
     // 的文件额外写一个 `._xxx` 的 AppleDouble 条目,而它自己列归档时又把这些
     // 藏起来 —— 归档看着只有一个顶层目录,别的 tar 实现解出来却是两个条目。
-    // 不跳过的话这里会误判成"没有外层目录",然后在压缩包根下找 pack.json。
-    let entries: Vec<_> = std::fs::read_dir(staging)
-        .map_err(|e| InstallError::Io("read staging dir".into(), e))?
-        .filter_map(Result::ok)
-        .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
-        .collect();
-    let root = match entries.as_slice() {
-        [only] if only.path().is_dir() => only.path(),
-        _ => staging.to_path_buf(),
+    // 不跳过的话这里会误判成"没有外层目录",然后在压缩包根下找清单。
+    let root = if has_manifest(staging) {
+        staging.to_path_buf()
+    } else {
+        let entries: Vec<_> = std::fs::read_dir(staging)
+            .map_err(|e| InstallError::Io("read staging dir".into(), e))?
+            .filter_map(Result::ok)
+            .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+            .collect();
+        match entries.as_slice() {
+            [only] if only.path().is_dir() => only.path(),
+            _ => staging.to_path_buf(),
+        }
     };
-    if !root.join("pack.json").exists() {
-        // 把实际看到的东西带出来。只说"找不到 pack.json"的话，是"下错了文件"
+    if !has_manifest(&root) {
+        // 把实际看到的东西带出来。只说"找不到清单"的话，是"下错了文件"
         // 还是"压缩包多裹了一层目录"完全分不清，而这两者的排查方向相反。
         let found: Vec<_> = std::fs::read_dir(&root)
             .into_iter()
@@ -182,7 +214,7 @@ fn swap_in(staging: &Path, dest: &Path) -> Result<(), InstallError> {
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .collect();
         return Err(InstallError::Layout(format!(
-            "no pack.json in archive; {} contains: {}",
+            "no plugin manifest (plugin.json / .claude-plugin/plugin.json / .cursor-plugin/plugin.json); {} contains: {}",
             root.display(),
             if found.is_empty() {
                 "(empty)".to_owned()
@@ -234,53 +266,56 @@ fn clear_quarantine(dir: &Path) {
     }
 }
 
-/// 读 pack.json,并实际跑一遍包里的关键二进制。
+/// 读清单并实际跑一遍 `dev.riot.selfCheck` 里的命令。
 ///
-/// 自检不是形式主义。这些二进制是从 Codex 运行时提取的,`soffice` 和
-/// `python3.12` 只有 ad-hoc 签名 —— 理论上能在 Apple Silicon 上跑,但一旦
+/// 自检不是形式主义。文档插件里的二进制是从 Codex 运行时提取的,`soffice`
+/// 和 `python3.12` 只有 ad-hoc 签名 —— 理论上能在 Apple Silicon 上跑,但一旦
 /// 因为签名、隔离标记或架构不匹配跑不起来,失败会发生在几天后用户让模型
 /// "做个 PPT"的时候,现场是一条模型都看不懂的 Bash 报错。在安装时就跑一次,
 /// 把问题摁在用户还知道自己刚点了"安装"的时刻。
-pub fn finalize(root: &Path) -> Result<InstalledPack, InstallError> {
-    let raw = std::fs::read_to_string(root.join("pack.json"))
-        .map_err(|e| InstallError::Io("read pack.json".into(), e))?;
-    let manifest: PackManifest = serde_json::from_str(&raw)
-        .map_err(|e| InstallError::Layout(format!("pack.json parse error: {e}")))?;
+pub fn finalize(root: &Path, data_root: &Path) -> Result<Loaded, InstallError> {
+    let loaded =
+        riot_kernel::plugins::load(root, data_root).map_err(|f| InstallError::Invalid(f.reason))?;
+    if !loaded.platform_ok {
+        return Err(InstallError::Unsupported(
+            riot_kernel::plugins::platform_key(),
+        ));
+    }
+    // 数据目录先建好：自检里的命令可能就要往里写。
+    let _ = std::fs::create_dir_all(&loaded.vars.data);
 
-    let pack = InstalledPack {
-        root: root.to_path_buf(),
-        manifest,
-    };
-
-    for check in self_checks(&pack) {
-        let program = pack.resolve(&check.0);
-        if !program.exists() {
+    for check in &loaded.self_checks {
+        let program = Path::new(&check.command);
+        if program.is_absolute() && !program.exists() {
             return Err(InstallError::SelfCheck(format!(
                 "{} does not exist",
                 program.display()
             )));
         }
-        let out = std::process::Command::new(&program)
-            .args(&check.1)
-            // 只给包内的 bin 和系统基础目录。用宿主完整 PATH 的话,开发机上
-            // 的全局 python / node 会把包里缺失的东西兜住,自检就白做了。
-            .env("PATH", minimal_path(&pack))
+        let out = std::process::Command::new(&check.command)
+            .args(&check.args)
+            // 只给插件自己声明的目录和系统基础目录。用宿主完整 PATH 的话,
+            // 开发机上的全局 python / node 会把插件里缺失的东西兜住,自检就白做了。
+            .env("PATH", minimal_path(&loaded))
+            .envs(loaded.runtime.env.iter().cloned())
+            .envs(loaded.vars.env())
             .env_remove("PYTHONHOME")
             .env_remove("PYTHONPATH")
             .env_remove("VIRTUAL_ENV")
+            .current_dir(&loaded.root)
             .output();
         match out {
             Ok(o) if o.status.success() => {
                 tracing::debug!(
-                    program = %program.display(),
+                    program = %check.command,
                     out = %String::from_utf8_lossy(&o.stdout).trim(),
-                    "pack self-check passed"
+                    "plugin self-check passed"
                 );
             }
             Ok(o) => {
                 return Err(InstallError::SelfCheck(format!(
                     "{} exited with {:?}: {}",
-                    program.display(),
+                    check.command,
                     o.status.code(),
                     String::from_utf8_lossy(&o.stderr).trim(),
                 )));
@@ -288,37 +323,17 @@ pub fn finalize(root: &Path) -> Result<InstalledPack, InstallError> {
             Err(e) => {
                 return Err(InstallError::SelfCheck(format!(
                     "{} failed to start: {e}",
-                    program.display()
+                    check.command
                 )));
             }
         }
     }
 
-    Ok(pack)
+    Ok(loaded)
 }
 
-/// pack.json 里声明的自检项;没声明就退回到"跑一遍 PATH 目录里的每个 shim"
-/// 是不可行的(参数各不相同),所以老包按空处理 —— 不自检总好过误报失败。
-fn self_checks(pack: &InstalledPack) -> Vec<(String, Vec<String>)> {
-    #[derive(serde::Deserialize)]
-    struct Check {
-        command: String,
-        #[serde(default)]
-        args: Vec<String>,
-    }
-    let raw = std::fs::read_to_string(pack.root.join("pack.json")).unwrap_or_default();
-    let value: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
-    let Some(list) = value.get("selfCheck").and_then(|v| v.as_array()) else {
-        return vec![];
-    };
-    list.iter()
-        .filter_map(|v| serde_json::from_value::<Check>(v.clone()).ok())
-        .map(|c| (c.command, c.args))
-        .collect()
-}
-
-fn minimal_path(pack: &InstalledPack) -> std::ffi::OsString {
-    let mut dirs = pack.path_dirs();
+fn minimal_path(plugin: &Loaded) -> std::ffi::OsString {
+    let mut dirs = plugin.runtime.path_dirs.clone();
     if cfg!(windows) {
         dirs.push(PathBuf::from(r"C:\Windows\system32"));
         dirs.push(PathBuf::from(r"C:\Windows"));
@@ -337,52 +352,61 @@ fn minimal_path(pack: &InstalledPack) -> std::ffi::OsString {
 mod tests {
     use super::*;
 
-    fn write_pack(dir: &Path, version: &str) {
+    fn write_manifest(dir: &Path, version: &str) {
         std::fs::create_dir_all(dir).expect("建目录");
         std::fs::write(
-            dir.join("pack.json"),
+            dir.join("plugin.json"),
             serde_json::json!({
+                "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
                 "name": "doc-runtime",
                 "version": version,
-                "platform": "darwin-arm64",
-                "env": {},
-                "pathPrepend": [],
-                "mcpServers": [],
-                "skills": [],
             })
             .to_string(),
         )
-        .expect("写 pack.json");
+        .expect("写 plugin.json");
     }
 
     #[test]
     fn 顶层目录会被剥掉() {
         let tmp = tempfile::tempdir().expect("临时目录");
         let staging = tmp.path().join("staging");
-        write_pack(&staging.join("doc-runtime-0.1.0-darwin-arm64"), "0.1.0");
+        write_manifest(&staging.join("doc-runtime-0.1.0-darwin-arm64"), "0.1.0");
         let dest = tmp.path().join("doc-runtime");
 
         swap_in(&staging, &dest).expect("切换");
 
         assert!(
-            dest.join("pack.json").exists(),
-            "pack.json 应该直接在包根下"
+            dest.join("plugin.json").exists(),
+            "plugin.json 应该直接在插件根下"
         );
         assert!(!staging.exists(), "临时目录应被清掉");
+    }
+
+    #[test]
+    fn 清单直接在_staging_根下也认() {
+        let tmp = tempfile::tempdir().expect("临时目录");
+        let staging = tmp.path().join("staging");
+        write_manifest(&staging, "0.1.0");
+        // 旁边还有别的目录（比如 git clone 出来的 .git 已删、只剩 skills）
+        std::fs::create_dir_all(staging.join("skills")).expect("建目录");
+        let dest = tmp.path().join("p");
+        swap_in(&staging, &dest).expect("切换");
+        assert!(dest.join("plugin.json").exists());
+        assert!(dest.join("skills").is_dir());
     }
 
     #[test]
     fn 升级会替换掉旧版本且不留备份() {
         let tmp = tempfile::tempdir().expect("临时目录");
         let dest = tmp.path().join("doc-runtime");
-        write_pack(&dest, "0.1.0");
+        write_manifest(&dest, "0.1.0");
         std::fs::write(dest.join("stale.txt"), "旧版本残留").expect("写残留文件");
 
         let staging = tmp.path().join("staging");
-        write_pack(&staging.join("inner"), "0.2.0");
+        write_manifest(&staging.join("inner"), "0.2.0");
         swap_in(&staging, &dest).expect("切换");
 
-        let raw = std::fs::read_to_string(dest.join("pack.json")).expect("读 pack.json");
+        let raw = std::fs::read_to_string(dest.join("plugin.json")).expect("读 plugin.json");
         assert!(raw.contains("0.2.0"), "应该是新版本");
         assert!(
             !dest.join("stale.txt").exists(),
@@ -438,7 +462,6 @@ mod tests {
             !staging.join("pack/bin/._soffice").exists(),
             "AppleDouble 不能落地"
         );
-        // 可执行位只在 unix 上有意义，Windows 的 Permissions 没有 mode。
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
@@ -450,31 +473,7 @@ mod tests {
         }
     }
 
-    /// macOS 的 tar 会在顶层多写一个 `._` 开头的 AppleDouble 条目，而它自己
-    /// `tar -tf` 时把这些藏起来 —— 归档看着只有一个顶层目录，用别的 tar 解出来
-    /// 却是两个。真的踩过：构建脚本产出的包在宿主这边报"找不到 pack.json"。
-    #[test]
-    fn apple_double_残留不影响剥外层目录() {
-        let tmp = tempfile::tempdir().expect("临时目录");
-        let staging = tmp.path().join("staging");
-        write_pack(&staging.join("doc-runtime-0.1.0-darwin-arm64"), "0.1.0");
-        std::fs::write(
-            staging.join("._doc-runtime-0.1.0-darwin-arm64"),
-            b"\x00\x05\x16\x07",
-        )
-        .expect("写 AppleDouble 残留");
-
-        let dest = tmp.path().join("doc-runtime");
-        swap_in(&staging, &dest).expect("切换");
-        assert!(dest.join("pack.json").exists(), "外层目录应该照样被剥掉");
-    }
-
     /// 归档里的 setuid 位不能落到用户盘上。
-    ///
-    /// 可执行位必须保留（不然 bin 里的 shim 全跑不了），而 tar 的
-    /// `set_preserve_permissions` 是一刀切的 —— setuid / setgid 会跟着一起
-    /// 进来。包体是从远端下的，"装一个能力包"不该顺带在用户机器上放一个
-    /// setuid 程序。
     #[cfg(unix)]
     #[test]
     fn setuid_位不会跟着解压落地() {
@@ -511,11 +510,41 @@ mod tests {
     }
 
     #[test]
-    fn 缺_pack_json_直接拒绝() {
+    fn 缺清单直接拒绝() {
         let tmp = tempfile::tempdir().expect("临时目录");
         let staging = tmp.path().join("staging");
         std::fs::create_dir_all(staging.join("inner")).expect("建目录");
         let err = swap_in(&staging, &tmp.path().join("doc-runtime")).expect_err("应该失败");
         assert!(matches!(err, InstallError::Layout(_)), "实际是 {err:?}");
+    }
+
+    /// 自检里写的命令跑不起来要当成安装失败。
+    #[cfg(unix)]
+    #[test]
+    fn 自检失败让安装失败() {
+        let tmp = tempfile::tempdir().expect("临时目录");
+        let root = tmp.path().join("p");
+        std::fs::create_dir_all(root.join("bin")).expect("建目录");
+        std::fs::write(root.join("bin/nope"), "#!/bin/sh\nexit 3\n").expect("写脚本");
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(
+                root.join("bin/nope"),
+                std::fs::Permissions::from_mode(0o755),
+            )
+            .expect("加可执行位");
+        }
+        std::fs::write(
+            root.join("plugin.json"),
+            serde_json::json!({
+                "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+                "name": "p",
+                "extensions": { "dev.riot": { "selfCheck": [{ "command": "./bin/nope" }] } }
+            })
+            .to_string(),
+        )
+        .expect("写清单");
+        let err = finalize(&root, &tmp.path().join("data")).expect_err("该失败");
+        assert!(matches!(err, InstallError::SelfCheck(_)), "实际 {err:?}");
     }
 }

@@ -95,4 +95,4 @@ docs/            架构、验证、开发
 
 宿主从 `tauri.conf.json` 读这份号：关于页显示、对照 GitHub 最新正式 Release，都是它。Release tag 写成 `0.1.1`、`v0.1.1` 或 `Riot_0.1.1` 都行。
 
-测试夹具里的 `0.1.0`（例如 `session.rs` 的 `doc_pack()`）不用改。文档能力包是另一条线，见 [ARCHITECTURE.md](ARCHITECTURE.md) §15.5。
+测试夹具里的版本号不用改。文档插件在 [`plugin-doc-runtime`](https://github.com/riot-org/plugin-doc-runtime)，版本写在那边的 `plugin.json`。见 [ARCHITECTURE.md](ARCHITECTURE.md) §15.6。

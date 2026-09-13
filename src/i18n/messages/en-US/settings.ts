@@ -25,9 +25,6 @@ export default {
   "settings.tab.mcp": "MCP",
   "settings.tab.mcp.title": "MCP servers",
   "settings.tab.mcp.desc": "Connect external tool servers; once connected the model can call them directly.",
-  "settings.tab.packs": "Packs",
-  "settings.tab.packs.title": "Packs",
-  "settings.tab.packs.desc": "Optional downloadable runtimes. Related tools and skills register automatically once installed.",
   "settings.tab.skills": "Skills",
   "settings.tab.skills.title": "Skills",
   "settings.tab.skills.desc": "Skills written as SKILL.md files, loaded by the model on demand.",
@@ -294,4 +291,8 @@ export default {
   "settings.permission.rules": "Session rules",
   "settings.permission.rules.hint":
     "Rules remembered by clicking “Always allow” (e.g. {example}) only last for the current session and are gone once it's closed.",
+
+  "settings.tab.plugins": "Plugins",
+  "settings.tab.plugins.title": "Plugins",
+  "settings.tab.plugins.desc": "Bundle skills, commands, hooks and MCP servers into an installable package. Compatible with the Agent Plugins open standard, Claude Code and Cursor plugin formats.",
 } satisfies Dict<typeof zh>;
