@@ -101,11 +101,10 @@ pub async fn git_clone(url: &str, git_ref: Option<&str>, dest: &Path) -> Result<
     cmd.env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_EDITOR", "true")
         .stdin(std::process::Stdio::null());
+    // tokio::process::Command 自带此方法，不要再 use std CommandExt
+    // （那是给 std::process::Command 的，引进来是 unused_imports）。
     #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt as _;
-        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     let out = tokio::time::timeout(std::time::Duration::from_secs(300), cmd.output())
         .await
         .map_err(|_| InstallError::Git(format!("clone {url} timed out")))?
@@ -133,14 +132,14 @@ pub async fn git_clone(url: &str, git_ref: Option<&str>, dest: &Path) -> Result<
 
 /// clone 出来的提交号。拿不到就 None（不影响安装）。
 pub async fn git_head(dir: &Path) -> Option<String> {
-    let out = tokio::process::Command::new("git")
-        .arg("-C")
+    let mut cmd = tokio::process::Command::new("git");
+    cmd.arg("-C")
         .arg(dir)
         .args(["rev-parse", "HEAD"])
-        .stdin(std::process::Stdio::null())
-        .output()
-        .await
-        .ok()?;
+        .stdin(std::process::Stdio::null());
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    let out = cmd.output().await.ok()?;
     out.status
         .success()
         .then(|| String::from_utf8_lossy(&out.stdout).trim().to_owned())
