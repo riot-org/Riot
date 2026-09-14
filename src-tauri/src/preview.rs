@@ -92,15 +92,20 @@ async fn roots(state: &AppState) -> Vec<PathBuf> {
 
 /// 预览围栏认的临时目录。和沙箱可写集同形状，两边各写一份会只修一边。
 fn temp_dirs() -> Vec<PathBuf> {
-    let mut out = vec![std::env::temp_dir()];
     #[cfg(unix)]
     {
-        out.push(PathBuf::from("/tmp"));
-        out.push(PathBuf::from("/private/tmp"));
-        out.push(PathBuf::from("/var/tmp"));
-        out.push(PathBuf::from("/private/var/tmp"));
+        vec![
+            std::env::temp_dir(),
+            PathBuf::from("/tmp"),
+            PathBuf::from("/private/tmp"),
+            PathBuf::from("/var/tmp"),
+            PathBuf::from("/private/var/tmp"),
+        ]
     }
-    out
+    #[cfg(not(unix))]
+    {
+        vec![std::env::temp_dir()]
+    }
 }
 
 /// 把前端传来的路径解析成一个允许预览的绝对路径。
