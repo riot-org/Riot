@@ -4,6 +4,10 @@
 #   - 推 tag `Riot_0.1.0`（版本号对齐 src-tauri/tauri.conf.json）
 #   - Actions 里手动跑 Release（先出 draft，核对资产再发布）
 #
+# GitHub 不按 tag 去重 draft，`releases/tags/{tag}` 也查不到草稿。
+# macOS / Windows 若各自调 tauri-action 建 Release，会拆成两份、资产各挂一边。
+# 所以先单独建（或复用）一份，matrix 只按 releaseId 上传。
+#
 # 官网下载地址按这个 tag 约定写：
 #   Riot_<ver>/Riot_<ver>_aarch64.dmg
 #   Riot_<ver>/Riot_<ver>_x64-setup.exe
@@ -33,7 +37,47 @@ env:
   CEF_PATH: ${{ github.workspace }}/.cef
 
 jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.ensure.outputs.release_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: ensure
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version=$(python3 -c "import json; print(json.load(open('src-tauri/tauri.conf.json'))['version'])")
+          tag="Riot_${version}"
+          name="Riot ${version}"
+          body="$(printf '%s\n' \
+            'macOS：`Riot_*_aarch64.dmg`（Apple Silicon）' \
+            'Windows：`Riot_*_x64-setup.exe`')"
+
+          # 草稿必须扫列表。同一 tag 若已经拆成多份，拿资产最多的那份。
+          # 用 awk 收齐，不用 head：pipefail 下提前关管道会 SIGPIPE。
+          id=$(gh api --paginate "repos/${{ github.repository }}/releases" \
+            --jq ".[] | select(.tag_name == \"$tag\") | \"\(.id)\t\(.assets | length)\"" \
+            | awk -F'\t' '$2+0 > max+0 { max=$2; id=$1 } END { if (id != "") print id }')
+
+          if [[ -z "${id}" ]]; then
+            id=$(gh api "repos/${{ github.repository }}/releases" \
+              -f tag_name="$tag" \
+              -f name="$name" \
+              -f body="$body" \
+              -f target_commitish="${{ github.sha }}" \
+              -F draft=true \
+              -F generate_release_notes=true \
+              --jq .id)
+            echo "已建 draft $tag id=$id"
+          else
+            echo "复用已有 Release $tag id=$id"
+          fi
+          echo "release_id=${id}" >> "$GITHUB_OUTPUT"
+
   bundle:
+    needs: create-release
     strategy:
       fail-fast: false
       matrix:
@@ -172,17 +216,30 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          # 只上传，不再各自建 Release。
+          releaseId: ${{ needs.create-release.outputs.release_id }}
           tagName: Riot___VERSION__
           releaseName: Riot __VERSION__
-          releaseBody: |
-            macOS：`Riot_*_aarch64.dmg`（Apple Silicon）
-            Windows：`Riot_*_x64-setup.exe`
-          # 手动跑先出 draft，推 tag 直接挂到正式 Release。
-          releaseDraft: ${{ github.event_name == 'workflow_dispatch' }}
+          # 先建的是 draft；按 tag 复用已有草稿时也必须是 true。
+          releaseDraft: true
           prerelease: false
-          generateReleaseNotes: true
           uploadUpdaterJson: false
           uploadUpdaterSignatures: false
           uploadWorkflowArtifacts: true
           tauriScript: pnpm tauri
           retryAttempts: 2
+
+  # 推 tag 两边都挂上再转正。手动跑保持 draft，核对资产后再点发布。
+  publish:
+    needs: [create-release, bundle]
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh api --method PATCH \
+            "repos/${{ github.repository }}/releases/${{ needs.create-release.outputs.release_id }}" \
+            -F draft=false
+          echo "已发布 release id=${{ needs.create-release.outputs.release_id }}"
