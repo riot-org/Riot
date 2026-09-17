@@ -81,6 +81,7 @@ export default {
   "host.plugin.downloadFailed": "Plugin download failed. Click again to resume from where it stopped.",
   "host.plugin.checksumMismatch": "The downloaded file failed verification. It may be truncated or altered in transit; try again.",
   "host.plugin.ioFailed": "Failed to write the plugin to disk.",
+  "host.plugin.dirBusy": "The plugin folder can't be moved or deleted: something is probably still using it (a document conversion in progress, a window open on that folder), or you lack permission. Close it and try again.",
   "host.plugin.badLayout": "What was fetched is not a plugin: no manifest found.",
   "host.plugin.selfCheckFailed": "The plugin installed but failed its self-check; rolled back.",
   "host.plugin.gitFailed": "git operation failed.",

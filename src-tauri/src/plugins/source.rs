@@ -57,6 +57,9 @@ pub enum Staged {
     Linked(PathBuf),
     /// 确认后再下载。
     Archive { asset: ArchiveAsset },
+    /// 压缩包已下载、已解到临时目录（`fetch` 之后），只差搬进最终位置。
+    /// `archive` 是缓存里的包，装成之后才删 —— 搬失败重试时不用再下一遍。
+    Extracted { staging: PathBuf, archive: PathBuf },
 }
 
 /// 给确认页的预览。
@@ -201,51 +204,34 @@ pub async fn fetch_git(
     Ok(commit)
 }
 
-/// 下载 + 解压 + 自检一个压缩包来源，落到 `dest`。
-pub async fn install_archive(
+/// 下载并解压一个压缩包来源，落在 `dest` 旁边的临时目录里。**不碰 `dest`**：
+/// 搬进去是 `commit` 的事，宿主在两步之间先停掉还在用旧目录的进程。
+/// 返回（临时目录，缓存里的压缩包）—— 包要留到装成之后再删，搬失败重试
+/// 时才不用再下一遍。
+pub async fn fetch_archive(
     id: &str,
     version: &str,
     asset: &ArchiveAsset,
     cache_dir: &Path,
     dest: &Path,
-    data_root: &Path,
     progress: &(impl Fn(PluginProgress) + Send + Sync),
-) -> Result<riot_kernel::plugins::Loaded, InstallError> {
+) -> Result<(PathBuf, PathBuf), InstallError> {
     std::fs::create_dir_all(cache_dir)
         .map_err(|e| InstallError::Io("create cache dir".into(), e))?;
     let archive = cache_dir.join(format!("{id}-{version}.tar.zst"));
 
     super::download::fetch(&asset.url, &archive, asset.size, &asset.sha256, progress).await?;
 
-    // `[约束]` 解压和自检都走 spawn_blocking。两者都是彻头彻尾的同步活:
-    // 几百 MB 的 zstd 解码 + tar 逐条落盘、以及真的把包里的二进制跑起来。
-    // 直接在 async 上下文里调，这几十秒内同一个 runtime 上的所有命令 ——
-    // 发消息、内核 RPC、面板刷新 —— 一起卡住，而用户以为只是在装个插件。
+    // `[约束]` 解压走 spawn_blocking。它是彻头彻尾的同步活:几百 MB 的 zstd
+    // 解码 + tar 逐条落盘。直接在 async 上下文里调，这几十秒内同一个 runtime
+    // 上的所有命令 —— 发消息、内核 RPC、面板刷新 —— 一起卡住，而用户以为
+    // 只是在装个插件。（自检同理，见 `commit` 里的 `place`。）
     progress(PluginProgress::Extracting);
     let (src, dst) = (archive.clone(), dest.to_path_buf());
-    let root = tokio::task::spawn_blocking(move || install::unpack(&src, &dst))
+    let staging = tokio::task::spawn_blocking(move || install::extract(&src, &dst))
         .await
         .map_err(|e| InstallError::Task(format!("unpack task did not finish: {e}")))??;
-
-    progress(PluginProgress::SelfCheck);
-    let data_root = data_root.to_path_buf();
-    let loaded = tokio::task::spawn_blocking(move || install::finalize(&root, &data_root))
-        .await
-        .map_err(|e| InstallError::Task(format!("self-check task did not finish: {e}")))?;
-    // 自检不过的话把刚解出来的目录收掉：留着的话状态显示已安装，用起来
-    // 却处处报错。
-    let loaded = match loaded {
-        Ok(l) => l,
-        Err(e) => {
-            let _ = std::fs::remove_dir_all(dest);
-            return Err(e);
-        }
-    };
-
-    // 装完就把压缩包删掉。它和解压出来的内容加起来是两份几百 MB,
-    // 留着只在"同一版本重装"这一个场景有用,不值这个盘。
-    let _ = std::fs::remove_file(&archive);
-    Ok(loaded)
+    Ok((staging, archive))
 }
 
 /// 市场条目 → 记进注册表的来源。

@@ -81,6 +81,7 @@ export default {
   "host.plugin.downloadFailed": "플러그인 다운로드에 실패했습니다. 다시 클릭하면 중단 지점부터 이어받습니다.",
   "host.plugin.checksumMismatch": "다운로드한 파일이 검증을 통과하지 못했습니다. 중간에 끊겼거나 전송 중 변조되었을 수 있습니다. 다시 시도하세요.",
   "host.plugin.ioFailed": "플러그인을 디스크에 쓰지 못했습니다.",
+  "host.plugin.dirBusy": "플러그인 폴더를 옮기거나 삭제할 수 없습니다. 아직 사용 중인 프로그램이 있거나(진행 중인 문서 변환, 해당 폴더를 열어 둔 창) 권한이 없을 수 있습니다. 닫은 뒤 다시 시도하세요.",
   "host.plugin.badLayout": "가져온 것이 플러그인이 아닙니다: 매니페스트를 찾을 수 없습니다.",
   "host.plugin.selfCheckFailed": "플러그인이 설치되었지만 자체 점검에 실패해 롤백했습니다.",
   "host.plugin.gitFailed": "git 작업에 실패했습니다.",

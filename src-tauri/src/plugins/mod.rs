@@ -8,6 +8,7 @@
 //! ```text
 //! <config_dir>/riot/plugins/
 //!   <id>/                        安装的插件（链接的不在这里，根在 config 里）
+//!   <id>.old/                    升级 / 卸载时挪开的旧目录，随手删；删不掉下次再清
 //!   .cache/<id>-<version>.tar.zst 压缩包下载的半成品 / 缓存
 //!   .staging-<id>-<nonce>/       解压 / clone 中间态，校验通过后原子 rename 过去
 //!   .marketplaces/<id>/          非 GitHub 市场仓库的浅 clone
@@ -366,8 +367,22 @@ pub fn loaded_enabled(config: &AppConfig, config_path: &Path) -> Vec<Loaded> {
 
 /// 启用中的插件带的 MCP 服务器，拼成 `mcp.reconcile` 要的形状。
 pub fn mcp_specs(config: &AppConfig, config_path: &Path) -> Vec<McpServerSpec> {
+    mcp_specs_except(config, config_path, &[])
+}
+
+/// 同上，但跳过 `skip` 里的插件。装 / 卸 / 升级要动某个插件的目录时，宿主
+/// 用它让那个插件的服务器先停下来（见 `AppState::quiesce_plugin_mcp`）——
+/// 它们就是从那个目录里起的进程。
+pub fn mcp_specs_except(
+    config: &AppConfig,
+    config_path: &Path,
+    skip: &[String],
+) -> Vec<McpServerSpec> {
     let mut out = Vec::new();
     for p in loaded_enabled(config, config_path) {
+        if skip.contains(&p.id) {
+            continue;
+        }
         for s in &p.mcp_servers {
             out.push(McpServerSpec {
                 id: mcp_server_id(&p.id, &s.name),
@@ -623,15 +638,52 @@ async fn prepare_git(
     ))
 }
 
+/// 用户点了确认之后的第一步：该下载的下载、该解压的解压，全落在临时目录，
+/// **不碰** `plugins/<id>/`。非压缩包来源原样返回（git 在 `prepare` 时就
+/// 取下来了，链接的没有东西要取）。
+///
+/// 和 [`commit`] 分开是为了升级：旧版本的目录要被整个挪走，它带的 MCP
+/// 服务器得先停（见 `AppState::quiesce_plugin_mcp`）。下载要几分钟，这几
+/// 分钟里插件没理由不可用 —— 宿主在这一步之后、`commit` 之前才停进程，
+/// 真正不可用的只有搬目录加自检那几秒。
+pub async fn fetch(
+    pending: Pending,
+    config_path: &Path,
+    progress: &(impl Fn(PluginProgress) + Send + Sync),
+) -> Result<Pending, InstallError> {
+    let Staged::Archive { asset } = &pending.staged else {
+        return Ok(pending);
+    };
+    let dest = riot_kernel::config::plugin_dir(config_path, &pending.id);
+    let (staging, archive) = source::fetch_archive(
+        &pending.id,
+        &pending.version,
+        asset,
+        &cache_dir(config_path),
+        &dest,
+        progress,
+    )
+    .await?;
+    Ok(Pending {
+        staged: Staged::Extracted { staging, archive },
+        ..pending
+    })
+}
+
 /// 用户点了确认：把准备好的东西落到最终位置，返回要写进注册表的条目。
 ///
 /// 已有同 id 的条目时：链接 ↔ 安装可以互换（开发者把本地目录换成正式版
-/// 是常见流程），目录整体替换（升级）。调用方负责把返回的条目写进配置。
+/// 是常见流程），目录整体替换（升级）。调用方负责把返回的条目写进配置，
+/// 并在这之前停掉旧版本的进程（升级时）。
+///
+/// 没先 [`fetch`] 也行 —— 这里会补上；那样压缩包来源的下载就落在停了
+/// 进程之后，只是慢，不是错。
 pub async fn commit(
     pending: Pending,
     config_path: &Path,
     progress: &(impl Fn(PluginProgress) + Send + Sync),
 ) -> Result<PluginEntry, InstallError> {
+    let pending = fetch(pending, config_path, progress).await?;
     let data = data_root(config_path);
     let dest = riot_kernel::config::plugin_dir(config_path, &pending.id);
     let mut entry = PluginEntry {
@@ -646,45 +698,28 @@ pub async fn commit(
         Staged::Linked(root) => {
             // 之前装过一份同 id 的正式版？链接优先，装的那份目录删掉，
             // 否则两份技能同名互相盖。
-            if dest.exists() {
-                let _ = std::fs::remove_dir_all(&dest);
+            if let Err(e) = install::remove_tree(&dest) {
+                tracing::warn!(plugin = %pending.id, error = %e, "被链接替掉的旧目录没删掉");
             }
             entry.linked_path = Some(root.display().to_string());
         }
         Staged::Dir(staging) => {
-            progress(PluginProgress::SelfCheck);
-            let (s, d) = (staging.clone(), dest.clone());
-            let swapped = tokio::task::spawn_blocking(move || install::swap_in(&s, &d))
-                .await
-                .map_err(|e| InstallError::Task(format!("swap task did not finish: {e}")))?;
-            if let Err(e) = swapped {
-                let _ = std::fs::remove_dir_all(&staging);
-                return Err(e);
-            }
-            let (d, data2) = (dest.clone(), data.clone());
-            let finalized = tokio::task::spawn_blocking(move || install::finalize(&d, &data2))
-                .await
-                .map_err(|e| InstallError::Task(format!("self-check task did not finish: {e}")))?;
-            if let Err(e) = finalized {
-                let _ = std::fs::remove_dir_all(&dest);
-                return Err(e);
-            }
+            place(&staging, &dest, &data, progress).await?;
         }
-        Staged::Archive { asset } => {
-            let loaded = source::install_archive(
-                &pending.id,
-                &pending.version,
-                &asset,
-                &cache_dir(config_path),
-                &dest,
-                &data,
-                progress,
-            )
-            .await?;
+        Staged::Extracted { staging, archive } => {
+            let loaded = place(&staging, &dest, &data, progress).await?;
+            // 装完就把压缩包删掉。它和解压出来的内容加起来是两份几百 MB,
+            // 留着只在"同一版本重装"这一个场景有用,不值这个盘。
+            let _ = std::fs::remove_file(&archive);
             // 压缩包里清单的版本比市场说的准。
-            if let Some(v) = loaded.meta.version.clone() {
+            if let Some(v) = loaded.meta.version {
                 entry.version = v;
             }
+        }
+        Staged::Archive { .. } => {
+            return Err(InstallError::Task(
+                "archive was not fetched before commit".into(),
+            ));
         }
     }
     progress(PluginProgress::Done {
@@ -693,25 +728,63 @@ pub async fn commit(
     Ok(entry)
 }
 
+/// 把暂存目录搬进最终位置并自检。
+///
+/// 搬不进去收掉暂存目录；自检不过收掉刚搬进去的 —— 留着的话状态显示
+/// 已安装，用起来却处处报错。两步都是同步的重活（改名是一瞬间，自检要
+/// 真把二进制跑起来），走 spawn_blocking。
+async fn place(
+    staging: &Path,
+    dest: &Path,
+    data: &Path,
+    progress: &(impl Fn(PluginProgress) + Send + Sync),
+) -> Result<Loaded, InstallError> {
+    progress(PluginProgress::SelfCheck);
+    let (s, d) = (staging.to_path_buf(), dest.to_path_buf());
+    let swapped = tokio::task::spawn_blocking(move || install::swap_in(&s, &d))
+        .await
+        .map_err(|e| InstallError::Task(format!("swap task did not finish: {e}")))?;
+    if let Err(e) = swapped {
+        let _ = std::fs::remove_dir_all(staging);
+        return Err(e);
+    }
+    let (d, data2) = (dest.to_path_buf(), data.to_path_buf());
+    let finalized = tokio::task::spawn_blocking(move || install::finalize(&d, &data2))
+        .await
+        .map_err(|e| InstallError::Task(format!("self-check task did not finish: {e}")))?;
+    match finalized {
+        Ok(loaded) => Ok(loaded),
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(dest);
+            Err(e)
+        }
+    }
+}
+
 /// 放弃一次准备好的安装：收掉临时目录。
 pub fn discard(pending: Pending) {
-    if let Staged::Dir(staging) = pending.staged {
-        let _ = std::fs::remove_dir_all(staging);
+    match pending.staged {
+        Staged::Dir(staging) | Staged::Extracted { staging, .. } => {
+            let _ = std::fs::remove_dir_all(staging);
+        }
+        Staged::Linked(_) | Staged::Archive { .. } => {}
     }
 }
 
 /// 卸载：删目录（链接的不删用户自己的目录）、删数据目录。幂等。
+///
+/// 只动磁盘。它带的 MCP 服务器是从这个目录里起的（可执行文件、工作目录
+/// 都在里面），调用方得先让内核把进程停掉再来 —— Windows 上删一个还在跑
+/// 的 exe、挪一个被当作工作目录的文件夹，都是 Access denied（见
+/// `AppState::plugins_uninstall`）。
 pub fn uninstall(entry: &PluginEntry, config_path: &Path) -> Result<(), InstallError> {
     if entry.linked_path.is_none() {
-        let dir = riot_kernel::config::plugin_dir(config_path, &entry.id);
-        if dir.exists() {
-            std::fs::remove_dir_all(&dir)
-                .map_err(|e| InstallError::Io("remove plugin dir".into(), e))?;
-        }
+        install::remove_tree(&riot_kernel::config::plugin_dir(config_path, &entry.id))?;
     }
-    let data = data_root(config_path).join(&entry.id);
-    if data.exists() {
-        let _ = std::fs::remove_dir_all(&data);
+    // 数据目录删不掉不算卸载失败：插件本体已经不在了，留几个状态文件
+    // 不影响任何功能，下次装回来还接着用。
+    if let Err(e) = install::remove_tree(&data_root(config_path).join(&entry.id)) {
+        tracing::warn!(plugin = %entry.id, error = %e, "插件数据目录没删掉");
     }
     Ok(())
 }

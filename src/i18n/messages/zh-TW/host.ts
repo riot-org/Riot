@@ -81,6 +81,7 @@ export default {
   "host.plugin.downloadFailed": "外掛下載失敗。再點一次會從斷點繼續。",
   "host.plugin.checksumMismatch": "下載的檔案校驗不通過。可能下到了半截或被中間網路改寫，重試一次試試。",
   "host.plugin.ioFailed": "外掛寫盤失敗。",
+  "host.plugin.dirBusy": "外掛目錄搬不動也刪不掉：可能有程式還在用它（正在跑的文件轉換、開著這個資料夾的視窗），或者沒有權限。關掉之後再試一次。",
   "host.plugin.badLayout": "取下來的東西不是一個外掛：沒找到清單。",
   "host.plugin.selfCheckFailed": "外掛裝好了但跑不起來，已回滾。",
   "host.plugin.gitFailed": "git 操作失敗。",

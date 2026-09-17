@@ -83,6 +83,7 @@ export default {
   "host.plugin.downloadFailed": "插件下载失败。再点一次会从断点继续。",
   "host.plugin.checksumMismatch": "下载的文件校验不通过。可能下到了半截或被中间网络改写，重试一次试试。",
   "host.plugin.ioFailed": "插件写盘失败。",
+  "host.plugin.dirBusy": "插件目录挪不动也删不掉：可能有程序还在用它（正在跑的文档转换、开着这个文件夹的窗口），或者没有权限。关掉之后再试一次。",
   "host.plugin.badLayout": "取下来的东西不是一个插件：没找到清单。",
   "host.plugin.selfCheckFailed": "插件装好了但跑不起来，已回滚。",
   "host.plugin.gitFailed": "git 操作失败。",

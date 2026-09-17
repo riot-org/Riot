@@ -10,7 +10,7 @@
 //! 内核那边的活会话只是**运行时投影**——首次要跑轮子/拿历史时按需水合
 //! (session.resume,幂等),会话设置随每轮 TurnConfig 传过去。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -343,6 +343,11 @@ struct Inner {
     /// 最近一次拉到的市场清单。设置页列插件时拿它标"可升级"，不为此再
     /// 走一次网络。
     market_cache: Mutex<Option<Vec<crate::plugins::Marketplace>>>,
+    /// 正在被卸载 / 升级的插件：它们带的 MCP 服务器这段时间不该跑。
+    /// `reconcile_mcp` 把这里面的插件从清单里摘掉，于是动目录期间别处触发
+    /// 的一次 reconcile（用户顺手保存了一下设置）也不会把进程拉回来。
+    /// 见 [`AppState::quiesce_plugin_mcp`]。
+    mcp_quiesced: Mutex<HashSet<String>>,
 }
 
 /// 定时任务的内存状态。
@@ -389,6 +394,7 @@ impl Inner {
             app: std::sync::OnceLock::new(),
             pending_installs: Mutex::default(),
             market_cache: Mutex::default(),
+            mcp_quiesced: Mutex::default(),
         }
     }
 }
@@ -1920,6 +1926,33 @@ impl AppState {
             .unwrap_or_default()
     }
 
+    /// 让内核把 `plugin` 带的 MCP 服务器停掉，直到 [`Self::resume_plugin_mcp`]。
+    ///
+    /// 卸载、升级、用链接目录替换正式版，都要动 `plugins/<id>/`。而它带的
+    /// MCP 服务器就是从那个目录里起的进程 —— 可执行文件在里面、工作目录
+    /// 就是插件根。macOS / Linux 上 unlink 一个正在用的文件没事，Windows
+    /// 上删一个还在跑的 exe、挪一个被当作工作目录的文件夹，都是
+    /// Access denied，而且对方不退出就一直是。所以顺序必须是先停进程再动
+    /// 目录，不能反过来。
+    ///
+    /// `mcp.reconcile` 是等内核把进程真杀掉、收尸完才回的（`stdio::terminate`
+    /// 等到 `wait()` 返回），所以这里回来就能动磁盘。内核不在的话没有进程
+    /// 可停，reconcile 只记一条 warn，照样往下走。
+    async fn quiesce_plugin_mcp(&self, plugin: &str) {
+        self.0.mcp_quiesced.lock().await.insert(plugin.to_owned());
+        self.reconcile_mcp().await;
+    }
+
+    /// 解除 [`Self::quiesce_plugin_mcp`]。`reconcile` 为 true 时顺带把服务器
+    /// 拉回来（动目录失败、插件还装着）；成功路径由 `commit_plugin_config`
+    /// 自己 reconcile，不用重复一次。
+    async fn resume_plugin_mcp(&self, plugin: &str, reconcile: bool) {
+        self.0.mcp_quiesced.lock().await.remove(plugin);
+        if reconcile {
+            self.reconcile_mcp().await;
+        }
+    }
+
     /// 存配置 + 重连 MCP。插件注册表每变一次都要走这一趟：启停、装、卸
     /// 都可能让某个 MCP 服务器该起或该停。
     async fn commit_plugin_config(&self, config: AppConfig) {
@@ -2026,9 +2059,32 @@ impl AppState {
             .remove(token)
             .ok_or_else(|| ui_error!("host.plugin.pendingExpired"))?;
         let id = pending.id.clone();
-        let entry = crate::plugins::commit(pending, &self.0.config_path, &progress)
+        // 先取：下载、解压都落在临时目录，旧版本照常跑着。
+        let pending = crate::plugins::fetch(pending, &self.0.config_path, &progress)
             .await
             .map_err(|e| HostError::Ui(e.to_ui()))?;
+        // 升级 / 换来源：旧版本的目录马上要被整个挪走，它带的服务器得先停
+        // （见 `quiesce_plugin_mcp`）。新装的没这回事。
+        let replacing = self.config().await.plugins.iter().any(|p| p.id == id);
+        if replacing {
+            self.quiesce_plugin_mcp(&id).await;
+        }
+        let committed = crate::plugins::commit(pending, &self.0.config_path, &progress).await;
+        let entry = match committed {
+            Ok(entry) => entry,
+            Err(e) => {
+                // 搬目录失败时旧版本原地没动（`swap_in` 会把挪开的放回去），
+                // 它的服务器拉回来。自检失败那种新旧都已不在，reconcile 起不了
+                // 什么，无害。
+                if replacing {
+                    self.resume_plugin_mcp(&id, true).await;
+                }
+                return Err(HostError::Ui(e.to_ui()));
+            }
+        };
+        if replacing {
+            self.resume_plugin_mcp(&id, false).await;
+        }
         let mut config = self.config().await;
         match config.plugins.iter_mut().find(|p| p.id == id) {
             Some(slot) => {
@@ -2063,18 +2119,45 @@ impl AppState {
         Ok(())
     }
 
+    /// 卸载。顺序是**先停进程、再删目录、最后改注册表**：
+    ///
+    /// 1. 它带的 MCP 服务器就跑在这个目录里，不先停掉，Windows 上删目录是
+    ///    Access denied（见 `quiesce_plugin_mcp`）。早先是删完目录才 reconcile，
+    ///    表现就是"卸载报无权限，多点几次才成功"—— 成功那次只是进程碰巧退了。
+    /// 2. 目录删失败时注册表不动、服务器拉回来：用户看到的仍是"装着"，
+    ///    关掉占着它的东西（正在跑的文档转换、开着那个文件夹的窗口）再试。
+    ///    删目录是先挪开再删的（`install::remove_tree`），失败时目录原样。
     pub async fn plugins_uninstall(&self, id: &str) -> HostResult<()> {
-        let mut config = self.config().await;
-        let Some(pos) = config.plugins.iter().position(|p| p.id == id) else {
+        let Some(entry) = self
+            .config()
+            .await
+            .plugins
+            .iter()
+            .find(|p| p.id == id)
+            .cloned()
+        else {
             return Ok(()); // 幂等
         };
-        let entry = config.plugins.remove(pos);
+        self.quiesce_plugin_mcp(id).await;
+
         let config_path = self.0.config_path.clone();
-        tokio::task::spawn_blocking(move || crate::plugins::uninstall(&entry, &config_path))
-            .await
-            .map_err(|e| ui_error!("host.plugin.taskFailed"; e))?
-            .map_err(|e| HostError::Ui(e.to_ui()))?;
+        let removed =
+            tokio::task::spawn_blocking(move || crate::plugins::uninstall(&entry, &config_path))
+                .await
+                .map_err(|e| HostError::Ui(ui_error!("host.plugin.taskFailed"; e)))
+                .and_then(|r| r.map_err(|e| HostError::Ui(e.to_ui())));
+
+        if let Err(e) = removed {
+            self.resume_plugin_mcp(id, true).await;
+            return Err(e);
+        }
+        // 现在才摘注册表：按此刻的配置改，别用进来时的快照 —— 删目录期间
+        // 用户可能改了别的设置。注册表生效之后再解除 quiesce：此后它不在
+        // 配置里，怎么 reconcile 都不会再起来。
+        let mut config = self.config().await;
+        config.plugins.retain(|p| p.id != id);
         self.commit_plugin_config(config).await;
+        self.resume_plugin_mcp(id, false).await;
         Ok(())
     }
 
@@ -2519,13 +2602,16 @@ impl AppState {
             .collect();
         // 插件带的服务器：按启用中的插件目录现读、派生，不写进配置。
         // 用户自己配的同 id 服务器优先（id 形状是 `<插件>--<名字>`，撞上
-        // 只可能是故意的）。
+        // 只可能是故意的）。正在卸载 / 升级的插件跳过：它的目录马上要被
+        // 挪走，进程得先退出。
         let config_path = self.0.config_path.clone();
         let cfg = config.clone();
-        let derived =
-            tokio::task::spawn_blocking(move || crate::plugins::mcp_specs(&cfg, &config_path))
-                .await
-                .unwrap_or_default();
+        let quiesced: Vec<String> = self.0.mcp_quiesced.lock().await.iter().cloned().collect();
+        let derived = tokio::task::spawn_blocking(move || {
+            crate::plugins::mcp_specs_except(&cfg, &config_path, &quiesced)
+        })
+        .await
+        .unwrap_or_default();
         for spec in derived {
             if !servers.iter().any(|s| s.id == spec.id) {
                 servers.push(spec);

@@ -29,6 +29,11 @@ pub enum InstallError {
     /// 第一项是"当时在做什么"（英文短语），进细节里。
     #[error("{0}: {1}")]
     Io(String, #[source] std::io::Error),
+    /// 插件目录挪不开 / 删不掉。和 `Io` 分开：这一类几乎总是"有进程还在
+    /// 用它"（Windows 上一个还在跑的 exe 就够），文案要把这条出路说出来，
+    /// 而不是笼统地说"写盘失败"—— 用户在做的明明是删除。
+    #[error("plugin dir busy: {0}")]
+    DirBusy(#[source] std::io::Error),
     #[error("bad plugin layout: {0}")]
     Layout(String),
     /// 清单读不了、名字非法之类：插件目录本身不合规。
@@ -61,6 +66,7 @@ impl InstallError {
                 ui_error!("host.plugin.checksumMismatch"; format!("expected {expected}, got {actual}"))
             }
             InstallError::Io(what, e) => ui_error!("host.plugin.ioFailed"; format!("{what}: {e}")),
+            InstallError::DirBusy(e) => ui_error!("host.plugin.dirBusy"; e),
             InstallError::Layout(d) => ui_error!("host.plugin.badLayout"; d),
             InstallError::Invalid(e) => e.clone(),
             InstallError::SelfCheck(d) => ui_error!("host.plugin.selfCheckFailed"; d),
@@ -82,20 +88,20 @@ pub fn has_manifest(dir: &Path) -> bool {
         .any(|f| dir.join(f.manifest_path()).is_file())
 }
 
-/// 解压 tar.zst 并原子替换掉 `dest`。返回最终的插件根目录。
+/// 解压 tar.zst 到 `dest` 旁边的临时目录，返回那个目录。搬进 `dest` 是
+/// [`swap_in`] 的事，两步之间宿主要先停掉还在用旧目录的进程。
 ///
 /// 先解到同一个文件系统上的临时目录再 rename:直接往 `dest` 里解压的话,
 /// 解到一半断电或用户退出,留下的是一个"看起来装好了、实际缺文件"的插件 ——
 /// 那比没装更糟,因为状态显示已安装,用起来却在各种地方随机报错。
-pub fn unpack(archive: &Path, dest: &Path) -> Result<PathBuf, InstallError> {
+pub fn extract(archive: &Path, dest: &Path) -> Result<PathBuf, InstallError> {
     let staging = staging_dir_for(dest)?;
     // 出任何岔子都要把临时目录收掉,否则失败几次就在用户盘上堆了几个 GB。
-    let result = extract_into(archive, &staging).and_then(|()| swap_in(&staging, dest));
-    if result.is_err() {
+    if let Err(e) = extract_into(archive, &staging) {
         let _ = std::fs::remove_dir_all(&staging);
+        return Err(e);
     }
-    result?;
-    Ok(dest.to_path_buf())
+    Ok(staging)
 }
 
 /// 在 `dest` 旁边开一个空的临时目录（同一文件系统，rename 才是原子的）。
@@ -117,6 +123,75 @@ pub fn staging_dir_for(dest: &Path) -> Result<PathBuf, InstallError> {
     std::fs::create_dir_all(&staging)
         .map_err(|e| InstallError::Io("create staging dir".into(), e))?;
     Ok(staging)
+}
+
+/// `dest` 挪开时用的位置：同目录下的 `<id>.old`。升级挪旧版本、卸载挪
+/// 待删目录都用它，谁先来谁先把上次没删干净的那份清掉。
+///
+/// 不用 `Path::with_extension`：插件名允许带点（规范 §5.5），`com.acme.tool`
+/// 会被它改成 `com.acme.old`，和插件 `com.acme` 挪开的位置撞车。
+pub fn aside_dir(dest: &Path) -> PathBuf {
+    let mut name = dest.file_name().unwrap_or_default().to_owned();
+    name.push(".old");
+    dest.with_file_name(name)
+}
+
+/// 整棵删掉一个插件目录：先原子地挪开，再删挪开的那份。
+///
+/// `remove_dir_all` 不是原子的。删到一半撞上一个删不掉的文件（Windows 上
+/// 一个还在跑的 exe 就够了），留下的是半个插件：注册表说装着、清单却没了，
+/// 比装着或没装都糟。rename 要么成要么不成：挪开成功，插件就已经不在原位；
+/// 挪开的那份删不掉也只是多占一会儿盘 —— 下次装或卸同 id 时再清一次。
+///
+/// 调用方要保证没有进程还在用这个目录（宿主在这之前先停掉它带的 MCP
+/// 服务器，见 `AppState::plugins_uninstall`）：Windows 上一个把它当工作目录
+/// 的进程会让 rename 直接失败，而这里没法替它收尾。
+///
+/// 目录本来就不在 = 没事可做，返回 Ok —— 卸载是幂等的。
+pub fn remove_tree(dir: &Path) -> Result<(), InstallError> {
+    let aside = aside_dir(dir);
+    let _ = std::fs::remove_dir_all(&aside);
+    match retry_busy(|| std::fs::rename(dir, &aside)) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(InstallError::DirBusy(e)),
+    }
+    if let Err(e) = retry_busy(|| std::fs::remove_dir_all(&aside)) {
+        tracing::warn!(
+            path = %aside.display(),
+            error = %e,
+            "挪开的插件目录没删干净，下次装或卸同一个插件时再清"
+        );
+    }
+    Ok(())
+}
+
+/// Windows 上目录操作的重试。
+///
+/// 刚被杀掉的进程松开句柄、Defender 扫一遍新落地的 exe，都会让紧接着的
+/// rename / delete 吃一个 Access denied（5）或 sharing violation（32）；删目录
+/// 还可能撞上"目录非空"（145）—— 里面的文件已标记删除、句柄还没关。这些
+/// 几百毫秒后就好了，这里总共等一秒半左右。跑在阻塞线程池里，睡得起。
+///
+/// 别的平台不重试：unlink 一个正在用的文件本来就是允许的，会失败的都是
+/// 真的权限问题，重试只是让用户多等。
+fn retry_busy<T>(mut op: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+    let mut delay = std::time::Duration::from_millis(50);
+    for _ in 0..5 {
+        match op() {
+            Err(e) if cfg!(windows) && is_busy(&e) => {
+                std::thread::sleep(delay);
+                delay *= 2;
+            }
+            r => return r,
+        }
+    }
+    op()
+}
+
+fn is_busy(e: &std::io::Error) -> bool {
+    e.kind() == std::io::ErrorKind::PermissionDenied
+        || matches!(e.raw_os_error(), Some(5 | 32 | 145))
 }
 
 fn extract_into(archive: &Path, staging: &Path) -> Result<(), InstallError> {
@@ -231,11 +306,14 @@ pub fn swap_in(staging: &Path, dest: &Path) -> Result<(), InstallError> {
 
     // rename 不能覆盖非空目录,所以先把旧的挪开。挪开这一步是原子的,
     // 中间态最多是"旧的还在 .old 里、新的还没就位",下次安装会清掉。
-    let backup = dest.with_extension("old");
+    //
+    // 挪不开几乎只有一个原因：旧版本的进程还开着（Windows 上工作目录在
+    // 里面就够）。宿主在升级前先停掉它带的 MCP 服务器；这里报 DirBusy，
+    // 让文案指向"关掉还在用它的程序"而不是"写盘失败"。
+    let backup = aside_dir(dest);
     let _ = std::fs::remove_dir_all(&backup);
     if dest.exists() {
-        std::fs::rename(dest, &backup)
-            .map_err(|e| InstallError::Io("move old version aside".into(), e))?;
+        retry_busy(|| std::fs::rename(dest, &backup)).map_err(InstallError::DirBusy)?;
     }
     if let Err(e) = std::fs::rename(&root, dest) {
         // 新的没就位就把旧的放回去,不能让用户既失去旧版本又没装上新的。
@@ -412,7 +490,43 @@ mod tests {
             !dest.join("stale.txt").exists(),
             "旧版本的文件必须消失，否则升级会留下互相矛盾的两代文件"
         );
-        assert!(!dest.with_extension("old").exists(), "备份目录应被清掉");
+        assert!(!aside_dir(&dest).exists(), "备份目录应被清掉");
+    }
+
+    #[test]
+    fn 挪开位置不吃掉名字里的点() {
+        // 插件名允许带点。`with_extension` 会把 `com.acme.tool` 变成
+        // `com.acme.old`，和插件 `com.acme` 挪开的位置撞车。
+        assert_eq!(
+            aside_dir(Path::new("/p/com.acme.tool")),
+            Path::new("/p/com.acme.tool.old")
+        );
+        assert_eq!(
+            aside_dir(Path::new("/p/doc-runtime")),
+            Path::new("/p/doc-runtime.old")
+        );
+    }
+
+    #[test]
+    fn 整棵删掉_原目录和挪开的那份都不留() {
+        let tmp = tempfile::tempdir().expect("临时目录");
+        let dir = tmp.path().join("doc-runtime");
+        write_manifest(&dir, "1.0.0");
+        std::fs::create_dir_all(dir.join("bin")).expect("建目录");
+        std::fs::write(dir.join("bin/x"), "x").expect("写文件");
+        // 上次没删干净的那份也要一起清掉，不能越积越多。
+        std::fs::create_dir_all(aside_dir(&dir).join("stale")).expect("建残留");
+
+        remove_tree(&dir).expect("删");
+
+        assert!(!dir.exists(), "原目录应该没了");
+        assert!(!aside_dir(&dir).exists(), "挪开的那份也该删掉");
+    }
+
+    #[test]
+    fn 整棵删掉是幂等的() {
+        let tmp = tempfile::tempdir().expect("临时目录");
+        remove_tree(&tmp.path().join("nope")).expect("不存在的目录没事可做");
     }
 
     /// AppleDouble 条目不能落地成文件。
