@@ -3940,7 +3940,7 @@ dependencies = [
 
 [[package]]
 name = "riot-core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -3962,7 +3962,7 @@ dependencies = [
 
 [[package]]
 name = "riot-host"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4054,7 +4054,7 @@ dependencies = [
 
 [[package]]
 name = "riot-mcp"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -4077,7 +4077,7 @@ dependencies = [
 
 [[package]]
 name = "riot-permissions"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "async-trait",
  "pretty_assertions",
@@ -4094,7 +4094,7 @@ dependencies = [
 
 [[package]]
 name = "riot-protocol"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "async-trait",
  "futures-core",
@@ -4110,7 +4110,7 @@ dependencies = [
 
 [[package]]
 name = "riot-providers"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -4131,7 +4131,7 @@ dependencies = [
 
 [[package]]
 name = "riot-runtime"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "async-trait",
  "libc",
@@ -4153,7 +4153,7 @@ dependencies = [
 
 [[package]]
 name = "riot-store"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "riot-protocol",
  "serde",
@@ -4166,7 +4166,7 @@ dependencies = [
 
 [[package]]
 name = "riot-tools"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "async-stream",
  "async-trait",
