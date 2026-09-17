@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 
 import { App } from "./App";
+import { applyBackdrop, backdropHint } from "./backdrop";
 import { host } from "./bridge";
 import { RemoteGate } from "./components/RemoteGate";
 // 主题模块加载即生效（挂 data-theme、对齐宿主外观），不等 React 渲染。
@@ -13,11 +14,11 @@ import "./styles.css";
    sidebar（tauri.conf.json 的 windowEffects），Windows 是 DWM 的 mica
    （配置表达不全，由宿主设，见 src-tauri/src/vibrancy.rs）。
 
-   要透出材质，页面得先把自己的背景让开，而这只能在真有材质的平台干：
-   Linux 那层不存在，背景透掉只会露出窗口底下的桌面。所以门控挂在 html
-   上，配色规则跟着这个属性走（见 styles.css 的 [data-vibrancy]）。属性
-   带值是因为两边的材质深浅不同，侧栏的不透明度要分开调。
-   macOS 的判断跟顶栏给红绿灯让位那处保持一致（App.tsx 的 IS_MAC）。
+   要透出材质，页面得先把自己的背景让开，而这只能在材质真的铺上了的时候
+   干：Linux 那层不存在，旧 Windows 上也没有 —— 透掉的像素按预乘 RGB 合成，
+   浅色侧栏变成一块深灰。门控挂在 html 上（src/backdrop.ts），配色规则跟着
+   这个属性走（见 styles.css 的 [data-vibrancy]）。材质在不在由宿主说：
+   建窗时注首帧提示，setAppearance 回话给真值（theme.ts）。
 
    代价记在这里，因为 JSON 写不下注释：材质要求窗口透明，而 macOS 上
    透明窗口走的是 Tauri 的 `macOSPrivateApi`（私有 API）——用了它就上不了
@@ -40,19 +41,14 @@ import "./styles.css";
    像素级增量 + 系统惯性，天生顺滑，不需要它）。注意这个字段一旦
    设置会整体替换 Tauri 的默认参数，所以默认的 --disable-features
    一并写回去了。 */
-const ua = navigator.userAgent;
 if (!host.nativeWindow) {
   // 浏览器里没有窗口材质可透。不标 vibrancy，侧栏走实色那套配色 ——
   // 透掉背景只会露出 html 的底色，看着像少了一层。
   document.documentElement.dataset.host = "web";
-} else if (ua.includes("Mac")) {
-  document.documentElement.dataset.vibrancy = "mac";
-} else if (ua.includes("Windows NT 10.0")) {
-  // 材质要 Win11 22523+（DWMSBT），而 UA 里所有 Win10/11 都报 10.0，
-  // 拿不到 build 号。老系统上 vibrancy.rs 会把逐像素 alpha 关掉，侧栏
-  // 退化成纯色 —— 所以 Windows 的侧栏留得比 macOS 实一档，退化了也只是
-  // 深一点，不至于破相。
-  document.documentElement.dataset.vibrancy = "win";
+} else {
+  // 首帧按宿主建窗时注入的提示挂；theme.ts 拿到 setAppearance 的回话后
+  // 按真值再对一次。
+  applyBackdrop(backdropHint());
 }
 
 const root = document.getElementById("root");

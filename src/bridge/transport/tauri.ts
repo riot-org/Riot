@@ -6,7 +6,13 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-import type { HostAppearance, HostChannel, LinkStatus, Transport } from "./types";
+import type {
+  AppearanceApplied,
+  HostAppearance,
+  HostChannel,
+  LinkStatus,
+  Transport,
+} from "./types";
 
 export class TauriTransport implements Transport {
   readonly kind = "tauri" as const;
@@ -39,8 +45,8 @@ export class TauriTransport implements Transport {
     return () => {};
   }
 
-  setAppearance(appearance: HostAppearance): Promise<void> {
+  setAppearance(appearance: HostAppearance): Promise<AppearanceApplied> {
     // 参数名 `theme` 对应宿主 `set_appearance(theme: Appearance)`。
-    return invoke("set_appearance", { theme: appearance });
+    return invoke<AppearanceApplied>("set_appearance", { theme: appearance });
   }
 }

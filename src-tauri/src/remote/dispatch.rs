@@ -336,8 +336,9 @@ pub async fn dispatch(
         "set_api_key" => ok(crate::set_api_key(st, a.take("providerId")?, a.take("key")?).await),
         "app_version" => val(crate::app_version(app.clone())),
         // 桌面窗口的外观和远端用户无关（见模块说明）。网页那头的 transport
-        // 本来就不会发这条，这里兜住的是手写的调用。
-        "set_appearance" => val(()),
+        // 本来就不会发这条，这里兜住的是手写的调用。形状和桌面那条一致：
+        // 浏览器里没有材质可透。
+        "set_appearance" => val(crate::vibrancy::Applied { backdrop: false }),
         // 通知该弹在远端用户的设备上，不是宿主机（见模块说明）。
         "notify" => val(()),
         "check_update" => ok(crate::check_update(app.clone()).await),

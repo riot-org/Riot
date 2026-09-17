@@ -92,6 +92,9 @@ srt-win = { path = "../vendor/srt-win" }
 # 出这是 Riot。版本跟着 rust-version 走：0.100 要 1.95。
 tauri-winrt-notification = "0.7"
 windows-registry = "0.6.1"
+# 系统 build 号（见 src/vibrancy.rs 的 backdrop_supported）：DWM 材质要 22621+，
+# 而这个判断得在建窗之前就给页面。本来就在 tauri 的依赖树里。
+windows-version = "0.1"
 # DataExchange/Ole/Shell 三个是读剪贴板里的 CF_HDROP 用的（见 src/pasteboard.rs）。
 # Dwm/Gdi/Controls/WindowsAndMessaging 是侧栏的系统材质（见 src/vibrancy.rs）：
 # Gdi 只为了 DWM_BLURBEHIND 里的 HRGN，Controls 只为了 MARGINS，

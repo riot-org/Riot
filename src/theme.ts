@@ -22,6 +22,7 @@
 
 import { useSyncExternalStore } from "react";
 
+import { applyBackdrop } from "./backdrop";
 import { host } from "./bridge";
 
 const LS_KEY = "riot.theme";
@@ -81,13 +82,19 @@ function applyTheme() {
  * 触发 `change` —— 下面那个监听器接住它，链路才闭合。所以这里是"告诉宿主"，
  * 真正的解析交给事件。
  *
+ * 回话带着"材质有没有真的铺上"：据此挂 / 摘 `data-vibrancy`（首帧按建窗时
+ * 注入的提示挂过一次，这里是真值校正，见 src/backdrop.ts）。
+ *
  * 失败只记日志：外观没换成是可见的、可重试的（再切一次），不值得弹错。
  */
 function pushToHost() {
   if (!host.nativeWindow) return;
-  host.setAppearance(choice ?? "system").catch((e: unknown) => {
-    console.warn("Failed to apply native window appearance", e);
-  });
+  host
+    .setAppearance(choice ?? "system")
+    .then(({ backdrop }) => applyBackdrop(backdrop))
+    .catch((e: unknown) => {
+      console.warn("Failed to apply native window appearance", e);
+    });
 }
 
 /** 重新解析生效主题。变了就写到文档上并返回 true；通知由调用方做。 */

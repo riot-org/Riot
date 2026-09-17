@@ -9,10 +9,16 @@
  */
 
 import { TauriTransport } from "./tauri";
-import type { HostAppearance, Transport } from "./types";
+import type { AppearanceApplied, HostAppearance, Transport } from "./types";
 import { WebTransport } from "./web";
 
-export type { HostAppearance, HostChannel, LinkStatus, Transport } from "./types";
+export type {
+  AppearanceApplied,
+  HostAppearance,
+  HostChannel,
+  LinkStatus,
+  Transport,
+} from "./types";
 export { TransportDisconnected } from "./types";
 
 function detect(): Transport {
@@ -43,8 +49,9 @@ export const host = {
   /**
    * 原生窗口的外观跟着界面主题走（`src/theme.ts` 每次启动和每次切换各调
    * 一次）。`system` 让宿主解除钉死 —— 这一步必须先于前端读
-   * `prefers-color-scheme`，理由见 theme.ts。浏览器里空操作。
+   * `prefers-color-scheme`，理由见 theme.ts。回话说窗口底下有没有系统材质
+   * （src/backdrop.ts 据此决定侧栏透不透）。浏览器里空操作、材质恒无。
    */
-  setAppearance: (appearance: HostAppearance): Promise<void> =>
+  setAppearance: (appearance: HostAppearance): Promise<AppearanceApplied> =>
     transport.setAppearance(appearance),
 } as const;

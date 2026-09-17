@@ -67,12 +67,20 @@ export interface Transport {
 
   /**
    * 让宿主把原生窗口切到这个外观：macOS 的 NSApp / 窗口 / 视图树外观，
-   * Windows 的沉浸式深色标题栏与 mica 明暗。浏览器里没有原生窗口，是空操作。
+   * Windows 的沉浸式深色标题栏与 mica 明暗。回话说材质有没有真的铺上
+   * （旧 Windows 没有），页面据此决定侧栏要不要透（src/backdrop.ts）。
+   * 浏览器里没有原生窗口：空操作，材质恒无。
    *
-   * 不走 bridge 那层带期限的 `invoke`：结果没人等（调用方 `catch` 掉就完），
-   * 宿主不回话也卡不住任何 `finally`。
+   * 不走 bridge 那层带期限的 `invoke`：结果只用来对一次属性（调用方
+   * `catch` 掉就完），宿主不回话也卡不住任何 `finally`。
    */
-  setAppearance(appearance: HostAppearance): Promise<void>;
+  setAppearance(appearance: HostAppearance): Promise<AppearanceApplied>;
+}
+
+/** `setAppearance` 的回话。 */
+export interface AppearanceApplied {
+  /** 窗口底下有系统材质（macOS 的 sidebar、Win11 22H2+ 的 mica）。 */
+  backdrop: boolean;
 }
 
 /** 连接断开时未完成的调用会以这个类拒绝。调用方能据此分辨"宿主说不行"和"线断了"。 */

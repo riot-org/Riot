@@ -51,9 +51,16 @@
 //!    自己重建合成树 —— 不踢的话前三步全部"调用成功、画面没变"，看起来就像
 //!    这个模块不存在。切换明暗时同样要踢：标志改了，材质的色调要等重算才换。
 //!
-//! `[约束]` ① 无条件做，且旧系统上只做 ①。②失败（DWMSBT 要 Win11 22523+）时
+//! `[约束]` ① 无条件做，且旧系统上只做 ①。②失败（DWMSBT 要 Win11 22621+）时
 //! 玻璃帧不能扩 —— Win10 上没有材质可画，扩开只会得到一块黑。只关 alpha 的话
-//! 透明像素落在窗口自己的底上，侧栏退化成一块纯色，而不是把背后的窗口原样透出来。
+//! 透明像素不会把背后的窗口原样透出来，但也不是落在什么"底色"上：DWM 忽略
+//! alpha 之后直接拿**预乘**过的 RGB 当不透明像素画。深色主题 30% 的 #252525
+//! 出来是近黑，还算"深一点"；浅色主题 30% 的 #f3f3f3 出来是一块 #494949，
+//! 而浅色的字是深灰 —— Win10 22H2 上侧栏整块发黑、字看不见，就是这个。
+//!
+//! `[约束]` 所以页面只能在材质真的铺上了的时候把侧栏背景让开。宿主两处告诉它：
+//! 建窗时按系统版本注一个首帧提示（[`backdrop_supported`]，那时还没有 HWND
+//! 可试），`set_appearance` 再把 ② 的真实结果回给它校正（见 src/backdrop.ts）。
 //!
 //! 四步都是幂等的，所以运行时切换明暗直接把整套重跑一遍，不另写一条"只改
 //! 标志"的窄路 —— 两条路迟早有一条漏掉某一步。
@@ -66,6 +73,7 @@
 use std::path::Path;
 
 use tauri::{AppHandle, Theme, WebviewWindow};
+use tokio::sync::oneshot;
 
 #[cfg(windows)]
 use windows::Win32::Foundation::HWND;
@@ -165,6 +173,40 @@ pub fn remember(path: &Path, appearance: Appearance) {
     }
 }
 
+/// 这台机器上窗口底下有没有系统材质可透 —— 建窗之前就能答的那一版。
+///
+/// 页面按它决定要不要把侧栏背景让开（`<html data-vibrancy>`，见 src/backdrop.ts）。
+/// 让开了却没有材质，侧栏就是模块说明里那块 #494949。
+///
+/// Windows 按系统版本判：`DWMWA_SYSTEMBACKDROP_TYPE` 从 22621（Win11 22H2）起
+/// 才有。按版本而不是像 [`pin`] 那样拿 HRESULT 试，是因为这个值要在建窗之前
+/// 注进页面（首帧就得对），那时还没有 HWND。`pin` 里那次真试的结果才是事实
+/// 来源，`set_appearance` 把它回给页面校正 —— 两者只在理论上会不一致（22621+
+/// 上 DWM 不可关，这个属性不会失败）。
+pub fn backdrop_supported() -> bool {
+    #[cfg(windows)]
+    {
+        windows_version::OsVersion::current().build >= 22621
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // `windowEffects: sidebar` 在支持的最低系统（10.15）上就有。
+        true
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        false
+    }
+}
+
+/// `set_appearance` 回给页面的结果。
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Applied {
+    /// 材质真的铺上了：页面据此挂 / 摘 `data-vibrancy`（见 src/backdrop.ts）。
+    pub backdrop: bool,
+}
+
 /// 把窗口的原生外观切到 `appearance`。启动（setup）和前端每次切换都走这里。
 ///
 /// 先过 Tauri 的 `set_theme`：它管 NSApp 外观（macOS）、窗口与事件循环两级的
@@ -178,23 +220,36 @@ pub fn remember(path: &Path, appearance: Appearance) {
 /// 而调用方可能是 setup（已在主线程，闭包就地执行）也可能是 IPC 命令。
 /// 主线程上的消息按序处理，`set_theme` 一定先于闭包落地 —— Windows 分支里
 /// "跟随系统"要读 `window.theme()`，读到的才是按系统重算过的值。
-pub fn apply(app: &AppHandle, window: &WebviewWindow, appearance: Appearance) {
+///
+/// 返回材质有没有真的铺上（Windows 看 ② 的 HRESULT；macOS 恒有，Linux 恒无）。
+/// 平台分支在主线程跑，结果只能异步给，所以是个接收端；setup 不需要它，
+/// 丢掉即可。主线程闭包没跑到（窗口已销毁）时发送端随之 drop，接收方按
+/// [`backdrop_supported`] 兜底。
+pub fn apply(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    appearance: Appearance,
+) -> oneshot::Receiver<bool> {
     let theme = appearance.tauri_theme();
     app.set_theme(theme);
     if let Err(e) = window.set_theme(theme) {
         tracing::warn!(error = %e, "window.set_theme failed; native chrome may lag behind the page");
     }
+    let (tx, rx) = oneshot::channel();
     let target = window.clone();
-    if let Err(e) = window.run_on_main_thread(move || pin(&target, appearance)) {
+    if let Err(e) = window.run_on_main_thread(move || {
+        let _ = tx.send(pin(&target, appearance));
+    }) {
         tracing::warn!(error = %e, "cannot reach the main thread; appearance not pinned");
     }
+    rx
 }
 
 #[cfg(windows)]
-fn pin(window: &WebviewWindow, appearance: Appearance) {
+fn pin(window: &WebviewWindow, appearance: Appearance) -> bool {
     let Ok(handle) = window.hwnd() else {
         tracing::warn!("拿不到窗口句柄，跳过系统材质");
-        return;
+        return false;
     };
     // tauri 和宿主各自依赖一份 windows crate。HWND 两边都是 `*mut c_void` 的
     // newtype，同构，所以拆开重装而不是直接传。
@@ -246,14 +301,28 @@ fn pin(window: &WebviewWindow, appearance: Appearance) {
     };
 
     // ③ 扩玻璃帧，只在材质真设上了才扩。
-    match supported {
+    let backdrop = match supported {
         Ok(()) => {
             if let Err(e) = unsafe { DwmExtendFrameIntoClientArea(hwnd, &WHOLE_CLIENT_AREA) } {
                 tracing::warn!(error = %e, "玻璃帧没扩开，侧栏会是纯色");
             }
+            true
         }
-        // 不是错误：Win10 和早期 Win11 就是没有这层材质。
-        Err(e) => tracing::debug!(error = %e, "系统没有 DWM 材质，侧栏用纯色"),
+        // 不是错误：Win10 和早期 Win11 就是没有这层材质。页面拿到 false 之后
+        // 会把侧栏画成不透明（见模块说明里预乘 alpha 那段）。
+        Err(e) => {
+            tracing::debug!(error = %e, "系统没有 DWM 材质，侧栏用纯色");
+            false
+        }
+    };
+    if backdrop != backdrop_supported() {
+        // 首帧提示按版本判，和真试的结果对不上：页面会按这里的结果校正，
+        // 但中间那一帧是错的。记下来，好知道哪一版系统打破了那条假设。
+        tracing::warn!(
+            build = windows_version::OsVersion::current().build,
+            backdrop,
+            "DWM 材质的实际支持情况和系统版本推断不一致"
+        );
     }
 
     // ④ 让 DWM 重算这扇窗。位置、尺寸、Z 序全部原样，只要 FRAMECHANGED。
@@ -270,6 +339,7 @@ fn pin(window: &WebviewWindow, appearance: Appearance) {
     } {
         tracing::warn!(error = %e, "窗口帧没重算，材质可能不生效");
     }
+    backdrop
 }
 
 /// 整个客户区都当玻璃帧。-1 是 DWM 约定的"铺满"。
@@ -283,8 +353,10 @@ const WHOLE_CLIENT_AREA: MARGINS = MARGINS {
 
 /// 把 NSApp / NSWindow / 内容视图树的 appearance 一起钉成要的那档；`System`
 /// 就一起清成 nil，sidebar 材质和 webview 的 `prefers-color-scheme` 才会回到系统。
+///
+/// 返回值恒为 true：sidebar 材质由配置里的 `windowEffects` 铺，钉不钉外观它都在。
 #[cfg(target_os = "macos")]
-fn pin(window: &WebviewWindow, appearance: Appearance) {
+fn pin(window: &WebviewWindow, appearance: Appearance) -> bool {
     use objc2::MainThreadMarker;
     use objc2_app_kit::{
         NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
@@ -293,11 +365,11 @@ fn pin(window: &WebviewWindow, appearance: Appearance) {
 
     let Ok(ptr) = window.ns_view() else {
         tracing::warn!("拿不到 NSView，跳过外观钉死");
-        return;
+        return true;
     };
     let Some(mtm) = MainThreadMarker::new() else {
         tracing::warn!("不在主线程，跳过外观钉死");
-        return;
+        return true;
     };
     let target = match appearance {
         Appearance::System => None,
@@ -312,7 +384,7 @@ fn pin(window: &WebviewWindow, appearance: Appearance) {
             };
             let Some(named) = NSAppearance::appearanceNamed(name) else {
                 tracing::warn!(?appearance, "系统没有这档外观，跳过钉死");
-                return;
+                return true;
             };
             Some(named)
         }
@@ -327,6 +399,7 @@ fn pin(window: &WebviewWindow, appearance: Appearance) {
         ns_window.setAppearance(target);
     }
     pin_view_tree(view, target);
+    true
 }
 
 #[cfg(target_os = "macos")]
@@ -340,8 +413,9 @@ fn pin_view_tree(view: &objc2_app_kit::NSView, appearance: Option<&objc2_app_kit
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn pin(_window: &WebviewWindow, _appearance: Appearance) {
+fn pin(_window: &WebviewWindow, _appearance: Appearance) -> bool {
     // Linux 没有要钉的材质；明暗已经由 apply 里的 set_theme 交给 GTK。
+    false
 }
 
 #[cfg(test)]

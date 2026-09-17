@@ -24,7 +24,7 @@
 
 import { t } from "../../i18n";
 import { type UiTextPayload, renderUiText } from "../errors";
-import type { HostChannel, LinkStatus, Transport } from "./types";
+import type { AppearanceApplied, HostChannel, LinkStatus, Transport } from "./types";
 import { TransportDisconnected } from "./types";
 
 const LS_TOKEN = "riot.remote.token";
@@ -173,10 +173,11 @@ export class WebTransport implements Transport {
     };
   }
 
-  setAppearance(): Promise<void> {
+  setAppearance(): Promise<AppearanceApplied> {
     // 浏览器里没有原生窗口可钉；页面自己的配色由 `<html data-theme>` 管。
     // 也不该发给宿主 —— 手机上切个主题不能把桌面那扇窗的外观一起换掉。
-    return Promise.resolve();
+    // 材质也没有：浏览器标签页底下透不出什么。
+    return Promise.resolve({ backdrop: false });
   }
 
   /* ── 令牌管理（RemoteGate 用）───────────────── */

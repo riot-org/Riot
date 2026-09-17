@@ -668,17 +668,27 @@ fn app_version(app: tauri::AppHandle) -> String {
 ///
 /// 顺手记下来：下次启动建窗后 setup 直接按它钉，不用等前端起来再翻一次。
 ///
-/// 不是 `async`：没有可等的东西。真正改外观的那段由 `vibrancy::apply` 自己
-/// 送到主线程执行（AppKit 只认主线程），不依赖命令本身跑在哪个线程。
+/// 回给页面的是材质有没有真的铺上：没有的话页面得把侧栏画成不透明，否则
+/// 透明像素在旧 Windows 上按预乘 RGB 合成，浅色主题的侧栏是一块深灰（见
+/// vibrancy 模块说明）。真正改外观的那段由 `vibrancy::apply` 送到主线程执行
+/// （AppKit 只认主线程），结果从那边异步回来，所以这里要等。
+///
+/// 永远是 `Ok`：`Result` 只是 Tauri 对"借了 `State` 的 async 命令"的形状要求。
 #[tauri::command]
-fn set_appearance(
+async fn set_appearance(
     app: tauri::AppHandle,
     window: tauri::WebviewWindow,
     state: tauri::State<'_, AppState>,
     theme: vibrancy::Appearance,
-) {
-    vibrancy::apply(&app, &window, theme);
+) -> HostResult<vibrancy::Applied> {
+    let applied = vibrancy::apply(&app, &window, theme);
     vibrancy::remember(&state.appearance_path(), theme);
+    // 主线程闭包没跑到（窗口正在销毁）就按版本推断兜底，别让页面等一个
+    // 永远不来的答案。
+    let backdrop = applied
+        .await
+        .unwrap_or_else(|_| vibrancy::backdrop_supported());
+    Ok(vibrancy::Applied { backdrop })
 }
 
 /// 对照 GitHub 上最新正式 Release。没网、还没发过版都不该让调用方当成崩溃。
@@ -1567,6 +1577,13 @@ fn create_main_window(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>
     let nav_open = open_externally.clone();
     let new_window_open = open_externally;
     tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?
+        // 页面脚本跑之前先告诉它窗口底下有没有系统材质：有才把侧栏背景让开
+        // （src/backdrop.ts）。首帧就要对，等 IPC 回话晚一帧 —— 旧 Windows 上
+        // 那一帧是一块深灰侧栏。真值随 set_appearance 的回话校正。
+        .initialization_script(format!(
+            "window.__RIOT_BACKDROP__ = {};",
+            vibrancy::backdrop_supported()
+        ))
         .on_navigation(move |url| match nav_guard::decide(url, dev_url.as_ref()) {
             nav_guard::Verdict::Allow => true,
             nav_guard::Verdict::OpenExternally => {
@@ -1805,7 +1822,9 @@ pub fn run() {
             if let Some(main) = app.get_webview_window("main") {
                 let remembered =
                     vibrancy::remembered(&app.state::<AppState>().inner().appearance_path());
-                vibrancy::apply(app.handle(), &main, remembered);
+                // 材质有没有铺上这里不用知道：页面首帧按建窗时注入的提示走，
+                // 起来后自己调 set_appearance 拿真值。
+                drop(vibrancy::apply(app.handle(), &main, remembered));
             }
 
             // 系统通知与全局 emit 要用应用句柄。要在 spawn_host_bridge

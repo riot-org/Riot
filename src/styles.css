@@ -498,10 +498,12 @@ html[data-vibrancy] .sidebar {
 }
 
 /* Windows 的 mica 采样的是壁纸而不是背后的窗口，本身近乎不透明，罩层
-   只是把它的色调压向菜单灰 —— 留太实壁纸那点色相就全没了。旧系统上
-   材质压根设不上（要 Win11 22523+，见 src-tauri/src/vibrancy.rs），那时
-   这条是侧栏唯一的底，好在 mica 挂不上时逐像素 alpha 也关了，退化成
-   纯色而不是透窗。 */
+   只是把它的色调压向菜单灰 —— 留太实壁纸那点色相就全没了。
+   `[约束]` 这条只能在材质真铺上了时生效（要 Win11 22H2+，见
+   src-tauri/src/vibrancy.rs）。旧系统上宿主关了逐像素 alpha，透明像素会按
+   **预乘** RGB 合成：浅色 30% 的 #f3f3f3 出来是一块 #494949，深灰的字压在
+   上面看不见。所以 data-vibrancy 由宿主按"材质在不在"挂（src/backdrop.ts），
+   没材质的机器上侧栏走上面 .sidebar 的实色 --bg-nav。 */
 html[data-vibrancy='win'] .sidebar {
   background: color-mix(in srgb, var(--bg-nav) 30%, transparent);
 }
