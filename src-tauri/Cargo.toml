@@ -36,6 +36,11 @@ riot-tools.workspace = true
 tauri = { version = "2.11", features = ["macos-private-api"] }
 tauri-plugin-dialog = "2.7"
 tauri-plugin-opener = "2.5"
+# 单实例。两个 Riot 进程会抢同一份 config.json、会话索引和浏览器 profile
+# （CEF 在 profile 上有进程单例锁，抢输的那个静默退出，见 src/browser/hub.rs）。
+# Windows 上双击几次就是几个进程；macOS 的 .app 本来就不会被 Finder 开第二份，
+# 但 `open -n` 可以。只在 release 里注册，见 lib.rs 的 run()。
+tauri-plugin-single-instance = "2.4"
 
 anyhow.workspace = true
 async-trait.workspace = true

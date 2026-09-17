@@ -1648,7 +1648,30 @@ pub fn run() {
     // 那份。各拿各的话，模型起的服务会跑在一个用户永远看不到的面板里。
     let terminals = state.terminals();
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // 单实例：第二个 Riot 进程把已开着的窗口叫到前面来，然后自己退出。
+    //
+    // 两个进程会抢同一份 config.json、会话索引和浏览器 profile。浏览器那份
+    // 最隐蔽：CEF 在 profile 上有进程单例锁，抢输的那个**静默退出**（见
+    // browser/hub.rs），用户看到的只是第二个窗口里浏览器面板一片空白、模型
+    // 说浏览器不可用。Windows 上双击几次任务栏图标就是几个进程。
+    //
+    // `[约束]` 必须是第一个注册的插件：插件的 setup 按注册顺序跑，排在它
+    // 前面的都会在第二个进程里白做一遍。
+    //
+    // 只在 release 里开。debug 构建刻意要能和装好的正式版并存（上面
+    // WEBVIEW2_USER_DATA_FOLDER 那段就是为此），而这个插件按 identifier
+    // 认同类，dev 和正式版会被当成同一个应用 —— `pnpm tauri dev` 起来就
+    // 退、去把正式版叫到前面，而且不留一行日志。
+    #[cfg(not(debug_assertions))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+        if let Some(main) = app.get_webview_window("main") {
+            let _ = main.unminimize();
+            let _ = main.show();
+            let _ = main.set_focus();
+        }
+    }));
+    builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())

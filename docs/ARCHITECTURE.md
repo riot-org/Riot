@@ -142,6 +142,8 @@ Agent 的正确性大部分体现在**编译器检查不到的地方**:中断后
 
 `[约束]` 内核进程的顶层必须安装 panic hook,把 panic 信息写入日志并通过 RPC 通知宿主,不允许静默死亡。
 
+`[约束]` **宿主进程一台机器上只能有一个。**两个 Riot 会抢同一份 config.json、会话索引和浏览器 profile —— 浏览器那份最隐蔽：CEF 在 profile 上有进程单例锁，抢输的那个**静默退出**（见 `browser/hub.rs`），用户看到的只是第二个窗口里浏览器面板一片空白。Windows 上双击几次任务栏图标就是几个进程。第二个进程把已开着的窗口叫到前面、自己退出（`tauri-plugin-single-instance`，必须是第一个注册的插件）。只在 release 构建里开：debug 构建刻意要能和装好的正式版并存，而插件按 identifier 认同类（见 `lib.rs` 的 `run()`）。
+
 ---
 
 ## 3. Crate 划分
