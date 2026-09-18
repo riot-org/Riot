@@ -45,10 +45,6 @@
 
   "bundle": {
     "active": true,
-    // dmg 依赖 .app（bundler 会先造再清），不必、也不该单独列 "app"：
-    // tauri-action 会把裸 .app 打成 .app.tar.gz 再上传，体积跟 dmg 差不多，
-    // 官网和设置页都只认 dmg / setup.exe，这份资产没人下，上传却常因
-    // GitHub 资产接口抖动失败（"other side closed"），白浪费一次重试。
     "targets": ["dmg", "nsis"],
     "externalBin": ["binaries/riot-kernel"],
     "icon": [
