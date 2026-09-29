@@ -130,43 +130,44 @@ async fn fetch_inner(
     cache_root: &Path,
 ) -> Result<(String, Vec<MarketEntry>), InstallError> {
     let (raw, repo_url) = if is_json_url(&cfg.source) {
-        (http_get(&cfg.source).await?, None)
+        let body = http_get(&cfg.source)
+            .await
+            .map_err(|e| e.into_install(&cfg.source))?;
+        (body, None)
     } else {
         let repo = repo_url(&cfg.source);
         match github_raw_candidates(&repo) {
-            Some(urls) => {
-                let mut found = None;
-                let mut last_err = String::new();
-                for u in urls {
-                    match http_get(&u).await {
-                        Ok(body) => {
-                            found = Some(body);
-                            break;
-                        }
-                        Err(e) => last_err = e.to_string(),
-                    }
-                }
-                let body = found.ok_or_else(|| {
-                    InstallError::Marketplace(format!(
-                        "no marketplace.json found in {repo} ({last_err})"
-                    ))
-                })?;
-                (body, Some(repo))
-            }
+            Some(urls) => (fetch_github_manifest(&repo, &urls).await?, Some(repo)),
             None => {
                 let dir = cache_root.join(".marketplaces").join(slug(&cfg.id));
                 super::source::git_clone(&repo, None, &dir).await?;
                 let body = MANIFEST_PATHS
                     .iter()
                     .find_map(|p| std::fs::read_to_string(dir.join(p)).ok())
-                    .ok_or_else(|| {
-                        InstallError::Marketplace(format!("no marketplace.json in {repo}"))
-                    })?;
+                    .ok_or_else(|| InstallError::MarketplaceNoManifest(repo.clone()))?;
                 (body, Some(repo))
             }
         }
     };
     parse(&cfg.id, &raw, repo_url.as_deref())
+}
+
+/// 按三个约定路径逐个试 raw 地址，回第一份拿到的清单。
+///
+/// 三条候选在同一台主机上，所以连不上时立刻停 —— 再试两次只是把同一个
+/// 网络错误多等两轮超时。都试完还没有：全是 404 才算"仓库里没这个文件"；
+/// 中间出过别的状态（403 限流、5xx）就报那一个，404 是预期内的，它不是。
+async fn fetch_github_manifest(repo: &str, urls: &[String]) -> Result<String, InstallError> {
+    let mut other: Option<InstallError> = None;
+    for u in urls {
+        match http_get(u).await {
+            Ok(body) => return Ok(body),
+            Err(e @ FetchError::Unreachable { .. }) => return Err(e.into_install(u)),
+            Err(FetchError::Status(s)) if s == reqwest::StatusCode::NOT_FOUND => {}
+            Err(e) => other = Some(e.into_install(u)),
+        }
+    }
+    Err(other.unwrap_or_else(|| InstallError::MarketplaceNoManifest(repo.to_owned())))
 }
 
 const MANIFEST_PATHS: &[&str] = &[
@@ -235,22 +236,84 @@ fn github_raw_candidates(repo: &str) -> Option<Vec<String>> {
     )
 }
 
-async fn http_get(url: &str) -> Result<String, InstallError> {
+/// 一次 GET 失败的三种样子。分开是因为上层要按它决定下一步：连不上就别
+/// 再试同一台主机上的别的路径，404 要继续试，其它状态要原样报出去。
+#[derive(Debug)]
+enum FetchError {
+    /// 没拿到响应：DNS、拒连、超时、TLS。`detail` 是 source 链末端的根因。
+    Unreachable { host: String, detail: String },
+    /// 拿到了响应但不是 2xx。
+    Status(reqwest::StatusCode),
+    /// 响应体没读完。
+    Body(String),
+}
+
+const HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+impl FetchError {
+    fn into_install(self, url: &str) -> InstallError {
+        match self {
+            FetchError::Unreachable { host, detail } => {
+                InstallError::MarketplaceUnreachable { host, detail }
+            }
+            FetchError::Status(s) => InstallError::Marketplace(format!("{url}: HTTP {s}")),
+            FetchError::Body(d) => InstallError::Marketplace(format!("{url}: {d}")),
+        }
+    }
+}
+
+async fn http_get(url: &str) -> Result<String, FetchError> {
     let res = reqwest::Client::new()
         .get(url)
-        .timeout(std::time::Duration::from_secs(20))
+        .timeout(HTTP_TIMEOUT)
         .send()
         .await
-        .map_err(|e| InstallError::Marketplace(format!("fetch {url}: {e}")))?;
+        .map_err(|e| FetchError::Unreachable {
+            host: host_of(url),
+            detail: root_cause(&e),
+        })?;
     if !res.status().is_success() {
-        return Err(InstallError::Marketplace(format!(
-            "{url}: HTTP {}",
-            res.status()
-        )));
+        return Err(FetchError::Status(res.status()));
     }
     res.text()
         .await
-        .map_err(|e| InstallError::Marketplace(format!("read body: {e}")))
+        .map_err(|e| FetchError::Body(root_cause(&e)))
+}
+
+/// 地址里的主机名；解析不了就整条地址。
+fn host_of(url: &str) -> String {
+    reqwest::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_owned))
+        .unwrap_or_else(|| url.to_owned())
+}
+
+/// reqwest 错误的根因。
+///
+/// 它的 `Display` 只说最外层的 "error sending request for url (…)"，真正
+/// 能指出方向的那句（"dns error"、"Connection refused"、证书不受信）在
+/// source 链的末端。直接拼整条链会把同一句话重复两三遍，只取最深的一层。
+/// 超时单独说：它的链末端是一句没有信息量的 "operation timed out"。
+fn root_cause(e: &reqwest::Error) -> String {
+    if e.is_timeout() {
+        return format!("timed out after {}s", HTTP_TIMEOUT.as_secs());
+    }
+    let mut last: Option<String> = None;
+    let mut src = std::error::Error::source(e);
+    while let Some(s) = src {
+        last = Some(s.to_string());
+        src = s.source();
+    }
+    // 没有 source 链时退回 Display，但先剥掉 URL —— 主机名已经在上一层的
+    // 文案里了。`without_url` 要拿所有权而这里只有借用，按 Display 的固定
+    // 形态 "<what> for url (<url>)" 把括号那截截掉，效果一样。
+    last.unwrap_or_else(|| {
+        let s = e.to_string();
+        match s.find(" for url (") {
+            Some(i) => s[..i].to_owned(),
+            None => s,
+        }
+    })
 }
 
 fn slug(id: &str) -> String {
@@ -451,8 +514,8 @@ mod tests {
             repo_url("https://gitlab.com/a/b.git"),
             "https://gitlab.com/a/b.git"
         );
-        let urls =
-            github_raw_candidates("https://github.com/riot-org/riot-marketplace.git").expect("是 GitHub");
+        let urls = github_raw_candidates("https://github.com/riot-org/riot-marketplace.git")
+            .expect("是 GitHub");
         assert_eq!(
             urls[2],
             "https://raw.githubusercontent.com/riot-org/riot-marketplace/HEAD/marketplace.json"
@@ -472,5 +535,121 @@ mod tests {
             !is_json_url("http://localhost.evil.com/m.json"),
             "前缀后面那个字符要看"
         );
+    }
+
+    /// 一个按路径回固定状态码的极简 HTTP 服务器。回 `(地址, 收到的请求路径)`。
+    async fn status_server(
+        by_path: Vec<(&'static str, u16)>,
+    ) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("监听");
+        let base = format!("http://{}", listener.local_addr().expect("取地址"));
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut buf = vec![0u8; 4096];
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                let path = req.split_whitespace().nth(1).unwrap_or("/").to_owned();
+                log.lock().expect("锁").push(path.clone());
+                let status = by_path
+                    .iter()
+                    .find(|(p, _)| path.ends_with(p))
+                    .map_or(404, |(_, s)| *s);
+                let body = if status == 200 {
+                    r#"{"plugins":[]}"#
+                } else {
+                    ""
+                };
+                let head = format!(
+                    "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = sock.write_all(head.as_bytes()).await;
+                let _ = sock.flush().await;
+            }
+        });
+        (base, seen)
+    }
+
+    fn candidates(base: &str) -> Vec<String> {
+        MANIFEST_PATHS
+            .iter()
+            .map(|p| format!("{base}/o/r/HEAD/{p}"))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn 三个路径全_404_才算仓库里没有清单() {
+        let (base, seen) = status_server(vec![]).await;
+        let err = fetch_github_manifest("https://github.com/o/r", &candidates(&base))
+            .await
+            .expect_err("全 404 该失败");
+        assert!(
+            matches!(&err, InstallError::MarketplaceNoManifest(repo) if repo == "https://github.com/o/r"),
+            "{err}"
+        );
+        assert_eq!(seen.lock().expect("锁").len(), 3, "三个候选都要试到");
+    }
+
+    #[tokio::test]
+    async fn 中间的非_404_状态压过_404() {
+        let (base, _) = status_server(vec![(".cursor-plugin/marketplace.json", 403)]).await;
+        let err = fetch_github_manifest("https://github.com/o/r", &candidates(&base))
+            .await
+            .expect_err("403 该失败");
+        match &err {
+            InstallError::Marketplace(d) => {
+                assert!(
+                    d.contains("HTTP 403"),
+                    "要报那个 403 而不是笼统的没找到：{d}"
+                );
+                assert!(
+                    !d.contains("marketplace:"),
+                    "细节里不能再套一层 Display 前缀：{d}"
+                );
+            }
+            other => panic!("该是 Marketplace(HTTP 403)，得到 {other}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn 第一个候选就能拿到时不再多试() {
+        let (base, seen) = status_server(vec![(".claude-plugin/marketplace.json", 200)]).await;
+        let body = fetch_github_manifest("https://github.com/o/r", &candidates(&base))
+            .await
+            .expect("第一条就 200");
+        assert_eq!(body, r#"{"plugins":[]}"#);
+        assert_eq!(seen.lock().expect("锁").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn 连不上时立刻停_并报主机名而不是整条地址() {
+        // 绑一个端口再立刻放掉：之后连它一定被拒。
+        let port = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").expect("绑端口");
+            l.local_addr().expect("取地址").port()
+        };
+        let base = format!("http://127.0.0.1:{port}");
+        let err = fetch_github_manifest("https://github.com/o/r", &candidates(&base))
+            .await
+            .expect_err("拒连该失败");
+        match &err {
+            InstallError::MarketplaceUnreachable { host, detail } => {
+                assert_eq!(host, "127.0.0.1");
+                assert!(
+                    !detail.contains("http://") && !detail.contains("error sending request"),
+                    "细节该是根因（拒连），不是外层那句套话和整条 URL：{detail}"
+                );
+                assert!(!detail.is_empty());
+            }
+            other => panic!("该是 MarketplaceUnreachable，得到 {other}"),
+        }
     }
 }

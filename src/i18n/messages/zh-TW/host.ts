@@ -76,6 +76,9 @@ export default {
   "host.schedule.run.turnFailed": "這一輪沒有啟動起來。",
 
   "host.plugin.marketplaceFailed": "拉取市集清單失敗。",
+  "host.plugin.marketplaceUnreachable": "連不上 {host}。檢查網路或代理後點「重新整理」再試。",
+  "host.plugin.marketplaceNoManifest":
+    "{repo} 裡沒有市集清單：.claude-plugin/、.cursor-plugin/ 和儲存庫根目錄下都沒找到 marketplace.json。檢查地址是不是寫錯了。",
   "host.plugin.notInMarketplace": "市集裡沒有外掛「{id}」。",
   "host.plugin.unsupportedPlatform": "這個外掛沒有適配目前系統（{platform}）的版本。",
   "host.plugin.downloadFailed": "外掛下載失敗。再點一次會從斷點繼續。",
@@ -92,4 +95,5 @@ export default {
   "host.plugin.notUpdatable": "外掛「{id}」沒有可回溯的來源，沒法升級；解除安裝後重裝。",
   "host.plugin.idMismatch": "來源裡的外掛叫「{actual}」，不是「{expected}」，沒有升級。",
   "host.plugin.badMarketplace": "市集「{id}」的標識或來源為空，或標識重複。",
+  "host.plugin.officialMarketplaceRequired": "官方市集「{id}」不能移除。不想看它的話可以停用。",
 } satisfies Dict<typeof zh>;

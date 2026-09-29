@@ -76,6 +76,9 @@ export default {
   "host.schedule.run.turnFailed": "ターンを開始できませんでした。",
 
   "host.plugin.marketplaceFailed": "マーケットのマニフェストを取得できませんでした。",
+  "host.plugin.marketplaceUnreachable": "{host} に接続できません。ネットワークやプロキシを確認してから「更新」を押してください。",
+  "host.plugin.marketplaceNoManifest":
+    "{repo} にマーケットのマニフェストがありません：.claude-plugin/、.cursor-plugin/、リポジトリのルートのいずれにも marketplace.json が見つかりません。アドレスを確認してください。",
   "host.plugin.notInMarketplace": "マーケットにプラグイン「{id}」がありません。",
   "host.plugin.unsupportedPlatform": "このプラグインにはこのプラットフォーム（{platform}）向けのビルドがありません。",
   "host.plugin.downloadFailed": "プラグインのダウンロードに失敗しました。もう一度クリックすると途中から再開します。",
@@ -92,4 +95,5 @@ export default {
   "host.plugin.notUpdatable": "プラグイン「{id}」には追跡可能なソースがなく更新できません。アンインストールして再インストールしてください。",
   "host.plugin.idMismatch": "ソースに含まれるプラグインは「{actual}」で、「{expected}」ではありません。更新しませんでした。",
   "host.plugin.badMarketplace": "マーケット「{id}」の ID またはソースが空、あるいは ID が重複しています。",
+  "host.plugin.officialMarketplaceRequired": "公式マーケット「{id}」は削除できません。表示したくない場合は無効化してください。",
 } satisfies Dict<typeof zh>;

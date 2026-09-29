@@ -921,12 +921,12 @@ async fn plugins_update(
     result
 }
 
-/// 整体替换市场列表。
+/// 整体替换市场列表。回保存后的配置，和 `set_config` 一样让设置页原地刷新。
 #[tauri::command]
 async fn plugins_set_marketplaces(
     state: tauri::State<'_, AppState>,
     marketplaces: Vec<config::MarketplaceConfig>,
-) -> HostResult<()> {
+) -> HostResult<config::ConfigStatus> {
     state.plugins_set_marketplaces(marketplaces).await
 }
 

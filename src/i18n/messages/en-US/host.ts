@@ -76,6 +76,9 @@ export default {
   "host.schedule.run.turnFailed": "The turn failed to start.",
 
   "host.plugin.marketplaceFailed": "Failed to fetch the marketplace manifest.",
+  "host.plugin.marketplaceUnreachable": "Can't reach {host}. Check your network or proxy, then click Refresh.",
+  "host.plugin.marketplaceNoManifest":
+    "{repo} has no marketplace manifest: no marketplace.json in .claude-plugin/, .cursor-plugin/, or the repository root. Check the address.",
   "host.plugin.notInMarketplace": "Plugin “{id}” is not in the marketplace.",
   "host.plugin.unsupportedPlatform": "This plugin has no build for this platform ({platform}).",
   "host.plugin.downloadFailed": "Plugin download failed. Click again to resume from where it stopped.",
@@ -92,4 +95,5 @@ export default {
   "host.plugin.notUpdatable": "Plugin “{id}” has no traceable source and cannot be updated; uninstall and reinstall.",
   "host.plugin.idMismatch": "The source contains plugin “{actual}”, not “{expected}”; nothing was updated.",
   "host.plugin.badMarketplace": "Marketplace “{id}” has an empty ID or source, or a duplicate ID.",
+  "host.plugin.officialMarketplaceRequired": "The official marketplace “{id}” cannot be removed. Disable it if you don't want to see it.",
 } satisfies Dict<typeof zh>;

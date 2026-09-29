@@ -78,6 +78,9 @@ export default {
   "host.schedule.run.turnFailed": "轮子没起来。",
 
   "host.plugin.marketplaceFailed": "拉取市场清单失败。",
+  "host.plugin.marketplaceUnreachable": "连不上 {host}。检查网络或代理后点「刷新」再试。",
+  "host.plugin.marketplaceNoManifest":
+    "{repo} 里没有市场清单：.claude-plugin/、.cursor-plugin/ 和仓库根目录下都没找到 marketplace.json。检查地址是不是写错了。",
   "host.plugin.notInMarketplace": "市场里没有插件「{id}」。",
   "host.plugin.unsupportedPlatform": "这个插件没有适配当前系统（{platform}）的版本。",
   "host.plugin.downloadFailed": "插件下载失败。再点一次会从断点继续。",
@@ -94,4 +97,5 @@ export default {
   "host.plugin.notUpdatable": "插件「{id}」没有可回溯的来源，没法升级；卸了重装。",
   "host.plugin.idMismatch": "来源里的插件叫「{actual}」，不是「{expected}」，没有升级。",
   "host.plugin.badMarketplace": "市场「{id}」的标识或来源为空，或标识重复。",
+  "host.plugin.officialMarketplaceRequired": "官方市场「{id}」不能移除。不想看它的话可以停用。",
 };

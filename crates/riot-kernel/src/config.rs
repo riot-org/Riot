@@ -917,16 +917,26 @@ pub struct MarketplaceConfig {
 }
 
 /// 官方市场的 id。迁移旧能力包时把 `doc-runtime` 挂到它下面，升级才有出处。
+///
+/// `[约束]` 这一条不可删：设置页不给它「移除」，`plugins_set_marketplaces`
+/// 收到没有它的列表会拒绝，加载时缺了也会补回来（见 [`normalize`]）。
+/// 可以停用 —— 不想看官方目录是合理诉求，删掉之后要靠记住仓库地址才能
+/// 加回来就不是了。
 pub const OFFICIAL_MARKETPLACE: &str = "riot";
 /// 官方目录仓库。只放 `marketplace.json`，每个插件自己一个仓库。
 pub const OFFICIAL_MARKETPLACE_SOURCE: &str = "riot-org/riot-marketplace";
 
-fn default_marketplaces() -> Vec<MarketplaceConfig> {
-    vec![MarketplaceConfig {
+/// 官方市场的出厂配置。
+pub fn official_marketplace() -> MarketplaceConfig {
+    MarketplaceConfig {
         id: OFFICIAL_MARKETPLACE.to_owned(),
         source: OFFICIAL_MARKETPLACE_SOURCE.to_owned(),
         enabled: true,
-    }]
+    }
+}
+
+fn default_marketplaces() -> Vec<MarketplaceConfig> {
+    vec![official_marketplace()]
 }
 
 /// 个人仓库时代的官方目录。加载时改写成 [`OFFICIAL_MARKETPLACE_SOURCE`]。
@@ -1507,6 +1517,9 @@ pub struct ConfigStatus {
     /// 他看到的就是"我配的东西全没了"，而旁边其实躺着一份完好的备份。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config_backup: Option<String>,
+    /// 官方市场的 id（[`OFFICIAL_MARKETPLACE`]）。设置页据此不给它「移除」。
+    /// 从这里带过去而不是前端抄一份常量：id 只在 Rust 这一处定。
+    pub official_marketplace: String,
 }
 
 impl ConfigStatus {
@@ -1515,6 +1528,7 @@ impl ConfigStatus {
             key_status: config.key_status(),
             config_path: config_path().display().to_string(),
             config_backup: RECOVERED_BACKUP.get().map(|p| p.display().to_string()),
+            official_marketplace: OFFICIAL_MARKETPLACE.to_owned(),
             config,
         }
     }
@@ -1916,6 +1930,16 @@ fn normalize(mut c: AppConfig) -> AppConfig {
             m.source = OFFICIAL_MARKETPLACE_SOURCE.to_owned();
         }
     }
+    // 官方市场缺了就补回来。serde 的 default 只管"没有这个键"，键在但是
+    // `[]`（旧版设置页的「移除」没拦）就会一直空着，市场页只剩一句"还没有
+    // 插件"，用户猜不到是自己把目录删了。补在最前面：设置页里它一直排第一。
+    if !c
+        .plugin_marketplaces
+        .iter()
+        .any(|m| m.id == OFFICIAL_MARKETPLACE)
+    {
+        c.plugin_marketplaces.insert(0, official_marketplace());
+    }
     c
 }
 
@@ -2095,6 +2119,34 @@ mod tests {
         let c = parse(json);
         assert_eq!(c.plugin_marketplaces[0].source, OFFICIAL_MARKETPLACE_SOURCE);
         assert_eq!(c.plugin_marketplaces[1].source, "someone/other");
+    }
+
+    /// 键在但列表里没有官方市场（旧版「移除」删掉的）—— 加载时补回最前面，
+    /// 用户自己加的保留；已经有的不重复补。
+    #[test]
+    fn 官方市场缺了加载时补回() {
+        let base = r#""providers": [{
+                "id": "zp", "name": "智谱", "protocol": "openai",
+                "baseUrl": "https://x.test", "apiKeyEnv": "K",
+                "models": ["glm-4.6v"]
+            }],
+            "activeProvider": "zp",
+            "activeModel": "glm-4.6v","#;
+
+        let emptied = parse(&format!(r#"{{ {base} "pluginMarketplaces": [] }}"#));
+        assert_eq!(emptied.plugin_marketplaces, vec![official_marketplace()]);
+
+        let mine_only = parse(&format!(
+            r#"{{ {base} "pluginMarketplaces": [ {{ "id": "mine", "source": "someone/other" }} ] }}"#
+        ));
+        let ids: Vec<&str> = mine_only.plugin_marketplaces.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, vec![OFFICIAL_MARKETPLACE, "mine"], "补在最前面，自定义的保留");
+
+        let disabled = parse(&format!(
+            r#"{{ {base} "pluginMarketplaces": [ {{ "id": "riot", "source": "riot-org/riot-marketplace", "enabled": false }} ] }}"#
+        ));
+        assert_eq!(disabled.plugin_marketplaces.len(), 1, "已有的不重复补");
+        assert!(!disabled.plugin_marketplaces[0].enabled, "停用状态原样保留");
     }
 
     /// 短暂存在过的"服务方级 vision"要铺到它的每个模型上。

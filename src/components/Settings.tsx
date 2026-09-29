@@ -276,7 +276,14 @@ export function Settings({
                   onSaved={flashSaved}
                 />
               ) : null}
-              {tab === "plugins" ? <PluginsPane askConfirm={setConfirm} status={status} /> : null}
+              {tab === "plugins" ? (
+                <PluginsPane
+                  askConfirm={setConfirm}
+                  status={status}
+                  onStatus={onStatus}
+                  onSaved={flashSaved}
+                />
+              ) : null}
               {tab === "skills" ? (
                 <SkillsPane status={status} activeRoot={activeRoot ?? null} />
               ) : null}

@@ -54,9 +54,11 @@ export function usePluginInstalls(): PluginInstalls {
 
 function track(id: string, run: (onProgress: (p: PluginProgress) => void) => Promise<void>): void {
   if (state.running[id]) return;
+  // 占位用 starting 而不是某个真实阶段：git 升级和压缩包下载第一秒显示
+  // "校验中"是在撒谎，宿主推来第一条真进度就会盖掉它。
   set({
     ...state,
-    progress: { ...state.progress, [id]: { kind: "verifying" } },
+    progress: { ...state.progress, [id]: { kind: "starting" } },
     running: { ...state.running, [id]: true },
   });
 

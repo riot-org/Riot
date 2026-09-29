@@ -6310,7 +6310,6 @@ button.chip-ref.clickable:hover,
 
 /* 卡片里的列表和空态自带外边距，装进 Group 时把它们收掉。 */
 .set-group > .skill-list,
-.set-group > .plugin-list,
 .set-group > .mcp-list {
   margin-top: 0;
 }
@@ -7201,55 +7200,341 @@ button.ta-resize-grip:hover:not(:disabled),
 
 /* ── 插件分区 ──────────────────────────── */
 
-/* 同一分组里的表单、清单、搜索框是兄弟块。分组本身不给子元素
-   加 gap（标题和说明要贴得更近），所以这里单独拉开。 */
-.plugin-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.plugin-stack > .plugin-list,
-.plugin-stack > .plugin-search,
-.plugin-stack > .plugin-actions {
-  margin-top: 0;
-}
-
-.plugin-list {
+/* 一行一个插件：彩色图块 + 名字 + 一句说明 + 右侧一个动作。不装卡片、
+   不画分隔线 —— 图块和两行字自己就把行分开了。原先是卡片套卡片再套
+   带描边的条目，三层框把一条 13px 的名字围在中间，看着像表单不像清单。 */
+.pl-list {
   list-style: none;
-  margin: 8px 0 0;
+  margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 2px;
 }
 
-.plugin-item {
-  padding: 10px 12px;
-  border-radius: 8px;
+.pl-main {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* 可展开的行：hover 底色铺满整行，把右边的开关也包进来 —— 只亮左半截
+   像是开关不属于这一行。 */
+.pl-main.is-hit {
+  border-radius: 10px;
+  transition: background var(--dur-1) var(--ease-out);
+}
+
+.pl-main.is-hit:hover {
   background: var(--lift-1);
 }
 
-.plugin-item.bad {
-  outline: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
+/* 展开后整行（头 + 详情）落在一块浅底上，读得出详情属于哪个插件。 */
+.pl-row.open {
+  background: var(--lift-1);
+  border-radius: 12px;
 }
 
-.plugin-head {
+.pl-row.open .pl-main.is-hit {
+  border-radius: 12px;
+}
+
+/* 主体（图块 + 文字）。已装的那行是按钮，点了展开详情；市场里的只是块。
+   重置 button 的默认外观：这里要的是"整行可点"，不是一颗键。 */
+.pl-hit {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  margin: 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+button.pl-hit {
+  cursor: pointer;
+}
+
+button.pl-hit:hover:not(:disabled) {
+  background: transparent;
+}
+
+.pl-side {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-right: 10px;
+}
+
+/* 图块：一格首字母压在一块颜色上。色相按名字哈希（--tile-hue 由组件
+   写在行内），饱和度和明度两套主题共用 —— 47% 的明度上白字都读得清。
+   内圈一道同色更亮的细边，深底上不至于像贴了张色纸。 */
+.pl-tile {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--on-accent);
+  background: hsl(var(--tile-hue) 52% 47%);
+  box-shadow: inset 0 0 0 1px hsl(var(--tile-hue) 60% 62% / 0.35);
+  user-select: none;
+}
+
+.pl-tile svg {
+  width: 18px;
+  height: 18px;
+}
+
+.pl-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pl-title {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
   flex-wrap: wrap;
 }
 
-.plugin-name {
-  font-weight: 600;
+.pl-name {
   font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.plugin-spacer {
-  flex: 1;
+.pl-meta {
+  font-size: 12px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
+/* 说明一行截断；展开详情时放开折行 —— 那时用户就是来读它的。 */
+.pl-desc {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pl-row.open .pl-desc {
+  white-space: normal;
+}
+
+/* 停用的插件整行退一档：图块褪色、名字变灰。开关本身也在右边说着"关"，
+   但一列里扫一眼哪几个没开，靠颜色比靠开关快。 */
+.pl-row.off .pl-tile {
+  filter: saturate(0.25);
+  opacity: 0.6;
+}
+
+.pl-row.off .pl-name {
+  color: var(--text-dim);
+}
+
+.pl-chevron {
+  flex-shrink: 0;
+  color: var(--text-faint);
+  transition: transform var(--dur-1) var(--ease-out);
+}
+
+.pl-chevron.open {
+  transform: rotate(90deg);
+}
+
+/* 右侧的圆形图标键（市场的「+」、其他来源打开表单的「+」）。 */
+.pl-icon-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  color: var(--text-dim);
+}
+
+.pl-icon-btn:hover:not(:disabled) {
+  color: var(--text);
+}
+
+/* 已装的勾：和图标键同尺寸，换行时对得齐。 */
+.pl-check {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  color: var(--ok);
+}
+
+/* 正在装：同一个位置换成转圈，颜色退成淡灰 —— 绿勾是"装好了"的意思。 */
+.pl-check.pl-busy {
+  color: var(--text-faint);
+}
+
+.pl-spin {
+  animation: tool-spin 1.1s linear infinite;
+}
+
+/* 行下面挂的东西（进度、详情、表单）和文字左边对齐：图块宽 + 间距。 */
+.pl-sub {
+  padding: 0 10px 10px calc(10px + 36px + 12px);
+}
+
+.pl-sub .plugin-progress {
+  margin-top: 0;
+}
+
+/* 详情和头之间一道细线。左右各 10px，和图块左边、开关右边同一条线，
+   不再为了对齐名字把左边多缩进一列。 */
+.pl-details {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 0 10px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+
+.pl-details .plugin-components {
+  margin-top: 0;
+  gap: 14px;
+}
+
+.pl-details .plugin-actions {
+  margin-top: 0;
+}
+
+/* 来源 / 格式 / 位置：左标签右值，长值（URL、路径）单行截断，悬停看全。 */
+.plugin-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px 16px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.plugin-facts dt {
+  color: var(--text-faint);
+}
+
+.plugin-facts dd {
+  margin: 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-dim);
+}
+
+.plugin-facts dd > :not(.plugin-facts-long) {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.plugin-facts-long {
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 分组里不成行的一句话（读取中、空态、错误）和行的文字起点对齐。 */
+.pl-note {
+  margin: 0;
+  padding: 6px 10px;
+}
+
+/* 重拉市场时旧清单留在屏上淡一档，别整块换成"读取中"闪一下。 */
+.pl-market.is-loading {
+  opacity: 0.55;
+  transition: opacity var(--dur-1) var(--ease-out);
+}
+
+/* 分组头右端的搜索框：比正文输入框矮一号，和旁边的 ghost 键一排。 */
+.pl-search {
+  width: 180px;
+  padding: 4px 9px;
+  font-size: 12px;
+  box-sizing: border-box;
+}
+
+/* 确认页标题前的图块，小一号。 */
+.pl-confirm-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pl-confirm-title .pl-tile {
+  width: 26px;
+  height: 26px;
+  font-size: 12px;
+  border-radius: 7px;
+}
+
+/* 页尾那句"怎么写插件"。 */
+.pl-foot {
+  margin: 18px 0 0;
+  padding: 0 10px;
+  line-height: 1.6;
+}
+
+/* Git / 本地目录表单弹窗。标签压在输入框上面 —— 这里的标签是整句话
+   （"分支或标签（可选）"），横排会把输入框挤成一截。 */
+.pl-dialog .model-dialog-body {
+  padding-bottom: 6px;
+}
+
+.pl-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.pl-field > span {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.pl-field > input,
+.pl-field > .input-with-btn {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.pl-field-hint {
+  margin: -6px 0 10px;
+  line-height: 1.5;
+}
+
+/* 名字旁的小标：只挂要人处理的状态（可升级、清单读不了、不支持当前系统、
+   有问题），版本、格式这些放进详情。 */
 .plugin-badge {
   font-size: 11px;
   color: var(--text-dim);
@@ -7259,10 +7544,9 @@ button.ta-resize-grip:hover:not(:disabled),
   white-space: nowrap;
 }
 
-/* 描边是 --ok 打 35% 透明，跟着字色一起用语义色。 */
-.plugin-badge.on {
-  color: var(--ok);
-  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
+.plugin-badge.up {
+  color: var(--accent-text);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
 .plugin-badge.bad {
@@ -7279,6 +7563,40 @@ button.ta-resize-grip:hover:not(:disabled),
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+/* 进度那一句和（失败时的）「关闭」同一行：文字可能折成两三行，按钮贴右上。 */
+.plugin-progress-line {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.plugin-progress-line > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.plugin-progress-line .btn-compact {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+/* 市场卡片里的一句话 + 右侧一颗键：清单拉不下来（+「重试」）、一个市场都
+   没开（+「市场列表」）。 */
+.plugin-inline-note {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.plugin-inline-note .btn-compact {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  font-size: 12px;
 }
 
 .plugin-bar {
@@ -7328,15 +7646,106 @@ button.ta-resize-grip:hover:not(:disabled),
 }
 
 .plugin-component-title {
-  display: block;
-  font-size: 11px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
   color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  margin-bottom: 2px;
+  margin-bottom: 6px;
 }
 
-.plugin-component ul {
+.plugin-component-count {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 短名一簇：技能、命令、环境变量。 */
+.plugin-chips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.plugin-chips code {
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--lift-1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.plugin-chip-ns {
+  color: var(--text-faint);
+}
+
+/* 命令行、路径：一条一行放进代码框，任意处可断。 */
+.plugin-code {
+  list-style: none;
+  margin: 0;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-dim);
+  background: var(--lift-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.plugin-code li {
+  overflow-wrap: anywhere;
+}
+
+.plugin-code.is-prompt li::before {
+  content: "$ ";
+  color: var(--text-faint);
+  user-select: none;
+}
+
+.plugin-code-mcp {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.plugin-code-mcp + .plugin-code-mcp {
+  margin-top: 4px;
+}
+
+.plugin-code-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.plugin-code-name {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.plugin-code-tag {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  line-height: 1.5;
+  padding: 0 5px;
+  color: var(--text-faint);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.plugin-component ul:not([class]) {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -7345,19 +7754,13 @@ button.ta-resize-grip:hover:not(:disabled),
   gap: 2px;
 }
 
-.plugin-component li {
+.plugin-component ul:not([class]) > li {
   font-size: 12px;
   overflow-wrap: anywhere;
 }
 
 .plugin-component code {
   font-size: 11.5px;
-}
-
-.plugin-search {
-  width: 100%;
-  margin: 8px 0 0;
-  box-sizing: border-box;
 }
 
 .plugin-market-add {
@@ -7369,6 +7772,28 @@ button.ta-resize-grip:hover:not(:disabled),
 .plugin-market-add input {
   flex: 1;
   min-width: 0;
+}
+
+/* 某个市场拉不到：一句人话 + 一行淡色的技术细节。细节等宽、任意处可断 ——
+   里面是主机名和 DNS/TLS 原文，不折行会把整块撑出卡片。 */
+.market-error {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.market-error .form-error {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.market-error-detail {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-faint);
+  overflow-wrap: anywhere;
+  user-select: text;
 }
 
 /* ── Skills 分区 ──────────────────────────── */

@@ -18,6 +18,15 @@ use riot_protocol::{UiError, ui_error};
 pub enum InstallError {
     #[error("marketplace: {0}")]
     Marketplace(String),
+    /// 市场所在的服务器连不上：DNS、拒连、超时、TLS。和 [`Self::MarketplaceNoManifest`]
+    /// 分开 —— 前者要用户查网络，后者要用户查地址；混成一句"没找到清单"，
+    /// 断网的人会去怀疑仓库地址写错了。`host` 是清单实际所在的主机
+    /// （GitHub 仓库是 raw.githubusercontent.com，不是 github.com）。
+    #[error("marketplace unreachable: {host}: {detail}")]
+    MarketplaceUnreachable { host: String, detail: String },
+    /// 仓库能访问，但三个约定位置都没有 marketplace.json。
+    #[error("no marketplace.json in {0}")]
+    MarketplaceNoManifest(String),
     #[error("plugin `{0}` is not in the marketplace")]
     NotFound(String),
     #[error("no build for platform {0}")]
@@ -57,6 +66,12 @@ impl InstallError {
     pub fn to_ui(&self) -> UiError {
         match self {
             InstallError::Marketplace(d) => ui_error!("host.plugin.marketplaceFailed"; d),
+            InstallError::MarketplaceUnreachable { host, detail } => {
+                ui_error!("host.plugin.marketplaceUnreachable", host = host; detail)
+            }
+            InstallError::MarketplaceNoManifest(repo) => {
+                ui_error!("host.plugin.marketplaceNoManifest", repo = repo)
+            }
             InstallError::NotFound(id) => ui_error!("host.plugin.notInMarketplace", id = id),
             InstallError::Unsupported(p) => {
                 ui_error!("host.plugin.unsupportedPlatform", platform = p)
@@ -214,6 +229,10 @@ fn extract_into(archive: &Path, staging: &Path) -> Result<(), InstallError> {
     //
     // 构建脚本那边已经用 COPYFILE_DISABLE 从源头掐掉了，这里再挡一道：
     // 用户手上可能有老脚本打的包，而这个故障的排查成本高得离谱。
+    //
+    // 指向绝对路径的符号链接先记下来、最后再建：要在已经解出来的东西里找
+    // 它真正指的是哪一项，而那一项可能排在它后面。
+    let mut absolute_links: Vec<(PathBuf, PathBuf)> = Vec::new();
     for entry in tar
         .entries()
         .map_err(|e| InstallError::Io("read archive entries".into(), e))?
@@ -225,6 +244,14 @@ fn extract_into(archive: &Path, staging: &Path) -> Result<(), InstallError> {
                 .is_some_and(|n| n.to_string_lossy().starts_with("._"))
         });
         if is_apple_double {
+            continue;
+        }
+        if entry.header().entry_type().is_symlink()
+            && let Some(link) = path.as_ref()
+            && let Ok(Some(target)) = entry.link_name()
+            && target.is_absolute()
+        {
+            absolute_links.push((link.clone(), target.into_owned()));
             continue;
         }
         let mode = entry.header().mode().unwrap_or(0);
@@ -253,7 +280,135 @@ fn extract_into(archive: &Path, staging: &Path) -> Result<(), InstallError> {
         #[cfg(not(unix))]
         let _ = (unpacked, is_file, mode);
     }
+    for (link, target) in absolute_links {
+        relink_absolute(staging, &link, &target)?;
+    }
     Ok(())
+}
+
+/// 归档里指向绝对路径的符号链接。
+///
+/// 目标是打包机器上的路径，装到用户机器上必然悬空：`libpoppler.160.dylib`
+/// 指向 `/Users/runner/…/libpoppler.160.0.0.dylib`，而 dyld 报的是一句和解压
+/// 毫无关系的 "Library not loaded"。真的踩过 —— 来源是 Node 的 `fs.cpSync`，
+/// 它默认把相对链接改写成源文件的绝对路径（`verbatimSymlinks` 不开就这样）。
+///
+/// 修法：在已经解出来的目录里找到绝对路径真正指的那一项（见
+/// [`locate_in_archive`]），改成从链接所在目录出发的相对链接重建 —— 装到
+/// 哪台机器、挪到哪个目录都还能解析。
+///
+/// 找不到的**跳过**、不落地、只记一条 warn。找不到 = 目标在包里根本不存在，
+/// 这条链接在打包机器上就已经是悬空的（doc-runtime 0.2.0 里 ncurses 的
+/// `lib/terminfo -> share/terminfo`，而 share/terminfo 没进包）。悬空的链接和
+/// 没有这条链接对程序来说是一回事，为它让整个安装失败划不来；真缺了要紧
+/// 的东西，装完的自检会抓到。
+fn relink_absolute(staging: &Path, link: &Path, target: &Path) -> Result<(), InstallError> {
+    use std::path::Component;
+
+    // 链接自己的位置不能逃出 staging（tar 的 unpack_in 会拦，这里绕过了它）。
+    if !link.components().all(|c| matches!(c, Component::Normal(_))) {
+        tracing::warn!(link = %link.display(), "archive symlink path escapes the archive; skipped");
+        return Ok(());
+    }
+    let Some(resolved) = locate_in_archive(staging, link, target) else {
+        tracing::warn!(
+            link = %link.display(),
+            target = %target.display(),
+            "archive symlink points to an absolute path with no counterpart inside the archive; skipped"
+        );
+        return Ok(());
+    };
+    let link_dir = link.parent().unwrap_or_else(|| Path::new(""));
+    let rel = relative_path(link_dir, &resolved);
+    let is_dir = staging.join(&resolved).is_dir();
+
+    let dst = staging.join(link);
+    if let Some(parent) = dst.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| InstallError::Io("create symlink dir".into(), e))?;
+    }
+    let _ = std::fs::remove_file(&dst);
+    make_symlink(&rel, &dst, is_dir)
+        .map_err(|e| InstallError::Io("relink absolute symlink".into(), e))?;
+    tracing::warn!(
+        link = %link.display(),
+        target = %target.display(),
+        relinked = %rel.display(),
+        "archive symlink had an absolute target; relinked inside the archive"
+    );
+    Ok(())
+}
+
+/// 在已解出的 `staging` 里找绝对目标对应的那一项。
+///
+/// 从整条路径开始逐级去掉最前面的一层，第一个在 staging 里存在的尾巴就是
+/// 它 —— 尾巴越长越不可能是巧合，所以先试长的。归档常裹一层带版本号的顶层
+/// 目录，而绝对路径里对应的那层叫别的名字（构建时的中间目录，例如
+/// `runtime-darwin-arm64` 对 `doc-runtime-0.2.0-darwin-arm64`），所以每个尾巴
+/// 既按原样试，也接在链接自己的顶层目录下试。返回的是相对 staging 的路径。
+fn locate_in_archive(staging: &Path, link: &Path, target: &Path) -> Option<PathBuf> {
+    use std::path::Component;
+
+    let parts: Vec<&std::ffi::OsStr> = target
+        .components()
+        .filter_map(|c| match c {
+            Component::Normal(p) => Some(p),
+            _ => None,
+        })
+        .collect();
+    let top = link.components().next().and_then(|c| match c {
+        Component::Normal(p) => Some(Path::new(p)),
+        _ => None,
+    });
+    for i in 0..parts.len() {
+        let tail: PathBuf = parts[i..].iter().collect();
+        let mut candidates = vec![tail.clone()];
+        if let Some(top) = top {
+            candidates.push(top.join(&tail));
+        }
+        for c in candidates {
+            // 指回自己的不算。
+            if c == link {
+                continue;
+            }
+            if staging.join(&c).symlink_metadata().is_ok() {
+                return Some(c);
+            }
+        }
+    }
+    None
+}
+
+/// 从目录 `from_dir` 走到 `to` 的相对路径，两者都相对同一个根。
+fn relative_path(from_dir: &Path, to: &Path) -> PathBuf {
+    let a: Vec<_> = from_dir.components().collect();
+    let b: Vec<_> = to.components().collect();
+    let common = a.iter().zip(b.iter()).take_while(|(x, y)| x == y).count();
+    let mut out = PathBuf::new();
+    for _ in common..a.len() {
+        out.push("..");
+    }
+    for c in &b[common..] {
+        out.push(c.as_os_str());
+    }
+    if out.as_os_str().is_empty() {
+        out.push(".");
+    }
+    out
+}
+
+#[cfg(unix)]
+fn make_symlink(target: &Path, dst: &Path, _is_dir: bool) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, dst)
+}
+
+#[cfg(windows)]
+fn make_symlink(target: &Path, dst: &Path, is_dir: bool) -> std::io::Result<()> {
+    if is_dir {
+        std::os::windows::fs::symlink_dir(target, dst)
+    } else {
+        std::os::windows::fs::symlink_file(target, dst)
+    }
 }
 
 /// 把解压 / clone 结果搬到最终位置。`staging` 里可以直接是插件根，也可以
@@ -621,6 +776,177 @@ mod tests {
             .mode();
         assert_eq!(mode & 0o6000, 0, "setuid/setgid 必须被掩掉，mode={mode:o}");
         assert!(mode & 0o111 != 0, "可执行位不能跟着一起掉，mode={mode:o}");
+    }
+
+    /// 写一个 tar.zst：若干普通文件 + 若干符号链接（目标原样写进去）。
+    #[cfg(unix)]
+    fn archive_with_links(archive: &Path, files: &[&str], links: &[(&str, &str)]) {
+        let f = std::fs::File::create(archive).expect("建压缩文件");
+        let enc = zstd::stream::write::Encoder::new(f, 1).expect("建编码器");
+        let mut b = tar::Builder::new(enc);
+        for p in files {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(1);
+            h.set_mode(0o755);
+            h.set_cksum();
+            b.append_data(&mut h, p, &b"x"[..]).expect("写文件");
+        }
+        for (p, target) in links {
+            let mut h = tar::Header::new_gnu();
+            h.set_entry_type(tar::EntryType::Symlink);
+            h.set_size(0);
+            h.set_mode(0o777);
+            b.append_link(&mut h, p, target).expect("写链接");
+        }
+        b.into_inner()
+            .expect("收尾 tar")
+            .finish()
+            .expect("收尾 zstd");
+    }
+
+    /// 真实事故的复刻：Node `fs.cpSync` 把动态库的版本别名改写成了构建机上的
+    /// 绝对路径。同目录的别名要修成相对链接，装到哪台机器上都能解析。
+    #[cfg(unix)]
+    #[test]
+    fn 指向构建机绝对路径的同目录别名会修成相对链接() {
+        let tmp = tempfile::tempdir().expect("临时目录");
+        let archive = tmp.path().join("a.tar.zst");
+        archive_with_links(
+            &archive,
+            &["doc-runtime-0.2.0-darwin-arm64/poppler/lib/libpoppler.160.0.0.dylib"],
+            &[
+                (
+                    "doc-runtime-0.2.0-darwin-arm64/poppler/lib/libpoppler.160.dylib",
+                    "/Users/runner/work/x/dist/.cache/unpack-1/runtime-darwin-arm64/poppler/lib/libpoppler.160.0.0.dylib",
+                ),
+                // 相对链接原样保留，别误伤。
+                (
+                    "doc-runtime-0.2.0-darwin-arm64/poppler/lib/libpoppler.dylib",
+                    "libpoppler.160.dylib",
+                ),
+            ],
+        );
+
+        let staging = tmp.path().join("staging");
+        std::fs::create_dir_all(&staging).expect("建目录");
+        extract_into(&archive, &staging).expect("解压");
+
+        let lib = staging.join("doc-runtime-0.2.0-darwin-arm64/poppler/lib");
+        assert_eq!(
+            std::fs::read_link(lib.join("libpoppler.160.dylib")).expect("读链接"),
+            Path::new("libpoppler.160.0.0.dylib"),
+            "绝对目标要改成同目录的相对名字"
+        );
+        assert!(
+            lib.join("libpoppler.160.dylib").exists(),
+            "修完的链接必须能解析到真实文件"
+        );
+        assert_eq!(
+            std::fs::read_link(lib.join("libpoppler.dylib")).expect("读链接"),
+            Path::new("libpoppler.160.dylib"),
+            "本来就是相对的不动"
+        );
+    }
+
+    /// 同一次事故里的另一种：`poppler/lib/terminfo` 指向包里另一个目录
+    /// `poppler/share/terminfo`。目标排在链接后面也要能找到 —— 所以链接是
+    /// 解完全部条目之后才建的。
+    #[cfg(unix)]
+    #[test]
+    fn 指向包内其它目录的绝对链接按相对路径重建() {
+        let tmp = tempfile::tempdir().expect("临时目录");
+        let archive = tmp.path().join("a.tar.zst");
+        {
+            let f = std::fs::File::create(&archive).expect("建压缩文件");
+            let enc = zstd::stream::write::Encoder::new(f, 1).expect("建编码器");
+            let mut b = tar::Builder::new(enc);
+            // 链接先于目标出现。
+            let mut h = tar::Header::new_gnu();
+            h.set_entry_type(tar::EntryType::Symlink);
+            h.set_size(0);
+            h.set_mode(0o777);
+            b.append_link(
+                &mut h,
+                "doc-runtime-0.2.0-darwin-arm64/poppler/lib/terminfo",
+                "/Users/runner/work/x/dist/.cache/unpack-1/runtime-darwin-arm64/poppler/share/terminfo",
+            )
+            .expect("写链接");
+            let mut f = tar::Header::new_gnu();
+            f.set_size(1);
+            f.set_mode(0o644);
+            f.set_cksum();
+            b.append_data(
+                &mut f,
+                "doc-runtime-0.2.0-darwin-arm64/poppler/share/terminfo/x/xterm",
+                &b"x"[..],
+            )
+            .expect("写文件");
+            b.into_inner()
+                .expect("收尾 tar")
+                .finish()
+                .expect("收尾 zstd");
+        }
+
+        let staging = tmp.path().join("staging");
+        std::fs::create_dir_all(&staging).expect("建目录");
+        extract_into(&archive, &staging).expect("解压");
+
+        let link = staging.join("doc-runtime-0.2.0-darwin-arm64/poppler/lib/terminfo");
+        assert_eq!(
+            std::fs::read_link(&link).expect("读链接"),
+            Path::new("../share/terminfo"),
+            "要改成从 lib/ 出发的相对路径"
+        );
+        assert!(
+            link.join("x/xterm").is_file(),
+            "顺着修完的链接要能走到真实文件"
+        );
+    }
+
+    #[test]
+    fn 相对路径计算() {
+        assert_eq!(
+            relative_path(Path::new("top/poppler/lib"), Path::new("top/poppler/share/terminfo")),
+            Path::new("../share/terminfo")
+        );
+        assert_eq!(
+            relative_path(Path::new("top/lib"), Path::new("top/lib/libx.1.dylib")),
+            Path::new("libx.1.dylib")
+        );
+        assert_eq!(relative_path(Path::new("a/b"), Path::new("a/b")), Path::new("."));
+    }
+
+    /// 目标在包里根本不存在的（打包机器上就悬空的、或者指向包外系统文件的）
+    /// 跳过不落地，其它条目照常解 —— 别为一条本来就没用的链接让安装失败。
+    #[cfg(unix)]
+    #[test]
+    fn 包里找不到目标的绝对链接跳过不落地() {
+        let tmp = tempfile::tempdir().expect("临时目录");
+        let archive = tmp.path().join("a.tar.zst");
+        archive_with_links(
+            &archive,
+            &["pack/plugin.json"],
+            &[
+                ("pack/bin/passwd", "/etc/passwd"),
+                (
+                    "pack/poppler/lib/terminfo",
+                    "/Users/runner/work/x/unpack-1/runtime/poppler/share/terminfo",
+                ),
+            ],
+        );
+        let staging = tmp.path().join("staging");
+        std::fs::create_dir_all(&staging).expect("建目录");
+        extract_into(&archive, &staging).expect("解压不该因为悬空链接失败");
+
+        assert!(staging.join("pack/plugin.json").is_file(), "别的条目照常");
+        assert!(
+            staging.join("pack/bin/passwd").symlink_metadata().is_err(),
+            "指向系统文件的链接不能落地"
+        );
+        assert!(
+            staging.join("pack/poppler/lib/terminfo").symlink_metadata().is_err(),
+            "包里没有目标的链接不落地"
+        );
     }
 
     #[test]

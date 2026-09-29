@@ -76,6 +76,9 @@ export default {
   "host.schedule.run.turnFailed": "턴을 시작할 수 없습니다.",
 
   "host.plugin.marketplaceFailed": "마켓 매니페스트를 가져오지 못했습니다.",
+  "host.plugin.marketplaceUnreachable": "{host}에 연결할 수 없습니다. 네트워크나 프록시를 확인한 뒤 “새로 고침”을 누르세요.",
+  "host.plugin.marketplaceNoManifest":
+    "{repo}에 마켓 매니페스트가 없습니다: .claude-plugin/, .cursor-plugin/, 저장소 루트 어디에도 marketplace.json이 없습니다. 주소를 확인하세요.",
   "host.plugin.notInMarketplace": "마켓에 플러그인 “{id}”이(가) 없습니다.",
   "host.plugin.unsupportedPlatform": "이 플러그인에는 현재 플랫폼({platform})용 빌드가 없습니다.",
   "host.plugin.downloadFailed": "플러그인 다운로드에 실패했습니다. 다시 클릭하면 중단 지점부터 이어받습니다.",
@@ -92,4 +95,5 @@ export default {
   "host.plugin.notUpdatable": "플러그인 “{id}”에는 추적 가능한 출처가 없어 업데이트할 수 없습니다. 제거 후 다시 설치하세요.",
   "host.plugin.idMismatch": "출처에 있는 플러그인은 “{actual}”이며 “{expected}”이 아닙니다. 업데이트하지 않았습니다.",
   "host.plugin.badMarketplace": "마켓 “{id}”의 ID 또는 출처가 비어 있거나 ID가 중복됩니다.",
+  "host.plugin.officialMarketplaceRequired": "공식 마켓 “{id}”은(는) 삭제할 수 없습니다. 보고 싶지 않다면 비활성화하세요.",
 } satisfies Dict<typeof zh>;

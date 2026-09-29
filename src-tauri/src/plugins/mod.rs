@@ -396,16 +396,22 @@ pub fn mcp_specs_except(
 // ── 安装：prepare → commit ────────────────────────────
 
 /// 拉全部启用的市场。网络失败装进各自的 `error`。
+///
+/// 并行拉：每个市场的 HTTP 超时是 20 秒，串着来的话三个连不上的市场就要
+/// 等一分钟，前端那条命令的期限也是一分钟 —— 结果是整页报"读取失败"
+/// 而不是三条"拉不到 xx"。顺序保持和配置里一致，设置页按这个顺序显示。
 pub async fn fetch_markets(
     marketplaces: &[MarketplaceConfig],
     config_path: &Path,
 ) -> Vec<Marketplace> {
     let cache = plugins_dir(config_path);
-    let mut out = Vec::new();
-    for m in marketplaces.iter().filter(|m| m.enabled) {
-        out.push(market::fetch(m, &cache).await);
-    }
-    out
+    futures::future::join_all(
+        marketplaces
+            .iter()
+            .filter(|m| m.enabled)
+            .map(|m| market::fetch(m, &cache)),
+    )
+    .await
 }
 
 /// 按请求把插件取到能预览的程度。返回待确认的安装和给确认页的预览。

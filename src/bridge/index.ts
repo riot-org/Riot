@@ -451,6 +451,8 @@ export interface ConfigStatus {
   configPath: string;
   /** 本次启动时配置读不懂，原文件被挪到了这里。正常启动没有这个字段。 */
   configBackup?: string | null;
+  /** 官方市场的 id。这一条不能移除（可以停用），设置页据此不给它「移除」键。 */
+  officialMarketplace: string;
 }
 
 /** 指定服务方有没有可用的 key。不传则看当前全局激活的那家。 */
@@ -1193,8 +1195,13 @@ export interface PluginPreview {
   replacesVersion?: string;
 }
 
-/** 安装进度。各阶段耗时差着数量级，所以分开报而不是合成一个百分比。 */
+/**
+ * 安装进度。各阶段耗时差着数量级，所以分开报而不是合成一个百分比。
+ * `starting` 是前端自己造的占位：命令已经发出、宿主还没推第一条进度
+ * 的那一两秒 —— 宿主从不发它。
+ */
 export type PluginProgress =
+  | { kind: "starting" }
   | { kind: "cloning" }
   | { kind: "downloading"; received: number; total: number }
   | { kind: "verifying" }
@@ -1251,9 +1258,9 @@ export function pluginsUpdate(id: string, onProgress: (p: PluginProgress) => voi
   return invoke("plugins_update", { id, onProgress: channel }, NO_DEADLINE);
 }
 
-/** 整体替换市场列表。 */
-export function pluginsSetMarketplaces(marketplaces: MarketplaceConfig[]): Promise<void> {
-  return invoke("plugins_set_marketplaces", { marketplaces });
+/** 整体替换市场列表。回保存后的配置，调用方拿它刷新 `ConfigStatus`。 */
+export function pluginsSetMarketplaces(marketplaces: MarketplaceConfig[]): Promise<ConfigStatus> {
+  return invoke<ConfigStatus>("plugins_set_marketplaces", { marketplaces });
 }
 
 /** 登记一个项目目录（验证并规范化），返回 canonical 根。不创建会话。 */

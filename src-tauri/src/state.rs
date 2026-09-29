@@ -2193,10 +2193,13 @@ impl AppState {
         self.plugins_commit(&preview.token, progress).await
     }
 
+    /// 整体替换市场列表。回保存后的配置：前端拿它刷新设置页 —— 它手里那份
+    /// `ConfigStatus` 是打开设置时拉的，不回的话开关和「移除」点了没有任何
+    /// 可见变化，看着像按钮坏了。
     pub async fn plugins_set_marketplaces(
         &self,
         marketplaces: Vec<riot_kernel::config::MarketplaceConfig>,
-    ) -> HostResult<()> {
+    ) -> HostResult<crate::config::ConfigStatus> {
         let mut config = self.config().await;
         // id 唯一、非空；来源非空。
         let mut seen = std::collections::HashSet::new();
@@ -2208,13 +2211,22 @@ impl AppState {
                 )));
             }
         }
-        config.plugin_marketplaces = marketplaces;
-        if let Err(e) = crate::config::save_at(&self.0.config_path, &config) {
-            tracing::warn!(error = %e, "市场列表没能写进配置");
+        // 官方市场不可删（理由见 `OFFICIAL_MARKETPLACE`）。设置页不给它「移除」，
+        // 走到这里的是旧版前端或远程客户端 —— 明说，别悄悄补回去让它以为删成了。
+        if !seen.contains(riot_kernel::config::OFFICIAL_MARKETPLACE) {
+            return Err(HostError::Ui(ui_error!(
+                "host.plugin.officialMarketplaceRequired",
+                id = riot_kernel::config::OFFICIAL_MARKETPLACE
+            )));
         }
-        self.set_config(config).await;
+        config.plugin_marketplaces = marketplaces;
+        // 写不进去就报错，和 `set_config` 一样。市场列表是纯配置，没有
+        // `commit_plugin_config` 那种"刚装好的东西不能因此不可用"的理由 ——
+        // 吞掉的话前端会闪一下「已保存」，重启后列表却是旧的。
+        crate::config::save_at(&self.0.config_path, &config)?;
+        self.set_config(config.clone()).await;
         *self.0.market_cache.lock().await = None;
-        Ok(())
+        Ok(crate::config::ConfigStatus::of(config))
     }
 
     /// 排队面板：当前排着的插话。
