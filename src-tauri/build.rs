@@ -6,6 +6,7 @@
 ///
 /// 两处都要改是刻意的：声明"存在"和授予"可用"是两件事。代价是加命令时
 /// 容易漏掉一处 —— 所以 `src-tauri/tests/acl.rs` 盯着这两份清单是否一致。
+#[cfg_attr(not(feature = "desktop"), allow(dead_code))]
 const COMMANDS: &[&str] = &[
     "subscribe_session",
     "send_turn",
@@ -119,6 +120,14 @@ const COMMANDS: &[&str] = &[
 ];
 
 fn main() {
+    // 无界面构建（riot-server）没有 Tauri：不嵌 manifest、不生成 ACL，
+    // 也没有 comctl32 要延迟加载。
+    #[cfg(feature = "desktop")]
+    desktop();
+}
+
+#[cfg(feature = "desktop")]
+fn desktop() {
     // Windows 上延迟加载 comctl32，否则测试二进制根本启动不了。
     //
     // [约束] tauri 栈（tauri-runtime-wry 的对话框、muda）导入 comctl32.dll

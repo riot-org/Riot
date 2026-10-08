@@ -23,13 +23,11 @@
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use tauri::ipc::{Channel, IpcResponse};
-use tauri::{AppHandle, Manager};
 
 use super::conn::ConnCtx;
 use super::protocol::channel_id;
-use crate::state::AppState;
-use crate::term::Terminals;
+use super::{HostCtx, Remote};
+use crate::ipc::{Channel, InvokeResponseBody, IpcResponse, State};
 use crate::{HostError, HostResult};
 use riot_protocol::{UiError, ui_error};
 
@@ -79,7 +77,8 @@ fn val<T: Serialize>(v: T) -> Result<Outcome, UiError> {
 
 /// 分发一条命令。
 pub async fn dispatch(
-    app: &AppHandle,
+    host: &HostCtx,
+    remote: &Remote,
     ctx: &ConnCtx,
     cmd: &str,
     args: Value,
@@ -90,8 +89,9 @@ pub async fn dispatch(
         _ => return Err(ui_error!("host.remote.badParam", name = "args")),
     };
     let mut a = Args { map, ctx };
-    let st = app.state::<AppState>();
-    let terms = app.state::<Terminals>();
+    let st = State::from_ref(&host.state);
+    let terms = State::from_ref(&host.terms);
+    let remote = State::from_ref(remote);
     let viewer = ctx.viewer.as_str();
 
     match cmd {
@@ -183,8 +183,8 @@ pub async fn dispatch(
         "read_image" => ok(crate::read_image(st, a.take("path")?).await),
         "read_file_bytes" => match crate::read_file_bytes(st, a.take("path")?).await {
             Ok(resp) => match resp.body() {
-                Ok(tauri::ipc::InvokeResponseBody::Raw(bytes)) => Ok(Outcome::Raw(bytes)),
-                Ok(tauri::ipc::InvokeResponseBody::Json(s)) => serde_json::from_str(&s)
+                Ok(InvokeResponseBody::Raw(bytes)) => Ok(Outcome::Raw(bytes)),
+                Ok(InvokeResponseBody::Json(s)) => serde_json::from_str(&s)
                     .map(Outcome::Json)
                     .map_err(|e| ui_error!("host.remote.encode"; e)),
                 Err(e) => Err(ui_error!("host.remote.encode"; e)),
@@ -332,16 +332,16 @@ pub async fn dispatch(
 
         // ── 配置与设置页 ──
         "get_config" => ok(crate::get_config(st).await),
-        "set_config" => ok(crate::set_config(app.clone(), st, a.take("config")?).await),
+        "set_config" => ok(crate::set_config(st, remote, a.take("config")?).await),
         "set_api_key" => ok(crate::set_api_key(st, a.take("providerId")?, a.take("key")?).await),
-        "app_version" => val(crate::app_version(app.clone())),
+        "app_version" => val(host.version.clone()),
         // 桌面窗口的外观和远端用户无关（见模块说明）。网页那头的 transport
-        // 本来就不会发这条，这里兜住的是手写的调用。形状和桌面那条一致：
-        // 浏览器里没有材质可透。
-        "set_appearance" => val(crate::vibrancy::Applied { backdrop: false }),
+        // 本来就不会发这条，这里兜住的是手写的调用。形状和桌面那条
+        // （`vibrancy::Applied`）一致：浏览器里没有材质可透。
+        "set_appearance" => val(serde_json::json!({ "backdrop": false })),
         // 通知该弹在远端用户的设备上，不是宿主机（见模块说明）。
         "notify" => val(()),
-        "check_update" => ok(crate::check_update(app.clone()).await),
+        "check_update" => ok(crate::update::check(&host.version).await),
         "mcp_status" => ok(crate::mcp_status(st).await),
         "mcp_restart" => ok(crate::mcp_restart(st, a.take("serverId")?).await),
         "mcp_export_json" => ok(crate::mcp_export_json(st).await),
@@ -371,8 +371,8 @@ pub async fn dispatch(
         }
         "test_search_backend" => ok(crate::test_search_backend(a.take("baseUrl")?).await),
         "list_models" => ok(crate::list_models(st, a.take("providerId")?).await),
-        "remote_status" => ok(crate::remote_status(app.clone()).await),
-        "remote_rotate_token" => ok(crate::remote_rotate_token(app.clone()).await),
+        "remote_status" => ok(crate::remote_status(st, remote).await),
+        "remote_rotate_token" => ok(crate::remote_rotate_token(remote).await),
 
         other => Err(ui_error!("host.remote.unknownCommand", command = other)),
     }

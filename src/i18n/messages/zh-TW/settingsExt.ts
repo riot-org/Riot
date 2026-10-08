@@ -99,6 +99,8 @@ export default {
   "settings.hooks.event.userPromptSubmit": "訊息送出前。exit 2 = 攔下這則訊息",
 
   "settings.remote.webNotice": "你正透過網頁存取這台機器上的 Riot。這裡的變更作用在主機上；關掉開關會讓目前頁面斷線。",
+  "settings.remote.managed":
+    "這台機器上跑的是無介面的 riot-server，遠端存取一直開著。要改監聽位址，用 --listen 參數重新啟動它。",
   "settings.remote.service": "服務",
   "settings.remote.enable": "允許遠端存取",
   "settings.remote.enable.desc":

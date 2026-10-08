@@ -119,8 +119,13 @@ fn default_cache_dir() -> PathBuf {
         .filter(|s| !s.is_empty())
         .map_or_else(
             || {
-                let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-                PathBuf::from(home).join("Library/Application Support")
+                let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()));
+                // 和 riot-kernel 的配置目录同一套规则（config.rs 的 dirs_config）。
+                if cfg!(target_os = "macos") {
+                    home.join("Library/Application Support")
+                } else {
+                    home.join(".config")
+                }
             },
             PathBuf::from,
         );

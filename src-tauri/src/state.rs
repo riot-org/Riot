@@ -15,8 +15,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::ipc::{Channel, InvokeResponseBody};
 use serde::Serialize;
-use tauri::ipc::Channel;
 use tokio::sync::Mutex;
 
 use riot_protocol::event::AgentEvent;
@@ -144,7 +144,7 @@ struct Sink {
 /// dev 下 StrictMode 每次挂载都连发 open → close → open,三条一乱序就中。
 struct FrameSink {
     epoch: u64,
-    channel: Channel<tauri::ipc::InvokeResponseBody>,
+    channel: Channel<InvokeResponseBody>,
 }
 
 /// 一个会话的浏览器面板此刻有哪些观看者。
@@ -168,12 +168,7 @@ struct PanelHub {
 impl PanelHub {
     /// 装上一个观看者的帧出口。回 `false` 表示这是迟到的旧订阅(表里已经有
     /// 同观看者更新的一条),没有装上 —— 它的通道前端早已弃用,不能盖掉新的。
-    fn attach(
-        &mut self,
-        viewer: &str,
-        epoch: u64,
-        channel: Channel<tauri::ipc::InvokeResponseBody>,
-    ) -> bool {
+    fn attach(&mut self, viewer: &str, epoch: u64, channel: Channel<InvokeResponseBody>) -> bool {
         if self.frames.get(viewer).is_some_and(|s| s.epoch > epoch) {
             return false;
         }
@@ -334,9 +329,10 @@ struct Inner {
     /// 落盘（schedules.json）在拿着这把锁时同步做 —— 和 index_lock 同一条
     /// "快照与写盘一个临界区"的规矩，否则并发保存会让旧快照后落盘。
     schedules: Mutex<SchedState>,
-    /// Tauri 应用句柄。setup 时挂上；系统通知和全局 emit 靠它。
-    /// 单元测试不挂 —— 拿不到就静默跳过那两件事。
-    app: std::sync::OnceLock<tauri::AppHandle>,
+    /// 全局事件（侧栏会话表、定时任务）。桌面窗口那边由 setup 起一个任务
+    /// 转成 `app.emit`，每条远程连接各订一份转成 Event 帧。没人订（单元
+    /// 测试）时 send 失败，静默丢掉。
+    events: tokio::sync::broadcast::Sender<HostEvent>,
     /// 准备好、等用户在确认页点头的插件安装。令牌 → 待装。用户点"取消"
     /// 或关掉设置时收掉临时目录。
     pending_installs: Mutex<HashMap<String, crate::plugins::Pending>>,
@@ -391,7 +387,7 @@ impl Inner {
             browser_hub,
             env_alerts: crate::env_probe::AlertSeen::default(),
             schedules: Mutex::default(),
-            app: std::sync::OnceLock::new(),
+            events: tokio::sync::broadcast::channel(EVENT_BUS_CAPACITY).0,
             pending_installs: Mutex::default(),
             market_cache: Mutex::default(),
             mcp_quiesced: Mutex::default(),
@@ -518,10 +514,8 @@ impl AppState {
     /// 反向请求(终端/浏览器)的处理端。
     /// Tauri setup 时调一次 —— `restore` 是同步的,不能在那里 spawn。
     ///
-    /// `[约束]` 这里必须用 `tauri::async_runtime::spawn`,不能用裸
-    /// `tokio::spawn`:setup 回调跑在 macOS 的 AppKit 主线程上,不在任何
-    /// tokio runtime 的上下文里 —— 裸 spawn 会当场 panic
-    /// (no reactor running),App 直接起不来。
+    /// `[约束]` 这里必须用 [`crate::ipc::spawn`],不能用裸 `tokio::spawn`,
+    /// 理由见那边。
     pub fn spawn_host_bridge(&self) {
         self.0
             .kernel
@@ -530,7 +524,7 @@ impl AppState {
             return;
         };
         let state = self.clone();
-        tauri::async_runtime::spawn(async move {
+        crate::ipc::spawn(async move {
             while let Some(n) = rx.recv().await {
                 match n {
                     HostNotice::Started { session_id } => {
@@ -785,7 +779,7 @@ impl AppState {
                 for (v, sink) in hub.frames.iter() {
                     if sink
                         .channel
-                        .send(tauri::ipc::InvokeResponseBody::Raw(buf.clone()))
+                        .send(InvokeResponseBody::Raw(buf.clone()))
                         .is_err()
                     {
                         dead.push(v.clone());
@@ -883,7 +877,7 @@ impl AppState {
         viewer: &str,
         epoch: u64,
         session_id: &str,
-        on_frame: Channel<tauri::ipc::InvokeResponseBody>,
+        on_frame: Channel<InvokeResponseBody>,
     ) -> HostResult<crate::browser::access::PanelState> {
         let b = self.panel_browser(session_id).await?;
         let attached = self
@@ -2686,10 +2680,9 @@ impl AppState {
     // 定时任务。调度权威在宿主（riot_protocol::schedule 模块头）。
     // ────────────────────────────────────────────────────────
 
-    /// 挂上 Tauri 应用句柄。setup 时调一次；系统通知和全局 emit 靠它，
-    /// 没挂（单元测试）就静默跳过那两件事。
-    pub fn attach_app(&self, app: tauri::AppHandle) {
-        let _ = self.0.app.set(app);
+    /// 订阅全局事件。桌面转 `app.emit`，远程连接转 Event 帧。
+    pub fn subscribe_events(&self) -> tokio::sync::broadcast::Receiver<HostEvent> {
+        self.0.events.subscribe()
     }
 
     /// 创建定时任务。`origin_session` 是发起会话：`in_this_session` 的
@@ -2929,7 +2922,7 @@ impl AppState {
                 .ok_or_else(|| ui_error!("host.schedule.notFound", id = id))?
         };
         let state = self.clone();
-        tauri::async_runtime::spawn(async move {
+        crate::ipc::spawn(async move {
             state.run_schedule(task).await;
         });
         Ok(())
@@ -2974,7 +2967,7 @@ impl AppState {
         };
         for task in due {
             let state = self.clone();
-            tauri::async_runtime::spawn(async move {
+            crate::ipc::spawn(async move {
                 state.run_schedule(task).await;
             });
         }
@@ -3147,20 +3140,15 @@ impl AppState {
     /// 窗口靠它重拉侧栏 —— 没有这条的话，一端新建的会话另一端永远看不见，
     /// 除非重启。前端自己操作后也会收到一次，多拉一遍列表无害。
     fn emit_sessions_changed(&self) {
-        let Some(app) = self.0.app.get() else { return };
-        use tauri::Emitter;
-        if let Err(e) = app.emit("sessions_changed", ()) {
-            tracing::debug!(error = %e, "sessions_changed 事件没发出去");
-        }
+        self.emit("sessions_changed", serde_json::Value::Null);
     }
 
     /// 广播定时任务的运行事件（全局 emit）。低频、无会话归属，不走
     /// 会话的 Channel —— 前端拿它刷新侧栏和任务面板。
     fn emit_schedule(&self, run: ScheduleRun) {
-        let Some(app) = self.0.app.get() else { return };
-        use tauri::Emitter;
-        if let Err(e) = app.emit("schedule_run", &run) {
-            tracing::debug!(error = %e, "schedule_run 事件没发出去");
+        match serde_json::to_value(&run) {
+            Ok(v) => self.emit("schedule_run", v),
+            Err(e) => tracing::debug!(error = %e, "schedule_run 事件没发出去"),
         }
     }
 
@@ -3168,13 +3156,26 @@ impl AppState {
     /// 调工具** —— 没有这个事件，侧栏要等到任务首次运行才看得见它。
     /// 前端自己操作后也会收到一次，多拉一遍列表无害。
     fn emit_schedule_changed(&self) {
-        let Some(app) = self.0.app.get() else { return };
-        use tauri::Emitter;
-        if let Err(e) = app.emit("schedule_changed", ()) {
-            tracing::debug!(error = %e, "schedule_changed 事件没发出去");
-        }
+        self.emit("schedule_changed", serde_json::Value::Null);
+    }
+
+    fn emit(&self, name: &'static str, payload: serde_json::Value) {
+        // Err = 此刻没有订阅方（单元测试、桌面窗口还没起来），不算失败。
+        let _ = self.0.events.send(HostEvent { name, payload });
     }
 }
+
+/// 一条全局事件（对应前端的 `listen(name)`）。
+#[derive(Debug, Clone)]
+pub struct HostEvent {
+    pub name: &'static str,
+    pub payload: serde_json::Value,
+}
+
+/// 全局事件的缓冲。都是低频事件（会话表、定时任务），订阅方落后这么多条
+/// 说明它已经卡死了；落后的订阅方收到 `Lagged` 后接着收，丢掉的几条只是
+/// "该重拉列表了"的重复提醒。
+const EVENT_BUS_CAPACITY: usize = 256;
 
 /// 宿主配置的沙箱档位 → 传输档位。
 fn sandbox_kind(mode: crate::config::SandboxMode) -> riot_protocol::SandboxKind {
@@ -3589,7 +3590,7 @@ mod tests {
     }
 
     /// 造一个能认出自己收没收到帧的帧出口。
-    fn frame_probe() -> (Channel<tauri::ipc::InvokeResponseBody>, Arc<AtomicU64>) {
+    fn frame_probe() -> (Channel<InvokeResponseBody>, Arc<AtomicU64>) {
         let hits = Arc::new(AtomicU64::new(0));
         let h = Arc::clone(&hits);
         let ch = Channel::new(move |_| {
@@ -3659,7 +3660,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("{order:?}：表里该留着一条"));
             assert_eq!(sink.epoch, 2, "{order:?}：留下的必须是第 2 次订阅");
             sink.channel
-                .send(tauri::ipc::InvokeResponseBody::Raw(vec![]))
+                .send(InvokeResponseBody::Raw(vec![]))
                 .expect("发一帧");
             assert_eq!(
                 hits1.load(Ordering::SeqCst),

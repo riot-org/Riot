@@ -55,13 +55,17 @@ export function RemotePane({
       .catch((e: unknown) => setError(String(e)));
   }, []);
 
+  // riot-server 上服务一直开着，配置里的开关不算数。
+  const managed = live?.managed ?? false;
+  const on = managed || remote.enabled;
+
   // 连接数会变，开着的时候轮询一下；关着就没必要。
   useEffect(() => {
     refresh();
-    if (!remote.enabled) return;
+    if (!on) return;
     const t = window.setInterval(refresh, 3000);
     return () => window.clearInterval(t);
-  }, [refresh, remote.enabled]);
+  }, [refresh, on]);
 
   const patch = async (p: Partial<RemoteConfig>) => {
     setError("");
@@ -120,11 +124,11 @@ export function RemotePane({
 
   return (
     <>
-      {host.kind === "web" ? (
+      {host.kind === "web" || managed ? (
         <Card>
           <CardBlock>
             <p className="hint" style={{ margin: 0 }}>
-              {t("settings.remote.webNotice")}
+              {managed ? t("settings.remote.managed") : t("settings.remote.webNotice")}
             </p>
           </CardBlock>
         </Card>
@@ -132,35 +136,43 @@ export function RemotePane({
 
       <Group title={t("settings.remote.service")}>
         <Card>
-          <Row title={t("settings.remote.enable")} desc={t("settings.remote.enable.desc")}>
-            <Switch
-              on={remote.enabled}
-              onChange={(v) => void patch({ enabled: v })}
-              label={t("settings.remote.enable")}
-            />
-          </Row>
-          <Row title={t("settings.remote.bind")} desc={t("settings.remote.bind.desc")}>
-            <FieldSelect
-              value={remote.bind}
-              onChange={(v) => void patch({ bind: v as RemoteConfig["bind"] })}
-              options={[
-                { value: "loopback", label: t("settings.remote.bind.loopback") },
-                { value: "lan", label: t("settings.remote.bind.lan") },
-              ]}
-            />
-          </Row>
-          <Row title={t("settings.remote.port")} desc={t("settings.remote.port.desc")} htmlFor="remote-port">
-            <span className="field-inline">
-              <FieldNumber
-                id="remote-port"
-                value={port}
-                onChange={(e) => setPort(e.target.value)}
-                onBlur={commitPort}
-                onKeyDown={blurOnEnter}
-                aria-label={t("settings.remote.port")}
-              />
-            </span>
-          </Row>
+          {managed ? null : (
+            <>
+              <Row title={t("settings.remote.enable")} desc={t("settings.remote.enable.desc")}>
+                <Switch
+                  on={remote.enabled}
+                  onChange={(v) => void patch({ enabled: v })}
+                  label={t("settings.remote.enable")}
+                />
+              </Row>
+              <Row title={t("settings.remote.bind")} desc={t("settings.remote.bind.desc")}>
+                <FieldSelect
+                  value={remote.bind}
+                  onChange={(v) => void patch({ bind: v as RemoteConfig["bind"] })}
+                  options={[
+                    { value: "loopback", label: t("settings.remote.bind.loopback") },
+                    { value: "lan", label: t("settings.remote.bind.lan") },
+                  ]}
+                />
+              </Row>
+              <Row
+                title={t("settings.remote.port")}
+                desc={t("settings.remote.port.desc")}
+                htmlFor="remote-port"
+              >
+                <span className="field-inline">
+                  <FieldNumber
+                    id="remote-port"
+                    value={port}
+                    onChange={(e) => setPort(e.target.value)}
+                    onBlur={commitPort}
+                    onKeyDown={blurOnEnter}
+                    aria-label={t("settings.remote.port")}
+                  />
+                </span>
+              </Row>
+            </>
+          )}
           {live ? (
             <CardBlock>
               {live.error ? (
@@ -218,7 +230,7 @@ export function RemotePane({
                     </button>
                   </div>
                 ) : null}
-                {remote.bind === "loopback" ? (
+                {live.bind === "loopback" ? (
                   <p className="hint" style={{ margin: 0 }}>
                     {t("settings.remote.loopbackHint", { port: live.port })}
                   </p>

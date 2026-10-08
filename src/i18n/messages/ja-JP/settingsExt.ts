@@ -99,6 +99,8 @@ export default {
   "settings.hooks.event.userPromptSubmit": "メッセージ送信前。exit 2 = このメッセージをブロック",
 
   "settings.remote.webNotice": "このマシン上の Riot を Web 経由で使用しています。ここでの変更はホスト側に適用されます。スイッチをオフにするとこのページは切断されます。",
+  "settings.remote.managed":
+    "このマシンではヘッドレスの riot-server が動いているため、リモートアクセスは常に有効です。待ち受けアドレスを変えるには --listen を付けて再起動してください。",
   "settings.remote.service": "サービス",
   "settings.remote.enable": "リモートアクセスを許可",
   "settings.remote.enable.desc":

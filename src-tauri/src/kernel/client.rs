@@ -11,8 +11,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::ipc::Channel;
 use serde_json::Value;
-use tauri::ipc::Channel;
 use tokio::sync::{Mutex, mpsc};
 
 use riot_protocol::event::{AgentError, AgentEvent, TerminalReason};

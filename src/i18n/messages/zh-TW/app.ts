@@ -122,7 +122,7 @@ export default {
   "app.remote.connectingHost": "正在連線到主機…",
   "app.remote.reconnecting": "與主機的連線中斷了，正在重新連線…",
   "app.remote.title": "連線到 Riot",
-  "app.remote.hint": "輸入桌面版「設定 → 遠端存取」裡顯示的存取權杖。掃描那裡的 QR Code 可以跳過這一步。",
+  "app.remote.hint": "輸入桌面版「設定 → 遠端存取」裡顯示的存取權杖。掃描那裡的 QR Code 可以跳過這一步。伺服器版：在伺服器上執行 riot-server token 取得登入連結。",
   "app.remote.denied": "主機拒絕了上一次連線：{reason}",
   "app.remote.tokenPlaceholder": "存取權杖",
   "app.remote.connect": "連線",

@@ -1,10 +1,11 @@
 //! HTTP 层：静态资源 + WebSocket 升级。
 //!
-//! 网页版加载的是**和桌面窗口同一份**前端产物：正式包里它嵌在可执行文件里
-//! （`tauri::generate_context!`），开发模式下 Tauri 的 asset resolver 退回读
-//! `dist/` 目录。所以没有第二套构建、没有第二份 HTML —— 桌面能用的界面
-//! 网页就能用。开发时 `dist/` 还没建出来的话，`/` 跳到 Vite 的 devUrl，
-//! 那边的 `/ws` 由 `vite.config.ts` 反代回这里。
+//! 网页版加载的是**和桌面窗口同一份**前端产物：桌面正式包里它嵌在可执行
+//! 文件里（`tauri::generate_context!`），开发模式下 Tauri 的 asset resolver
+//! 退回读 `dist/` 目录；`riot-server` 直接读磁盘上的 `dist/`（见 [`super::Assets`]）。
+//! 所以没有第二套构建、没有第二份 HTML —— 桌面能用的界面网页就能用。开发时
+//! `dist/` 还没建出来的话，`/` 跳到 Vite 的 devUrl，那边的 `/ws` 由
+//! `vite.config.ts` 反代回这里。
 
 // 宿主层：真实 socket。见 clippy.toml。
 #![allow(clippy::disallowed_methods)]
@@ -20,14 +21,14 @@ use axum::extract::{Request, State};
 use axum::http::{HeaderMap, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
-use tauri::AppHandle;
 use tokio::sync::watch;
 
-use super::{Shared, conn};
+use super::{HostCtx, Remote, Shared, conn};
 
 #[derive(Clone)]
 struct Ctx {
-    app: AppHandle,
+    host: HostCtx,
+    remote: Remote,
     shared: Arc<Shared>,
     /// 服务要停了(关开关、换端口):翻成 true,每条连接看到就自己退出。
     kick: watch::Receiver<bool>,
@@ -44,12 +45,22 @@ const CSP: &str = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; \
     font-src 'self' data:; media-src 'self' blob: data:; \
     connect-src 'self' ws: wss: data: blob:; frame-ancestors 'none'";
 
-pub fn router(app: AppHandle, shared: Arc<Shared>, kick: watch::Receiver<bool>) -> Router {
+pub fn router(
+    host: HostCtx,
+    remote: Remote,
+    shared: Arc<Shared>,
+    kick: watch::Receiver<bool>,
+) -> Router {
     Router::new()
         .route("/ws", get(ws_upgrade))
         .route("/healthz", get(|| async { "ok" }))
         .fallback(get(static_asset))
-        .with_state(Ctx { app, shared, kick })
+        .with_state(Ctx {
+            host,
+            remote,
+            shared,
+            kick,
+        })
 }
 
 /// WebSocket 握手。这里只做**来源**校验；令牌在连接建立后的第一帧里验
@@ -73,54 +84,53 @@ async fn ws_upgrade(
         headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()),
         !ctx.shared.allowed_origins.is_empty(),
     );
-    let app = ctx.app.clone();
+    let host = ctx.host.clone();
+    let remote = ctx.remote.clone();
     let shared = Arc::clone(&ctx.shared);
     let kick = ctx.kick.clone();
-    ws.on_upgrade(move |socket| conn::serve(socket, app, shared, client, kick))
+    ws.on_upgrade(move |socket| conn::serve(socket, host, remote, shared, client, kick))
 }
 
-/// 静态资源：从 Tauri 的 asset resolver 取，找不到的路径回 index.html
+/// 静态资源：从 [`super::Assets`] 取，找不到的路径回 index.html
 /// （单页应用的路由都在前端）。
 async fn static_asset(State(ctx): State<Ctx>, req: Request) -> Response {
     let uri: &Uri = req.uri();
     let path = uri.path().to_owned();
+    let assets = &ctx.host.assets;
 
-    // 开发模式（`tauri dev`，tauri-build 打的 cfg）：前端在 Vite 那边热更新，
-    // 磁盘上的 dist/ 多半是上次 build 留下的陈货，端出去只会让人对着旧界面
-    // 排查新代码。一律跳去 devUrl，那边的 /ws 反代回这里（见 vite.config.ts）。
-    #[cfg(dev)]
-    if let Some(dev) = ctx.app.config().build.dev_url.as_ref() {
-        let mut target = dev.clone();
-        target.set_path(uri.path());
-        target.set_query(uri.query());
-        return Redirect::temporary(target.as_str()).into_response();
+    // 开发模式（`tauri dev`）：前端在 Vite 那边热更新，磁盘上的 dist/ 多半
+    // 是上次 build 留下的陈货，端出去只会让人对着旧界面排查新代码。一律
+    // 跳去 devUrl，那边的 /ws 反代回这里（见 vite.config.ts）。
+    if let Some(dev) = assets.dev_redirect() {
+        let target = match uri.path_and_query() {
+            Some(pq) => format!("{}{}", dev.trim_end_matches('/'), pq.as_str()),
+            None => dev,
+        };
+        return Redirect::temporary(&target).into_response();
     }
 
-    let resolver = ctx.app.asset_resolver();
     // 目录请求（`/`）和没有扩展名的路径（单页应用的前端路由）都落到
     // index.html。正式包里 resolver 自己会这么兜；开发模式它读的是磁盘上的
     // dist/，对 `/` 会去 read 一个目录然后失败，所以这里先替它换成入口页。
     let is_route = path.ends_with('/') || !path.rsplit('/').next().unwrap_or("").contains('.');
     let asset = if is_route {
-        resolver.get("/index.html".to_owned())
+        assets.get("/index.html")
     } else {
-        resolver
-            .get(path.clone())
-            .or_else(|| resolver.get("/index.html".to_owned()))
+        assets.get(&path).or_else(|| assets.get("/index.html"))
     };
     let Some(asset) = asset else {
         // 开发模式、dist 没建：跳去 Vite。正式包里 index.html 一定在，
         // 走不到这里。
-        if let Some(dev) = ctx.app.config().build.dev_url.as_ref() {
-            return Redirect::temporary(dev.as_str()).into_response();
+        if let Some(dev) = assets.missing_fallback() {
+            return Redirect::temporary(&dev).into_response();
         }
         return (StatusCode::NOT_FOUND, "not found").into_response();
     };
 
-    let is_html = asset.mime_type.starts_with("text/html");
+    let is_html = asset.mime.starts_with("text/html");
     let mut resp = Response::builder()
         .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, asset.mime_type.as_str())
+        .header(header::CONTENT_TYPE, asset.mime.as_str())
         .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff");
     if is_html {
         resp = resp

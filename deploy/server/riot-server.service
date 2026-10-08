@@ -1,0 +1,31 @@
+# Riot 无界面版（网页访问）。
+#
+#   sudo useradd -m -s /bin/bash riot
+#   sudo tar -C /opt -xzf riot-server-*-linux-*.tar.gz && sudo mv /opt/riot-server-* /opt/riot
+#   sudo cp /opt/riot/riot-server.service /etc/systemd/system/
+#   sudo systemctl enable --now riot-server
+#   sudo -u riot /opt/riot/riot-server token     # 登录链接
+#
+# agent 以 User= 这个账户的身份跑命令、读写文件：给它一个自己的账户，
+# 别用 root，也别用你的日常账户。配置和会话在它的 ~/.config/riot/。
+[Unit]
+Description=Riot (headless, web UI)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=riot
+WorkingDirectory=~
+# 默认只听本机，外面经 nginx / Caddy / Tailscale Serve 转进来（网页版不带
+# TLS）。反向代理的外部地址要写进 RIOT_REMOTE_ALLOWED_ORIGINS，否则
+# WebSocket 握手会因为 Origin 对不上被拒。
+ExecStart=/opt/riot/riot-server --listen 127.0.0.1:7823
+Environment=RIOT_LOG=info
+#Environment=RIOT_REMOTE_ALLOWED_ORIGINS=https://riot.example.com
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

@@ -100,6 +100,8 @@ export default {
   "settings.hooks.event.userPromptSubmit": "消息发出前。exit 2 = 拦下这条消息",
 
   "settings.remote.webNotice": "你正通过网页访问这台机器上的 Riot。这里的改动作用在宿主机上；关掉开关会让当前页面断开。",
+  "settings.remote.managed":
+    "这台机器上跑的是无界面的 riot-server，远程访问一直开着。要改监听地址，用 --listen 参数重启它。",
   "settings.remote.service": "服务",
   "settings.remote.enable": "允许远程访问",
   "settings.remote.enable.desc":

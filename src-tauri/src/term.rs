@@ -24,11 +24,11 @@ use std::io::{Read, Write};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
+use crate::ipc::Channel;
 use base64::Engine as _;
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use riot_protocol::{UiError, ui_error};
 use serde::Serialize;
-use tauri::ipc::Channel;
 
 /// 推给前端的终端事件。
 #[derive(Debug, Clone, Serialize)]
@@ -658,8 +658,7 @@ fn tail_lines(text: &str, lines: usize) -> String {
 /// 用户的默认 shell。
 #[cfg(unix)]
 fn default_shell() -> CommandBuilder {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_owned());
-    let mut cmd = CommandBuilder::new(shell);
+    let mut cmd = CommandBuilder::new(crate::gui_env::user_shell());
     // 登录 shell。GUI 进程不继承终端的 PATH，而用户的 PATH 通常写在
     // 登录期加载的 rc 里 —— macOS 的 Terminal.app 也是这么起 shell 的。
     // 不带 -l 的话，brew 装的一切命令都会"command not found"。
@@ -741,7 +740,7 @@ pub(crate) mod testing {
         let g = Arc::clone(&got);
         let ch = Channel::new(move |ev| {
             // InvokeResponseBody 只在真实 IPC 下是结构化的；测试里拿原始 JSON。
-            if let tauri::ipc::InvokeResponseBody::Json(s) = ev {
+            if let crate::ipc::InvokeResponseBody::Json(s) = ev {
                 let parsed: serde_json::Value = serde_json::from_str(&s).expect("事件是 JSON");
                 let ev = if parsed["kind"] == "exit" {
                     TermEvent::Exit

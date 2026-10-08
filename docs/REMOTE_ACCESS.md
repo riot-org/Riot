@@ -11,8 +11,10 @@
 终端面板、同一个浏览器面板、同一份设置。桌面窗口和网页是**同一个 Riot 的两个
 观看者**，任何一边的操作另一边立刻看得到。
 
+另有一个**无界面宿主** `riot-server`：同一份宿主代码不带 Tauri 编出来，只有
+网页版，给没有桌面的 Linux 服务器用（见 §9）。
+
 **非目标**：
-- 不做独立部署的"Web 服务版"。宿主仍是 Tauri 桌面进程，网页版随它起停。
 - 不做多用户。一台机器一个 Riot 一个主人，令牌就是主人的身份。
 - 不做 TLS（理由见 §5）。
 - 不做移动端专属布局。现有布局在窄屏上能用（侧栏可收起），专门的手机排版另立专题。
@@ -173,6 +175,8 @@ src-tauri/src/remote/
   server.rs     axum 路由：静态资源（asset resolver）、/ws 握手
   conn.rs       一条连接：鉴权 → 读写循环 → 收尾
   dispatch.rs   命令名 → lib.rs 同一个处理函数
+src-tauri/src/ipc.rs          Channel / State / spawn：桌面转用 Tauri 的，无界面自带实现
+src-tauri/src/headless.rs     riot-server：参数、启动、磁盘上的前端产物
 src-tauri/src/dir_browse.rs   网页版目录选择器的宿主侧
 src-tauri/src/state.rs        attach_sink(viewer,…) / detach_viewer / browser_*_for（面板扇出）
 src-tauri/src/term.rs         按观看者的 sinks
@@ -207,3 +211,47 @@ vite.config.ts   dev 时 /ws 反代到宿主，网页在 dev 和正式包里连�
 - 单测：`cargo test -p riot-host --lib -- remote:: dir_browse::`，`cargo test -p riot-host --test acl`。
 - 手测清单：扫码登录；两个观看者同时看一个会话、任一边发消息另一边同步；重连后终端
   回放、浏览器画面恢复；换令牌后旧页面被拒、输入新令牌恢复；关掉开关后网页断开。
+
+---
+
+## 9. 无界面宿主（riot-server）
+
+**为什么要单独编。** Linux 上的 `tauri` crate 无条件链接 GTK（webkit2gtk 是可选的，
+GTK 不是），服务器上没有显示器，GTK 初始化就失败。所以 `riot-host` 有一个默认开着
+的 `desktop` 特性，关掉它编出来的宿主库里没有任何 Tauri 代码：
+
+```text
+cargo build -p riot-host --no-default-features --bin riot-server
+cargo build -p riot-kernel
+```
+
+`[约束]` 宿主代码只从 `crate::ipc` 拿 `Channel` / `State` / `spawn`，不直接写
+`tauri::`。桌面构建里它们就是 Tauri 的类型（前端经 IPC 传进来的必须是
+`tauri::ipc::Channel`），无界面构建里是同形状的自带实现。命令函数统一标
+`#[cfg_attr(feature = "desktop", tauri::command)]`，参数用 `ipc::State` —— 这样
+`dispatch.rs` 能拿自己手里的引用调同一个函数。只有窗口、系统对话框、剪贴板、
+通知这几条命令是 `#[cfg(feature = "desktop")]`。CI 的 `server-linux` job 盯着
+无界面构建能编、能过测试。
+
+全局事件（`sessions_changed`、`schedule_*`）走 `AppState` 自己的广播总线：桌面
+setup 里起一个任务转成 `app.emit`，每条远程连接各订一份转成 Event 帧。
+
+**和桌面的差别。**
+
+| | 桌面 | riot-server |
+|---|---|---|
+| 远程访问开关 | 设置页，默认关 | 一直开，地址来自 `--listen` / `RIOT_LISTEN`（默认 `127.0.0.1:7823`） |
+| 设置 → 远程访问 | 开关、绑定、端口 | 只读（`RemoteStatus.managed`） |
+| 前端产物 | 嵌在可执行文件里 | `--web-dir` / `RIOT_WEB_DIR`，缺省找二进制旁的 `web/` |
+| 登录链接 | 设置页 / 二维码 | `riot-server token`（`--rotate` 换一枚） |
+| 内置浏览器面板 | 有 | 没有（CEF 没有 Linux 包），模型的浏览器工具报不可用 |
+| 命令隔离 | seatbelt / Windows 沙箱 | Linux 未实现，`sandbox_status` 报 `implemented: false` |
+
+`[约束]` 启动日志里不打令牌。systemd 下 stdout 就是 journal，能读日志的人不该
+因此拿到主人身份。`riot-server token` 只在调用者自己的终端里打印。
+
+**部署。** `scripts/package-server.sh` 打 tar 包（布局即默认查找布局），
+`deploy/server/riot-server.service` 是 systemd unit，`deploy/server/Dockerfile`
+是镜像。都默认只听本机：网页版没有 TLS，对外经反向代理 / 隧道，外部地址写进
+`RIOT_REMOTE_ALLOWED_ORIGINS`（§5 的 Origin 校验）。agent 以服务账户的身份跑
+命令 —— 给它一个自己的账户，别用 root。

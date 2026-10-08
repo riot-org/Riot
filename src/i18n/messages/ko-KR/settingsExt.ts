@@ -99,6 +99,8 @@ export default {
   "settings.hooks.event.userPromptSubmit": "메시지 전송 전. exit 2 = 이 메시지 차단",
 
   "settings.remote.webNotice": "지금 웹 페이지를 통해 이 컴퓨터의 Riot에 접근하고 있습니다. 여기서 바꾼 내용은 호스트에 적용되며, 스위치를 끄면 현재 페이지의 연결이 끊어집니다.",
+  "settings.remote.managed":
+    "이 컴퓨터에서는 화면 없는 riot-server가 실행 중이라 원격 접근이 항상 켜져 있습니다. 수신 주소를 바꾸려면 --listen 옵션으로 다시 시작하세요.",
   "settings.remote.service": "서비스",
   "settings.remote.enable": "원격 접근 허용",
   "settings.remote.enable.desc":

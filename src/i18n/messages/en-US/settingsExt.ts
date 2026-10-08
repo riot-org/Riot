@@ -103,6 +103,8 @@ export default {
 
   "settings.remote.webNotice":
     "You're using Riot on this machine through the browser. Changes here apply to the host; turning the switch off will disconnect this page.",
+  "settings.remote.managed":
+    "This machine runs the headless riot-server, so remote access is always on. To change the listen address, restart it with --listen.",
   "settings.remote.service": "Service",
   "settings.remote.enable": "Allow remote access",
   "settings.remote.enable.desc":

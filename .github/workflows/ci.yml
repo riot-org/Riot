@@ -120,6 +120,19 @@ jobs:
       - run: cargo clippy -p srt-win -- -D warnings
       - run: cargo test -p srt-win --test sd_access_check_matrix
 
+  # Linux 无界面宿主（riot-server）。不带 desktop 特性就不链接 Tauri / GTK，
+  # 所以不用装 WebKitGTK —— 这也是 riot-host 在 Linux 上唯一的覆盖。
+  server-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy -p riot-host --no-default-features --all-targets -- -D warnings
+      - run: cargo test -p riot-host --no-default-features --lib --bins --test acl
+
   # vendored srt-win 的**真机**验证：跑上游自带的冒烟脚本。
   #
   # 这是本机 Mac 完全够不到的那一层。`scripts/check-windows-sandbox.sh` 只能

@@ -122,7 +122,7 @@ export default {
   "app.remote.connectingHost": "호스트에 연결하는 중…",
   "app.remote.reconnecting": "호스트와의 연결이 끊어졌습니다. 다시 연결하는 중…",
   "app.remote.title": "Riot에 연결",
-  "app.remote.hint": "데스크톱 앱의 「설정 → 원격 접근」에 표시된 액세스 토큰을 입력하세요. 그곳의 QR 코드를 스캔하면 이 단계를 건너뛸 수 있습니다.",
+  "app.remote.hint": "데스크톱 앱의 「설정 → 원격 접근」에 표시된 액세스 토큰을 입력하세요. 그곳의 QR 코드를 스캔하면 이 단계를 건너뛸 수 있습니다. 서버 설치라면 서버에서 riot-server token을 실행해 로그인 링크를 받으세요.",
   "app.remote.denied": "호스트가 마지막 연결을 거부했습니다: {reason}",
   "app.remote.tokenPlaceholder": "액세스 토큰",
   "app.remote.connect": "연결",

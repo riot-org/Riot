@@ -1951,6 +1951,8 @@ export function remoteDeniedReason(): UiTextPayload | null {
 /** 远程访问服务的状态（设置页）。 */
 export interface RemoteStatus {
   enabled: boolean;
+  /** 宿主是无界面的 riot-server：监听地址由启动参数定，设置页不给开关、端口和绑定。 */
+  managed: boolean;
   running: boolean;
   bind: "loopback" | "lan";
   port: number;

@@ -53,7 +53,8 @@ jobs:
           name="Riot ${version}"
           body="$(printf '%s\n' \
             'macOS：`Riot_*_aarch64.dmg`（Apple Silicon）' \
-            'Windows：`Riot_*_x64-setup.exe`')"
+            'Windows：`Riot_*_x64-setup.exe`' \
+            'Linux 服务器（无界面，网页访问）：`riot-server-*-linux-x86_64.tar.gz` / `riot-server-*-linux-aarch64.tar.gz`')"
 
           # 草稿必须扫列表。同一 tag 若已经拆成多份，拿资产最多的那份。
           # 用 awk 收齐，不用 head：pipefail 下提前关管道会 SIGPIPE。
@@ -229,9 +230,37 @@ jobs:
           tauriScript: pnpm tauri
           retryAttempts: 2
 
+  # Linux 无界面版：tar 包里是 riot-server + 内核 + 前端产物 + systemd unit。
+  # 在 22.04 上编，glibc 2.35 —— 更新的发行版也能跑。没有内置浏览器（CEF）。
+  server-linux:
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-22.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - id: pkg
+        run: echo "tarball=$(scripts/package-server.sh | tail -1)" >> "$GITHUB_OUTPUT"
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version=$(python3 -c "import json; print(json.load(open('src-tauri/tauri.conf.json'))['version'])")
+          gh release upload "Riot_${version}" "${{ steps.pkg.outputs.tarball }}" --clobber
+
   # 推 tag 两边都挂上再转正。手动跑保持 draft，核对资产后再点发布。
   publish:
-    needs: [create-release, bundle]
+    needs: [create-release, bundle, server-linux]
     if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:

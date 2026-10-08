@@ -48,7 +48,7 @@ pub fn inherit_login_env() {
         apply_shell_env(&vars);
         tracing::info!(n = vars.len(), "已吸入登录 shell 的环境");
     }
-    #[cfg(unix)]
+    #[cfg(target_os = "macos")]
     fallback_ssh_auth_sock();
     // 登录 shell 没写进 PATH 的常见目录再补一层。nvm 默认只在 `.zshrc`，
     // 交互式吸入成功的话这里是空操作（去重）。
@@ -119,31 +119,82 @@ fn keep_imported(key: &str) -> bool {
 ///
 /// Dock 启动的应用经常是这个状态：钥匙在系统 agent 里，但 GUI 进程的
 /// 环境里没有这根变量。`launchctl getenv` 是 macOS 上比猜路径更稳的问法。
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 fn fallback_ssh_auth_sock() {
     if env::var_os("SSH_AUTH_SOCK").is_some() {
         return;
     }
-    #[cfg(target_os = "macos")]
-    {
-        let mut cmd = std::process::Command::new("launchctl");
-        cmd.args(["getenv", "SSH_AUTH_SOCK"])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null());
-        let Some(out) = run_with_timeout(cmd, Duration::from_millis(400)) else {
-            return;
-        };
-        if !out.status.success() {
-            return;
-        }
-        let sock = String::from_utf8_lossy(&out.stdout);
-        let sock = sock.trim();
-        if !sock.is_empty() {
-            unsafe { env::set_var("SSH_AUTH_SOCK", sock) };
-            tracing::info!("已从 launchctl 补上 SSH_AUTH_SOCK");
-        }
+    let mut cmd = std::process::Command::new("launchctl");
+    cmd.args(["getenv", "SSH_AUTH_SOCK"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    let Some(out) = run_with_timeout(cmd, Duration::from_millis(400)) else {
+        return;
+    };
+    if !out.status.success() {
+        return;
     }
+    let sock = String::from_utf8_lossy(&out.stdout);
+    let sock = sock.trim();
+    if !sock.is_empty() {
+        unsafe { env::set_var("SSH_AUTH_SOCK", sock) };
+        tracing::info!("已从 launchctl 补上 SSH_AUTH_SOCK");
+    }
+}
+
+/// 用户的登录 shell。
+///
+/// `$SHELL` 优先。它不一定在：systemd 服务、`docker exec` 起的进程都没有
+/// 这个变量，而 Linux 上兜底成 `/bin/zsh` 多半是个不存在的文件 —— 终端
+/// 面板直接开不出来。Linux 上退回 `/etc/passwd` 里登记的那个，再退回
+/// 系统上真有的 bash / sh。
+#[cfg(unix)]
+pub(crate) fn user_shell() -> String {
+    if let Some(s) = env::var("SHELL").ok().filter(|s| !s.trim().is_empty()) {
+        return s;
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(s) = passwd_shell() {
+        return s;
+    }
+    let candidates: &[&str] = if cfg!(target_os = "macos") {
+        &["/bin/zsh", "/bin/bash", "/bin/sh"]
+    } else {
+        &["/bin/bash", "/bin/sh"]
+    };
+    candidates
+        .iter()
+        .find(|p| std::path::Path::new(p).exists())
+        .unwrap_or(&"/bin/sh")
+        .to_string()
+}
+
+/// `/etc/passwd` 里当前用户的 shell。uid 取 `/proc/self` 的属主 —— 不为一个
+/// `getuid` 引进 libc。
+#[cfg(target_os = "linux")]
+fn passwd_shell() -> Option<String> {
+    use std::os::unix::fs::MetadataExt as _;
+    let uid = std::fs::metadata("/proc/self").ok()?.uid();
+    let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
+    shell_for_uid(&passwd, uid)
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn shell_for_uid(passwd: &str, uid: u32) -> Option<String> {
+    passwd.lines().find_map(|line| {
+        let f: Vec<&str> = line.split(':').collect();
+        if f.len() < 7 || f[2].parse::<u32>().ok()? != uid {
+            return None;
+        }
+        let shell = f[6].trim();
+        // nologin / false 是"这个账户不给登录"，拿它起终端只会立刻退出。
+        let usable = !shell.is_empty()
+            && !shell.ends_with("nologin")
+            && !shell.ends_with("/false")
+            && std::path::Path::new(shell).exists();
+        usable.then(|| shell.to_owned())
+    })
 }
 
 // 和 VS Code 一样：Windows 的 GUI 进程从用户会话继承环境，不必再
@@ -161,7 +212,7 @@ fn read_shell_env() -> Option<Vec<(String, String)>> {
 #[cfg(unix)]
 fn read_unix_shell_env(interactive: bool) -> Option<Vec<(String, String)>> {
     let exe = env::current_exe().ok()?;
-    let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_owned());
+    let shell = user_shell();
     let mark = env_mark();
     let quoted_exe = posix_single_quote(&exe.to_string_lossy());
     let command = format!("printf %s '{mark}'; {quoted_exe} --print-env; printf %s '{mark}'");
@@ -337,6 +388,21 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn passwd_里按_uid_取_shell_不给登录的不要() {
+        let passwd = "\
+root:x:0:0:root:/root:/bin/sh
+daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin
+ghost:x:1001:1001::/home/ghost:/opt/not/installed/zsh
+riot:x:1000:1000::/home/riot:/bin/sh
+";
+        assert_eq!(shell_for_uid(passwd, 1000).as_deref(), Some("/bin/sh"));
+        assert_eq!(shell_for_uid(passwd, 1), None, "nologin 不能拿来开终端");
+        assert_eq!(shell_for_uid(passwd, 1001), None, "登记的 shell 不存在");
+        assert_eq!(shell_for_uid(passwd, 4242), None);
+    }
 
     /// 用平台自己的分隔符拼一段 PATH。测试数据写死 `:` 的话，
     /// Windows 上按 `;` 切分根本切不开，整段被当成一个路径。

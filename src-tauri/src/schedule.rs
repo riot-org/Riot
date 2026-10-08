@@ -489,14 +489,12 @@ pub fn local_text(ms: u64) -> String {
 /// 这类相对任务的迟到能被感觉出来。第一次 tick 立即发生 —— 启动时就
 /// 查一遍（真正错过的已经在 [`reconcile_on_start`] 里被拦下，这里查到
 /// 的只有"启动前 90 秒内刚到点"的正常到期）。
-pub fn spawn_ticker(app: tauri::AppHandle) {
-    use tauri::Manager;
-    tauri::async_runtime::spawn(async move {
+pub fn spawn_ticker(state: crate::state::AppState) {
+    crate::ipc::spawn(async move {
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(20));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tick.tick().await;
-            let state = app.state::<crate::state::AppState>().inner().clone();
             state.schedule_tick().await;
         }
     });

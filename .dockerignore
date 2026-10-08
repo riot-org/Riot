@@ -1,0 +1,10 @@
+**/target/
+target-linux/
+**/node_modules/
+dist/
+.git/
+.cef/
+public/vendor/
+public/flyfish-viewer-assets.json
+src-tauri/gen/
+src-tauri/binaries/

@@ -28,14 +28,11 @@ use std::time::Duration;
 use axum::extract::ws::{Message, Utf8Bytes, WebSocket};
 use futures::{SinkExt, StreamExt};
 use riot_protocol::{UiText, ui_text};
-use serde_json::Value;
-use tauri::ipc::{Channel, InvokeResponseBody};
-use tauri::{AppHandle, Listener, Manager};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 
 use super::protocol::{BIN_CALL_RESULT, BIN_CHANNEL, ClientFrame, ServerFrame, binary_frame};
-use super::{Shared, dispatch};
-use crate::state::AppState;
+use super::{HostCtx, Remote, Shared, dispatch};
+use crate::ipc::{Channel, InvokeResponseBody};
 
 /// 鉴权帧最多等多久。连上不说话的连接占着句柄没有意义。
 const AUTH_DEADLINE: Duration = Duration::from_secs(10);
@@ -49,11 +46,10 @@ const RAW_BACKLOG_PER_CHANNEL: usize = 2;
 /// 总积压上限（条数）。到这里说明客户端已经几十秒没消化东西了。
 const HARD_BACKLOG: usize = 20_000;
 
-/// 前端要听的全局事件（对应 `app.emit`）。加一个就在这里补一行 ——
-/// 桌面那边是 `listen(name)`，这边是 `listen_any(name)` 再转成 Event 帧。
+/// 前端要听的全局事件（宿主事件总线上的名字）。加一个就在这里补一行 ——
+/// 桌面那边是前端 `listen(name)`，这边由宿主替它订总线再转成 Event 帧。
+/// schedule_*：定时任务面板；sessions_changed：侧栏会话/项目列表。
 const FORWARDED_EVENTS: &[&str] = &["schedule_run", "schedule_changed", "sessions_changed"];
-// schedule_*：定时任务面板；sessions_changed：侧栏会话/项目列表。
-// 加事件时这里补一行，桌面那边是前端 listen(name)，这边是 listen_any 转 Event 帧。
 
 enum Out {
     Msg(Message),
@@ -168,12 +164,7 @@ impl ConnCtx {
                 InvokeResponseBody::Json(s) => out.send_channel_json(id, &s),
                 InvokeResponseBody::Raw(b) => out.send_channel_raw(id, &b),
             };
-            sent.map_err(|()| {
-                tauri::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::BrokenPipe,
-                    "remote connection closed",
-                ))
-            })
+            sent.map_err(|()| crate::ipc::closed_error("remote connection closed"))
         })
     }
 }
@@ -183,7 +174,8 @@ impl ConnCtx {
 /// `kick` 翻成 true(或发送端被丢掉)= 服务在停,这条连接要主动退出。
 pub async fn serve(
     socket: WebSocket,
-    app: AppHandle,
+    host: HostCtx,
+    remote: Remote,
     shared: Arc<Shared>,
     peer: IpAddr,
     mut kick: watch::Receiver<bool>,
@@ -233,12 +225,11 @@ pub async fn serve(
         viewer: viewer.clone(),
         out: Arc::clone(&out),
     });
-    let version = app.package_info().version.to_string();
     if out
         .send_frame(&ServerFrame::Ready {
             viewer: &viewer,
             boot: &shared.boot_id,
-            version: &version,
+            version: &host.version,
         })
         .is_err()
     {
@@ -247,21 +238,28 @@ pub async fn serve(
     shared.connections.fetch_add(1, Ordering::Relaxed);
     tracing::info!(%peer, viewer, "远程连接已建立");
 
-    // 全局事件转发。桌面那边是前端 listen；这里由宿主替它听，转成 Event 帧。
-    let listeners: Vec<tauri::EventId> = FORWARDED_EVENTS
-        .iter()
-        .map(|name| {
-            let out = Arc::clone(&out);
-            let name_owned = (*name).to_owned();
-            app.listen_any(*name, move |ev| {
-                let payload: Value = serde_json::from_str(ev.payload()).unwrap_or(Value::Null);
-                let _ = out.send_frame(&ServerFrame::Event {
-                    name: &name_owned,
-                    payload,
-                });
-            })
-        })
-        .collect();
+    // 全局事件转发。桌面那边是前端 listen；这里由宿主替它订，转成 Event 帧。
+    let mut events = host.state.subscribe_events();
+    let events_out = Arc::clone(&out);
+    let forwarder = tokio::spawn(async move {
+        loop {
+            match events.recv().await {
+                Ok(ev) if FORWARDED_EVENTS.contains(&ev.name) => {
+                    if events_out
+                        .send_frame(&ServerFrame::Event {
+                            name: ev.name,
+                            payload: ev.payload,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
 
     // ── 3. 写任务 ────────────────────────────────────────
     let writer_out = Arc::clone(&out);
@@ -303,12 +301,14 @@ pub async fn serve(
                     Message::Text(t) => {
                         match serde_json::from_str::<ClientFrame>(&t) {
                             Ok(ClientFrame::Call { id, cmd, args }) => {
-                                let app = app.clone();
+                                let host = host.clone();
+                                let remote = remote.clone();
                                 let ctx = Arc::clone(&ctx);
                                 // 每条命令一个任务：浏览器跳转合法地要等几十秒，
                                 // 不能堵住后面的停止键。
                                 tokio::spawn(async move {
-                                    let result = dispatch::dispatch(&app, &ctx, &cmd, args).await;
+                                    let result =
+                                        dispatch::dispatch(&host, &remote, &ctx, &cmd, args).await;
                                     let _ = match result {
                                         Ok(dispatch::Outcome::Json(v)) => {
                                             ctx.out.send_frame(&ServerFrame::Ok { id, result: v })
@@ -362,10 +362,8 @@ pub async fn serve(
     // 失败在 send 上而不是写到一个半关闭的 socket 里。close() 幂等：积压
     // 断连那条路已经调过一次的话这里什么都不做。
     out.close();
-    for id in listeners {
-        app.unlisten(id);
-    }
-    app.state::<AppState>().inner().detach_viewer(&viewer).await;
+    forwarder.abort();
+    host.state.detach_viewer(&viewer).await;
     let _ = writer.await;
     shared.connections.fetch_sub(1, Ordering::Relaxed);
     tracing::info!(viewer, "远程连接已关闭");

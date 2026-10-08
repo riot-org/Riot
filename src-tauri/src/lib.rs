@@ -6,6 +6,16 @@
 //! 判断一段代码该不该放这里：它是否需要操作系统能力？需要就放这里，
 //! 否则放内核。这条界线不清晰的话，agent 逻辑会慢慢渗进宿主，
 //! 然后就没法脱离 Tauri 做黄金回放了。
+//!
+//! # 两种构建
+//!
+//! - `desktop` 特性（默认）：Tauri 窗口，二进制 `Riot`。
+//! - 不带 `desktop`：无界面的 `riot-server`，只有网页版（见 `remote`）。
+//!   Linux 服务器上用它 —— 那里的 `tauri` crate 要链接 GTK。
+//!
+//! 命令函数两边共用：桌面由 `#[tauri::command]` 注册，无界面由
+//! `remote/dispatch.rs` 直接调。只有窗口、系统对话框、剪贴板、通知这些
+//! "需要有人坐在这台机器前"的东西是桌面独有的。
 
 pub mod browser;
 pub mod fence;
@@ -24,9 +34,14 @@ pub use gui_env::print_process_env;
 
 pub mod dir_browse;
 pub mod env_probe;
+pub mod headless;
+pub mod ipc;
 pub mod kernel;
+#[cfg(feature = "desktop")]
 mod nav_guard;
+#[cfg(feature = "desktop")]
 pub mod notification;
+#[cfg(feature = "desktop")]
 pub mod pasteboard;
 pub mod persist;
 pub mod plugins;
@@ -38,12 +53,16 @@ pub mod term;
 pub mod term_access;
 pub mod tree;
 pub mod update;
+#[cfg(feature = "desktop")]
 mod vibrancy;
 
+#[cfg(feature = "desktop")]
 use tauri::Manager;
-use tauri::ipc::Channel;
+
+use ipc::{Channel, State};
 
 // 命令清单里要写光名字（ACL 测试按名字比对三份清单），所以这里 use 进来。
+#[cfg(feature = "desktop")]
 use pasteboard::clipboard_paths;
 
 use riot_protocol::event::AgentEvent;
@@ -142,9 +161,10 @@ type HostResult<T> = Result<T, HostError>;
 ///
 /// 带 `webview` 参数是为了知道**谁**在订阅：桌面窗口是一个观看者，每条远程
 /// 连接是另一个（见 `remote` 模块）。事件广播给同一会话的所有观看者。
+#[cfg(feature = "desktop")]
 #[tauri::command]
 async fn subscribe_session(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     webview: tauri::Webview,
     session_id: String,
     epoch: u64,
@@ -181,9 +201,9 @@ async fn subscribe_session_as(
 
 /// 返回 `Some(条目 id)` 表示上一轮还在跑、消息进了插话队列；
 /// `None` 表示直接开轮。前端排队面板靠这个 id 跟踪条目。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn send_turn(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     text: String,
     // 用户附的图。没附就是空数组。
@@ -201,9 +221,9 @@ async fn send_turn(
 }
 
 /// 丢掉指定助手消息及其后的一切，从它前面那条用户提示再跑一轮。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn regenerate_turn(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     message_id: String,
 ) -> HostResult<()> {
@@ -211,9 +231,9 @@ async fn regenerate_turn(
 }
 
 /// 编辑一条用户提问并从它重新开始：换文字（以及可选的图片）、丢掉之后的一切、再跑一轮。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn resend_turn(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     message_id: String,
     text: String,
@@ -225,16 +245,16 @@ async fn resend_turn(
 }
 
 /// 手动压缩会话历史（`/compact`）。空闲时才能做；完成发 Compacted 事件。
-#[tauri::command]
-async fn session_compact(state: tauri::State<'_, AppState>, session_id: String) -> HostResult<()> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn session_compact(state: State<'_, AppState>, session_id: String) -> HostResult<()> {
     state.compact_session(&session_id).await
 }
 
 /// 上下文编辑：替换一条历史消息的文本段（思考、工具调用、`@` 引用不动）。
 /// `images` 有值时用户提问的附图整表替换。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn edit_message(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     message_id: String,
     text: String,
@@ -246,9 +266,9 @@ async fn edit_message(
 }
 
 /// 上下文删除：抹掉一条历史消息的可见内容；消息因此空心则整条移除。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn delete_message(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     message_id: String,
 ) -> HostResult<()> {
@@ -256,9 +276,9 @@ async fn delete_message(
 }
 
 /// 回退预览：会动哪些文件、有没有手改。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn restore_preview(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     message_id: String,
 ) -> HostResult<riot_protocol::RestorePreview> {
@@ -266,9 +286,9 @@ async fn restore_preview(
 }
 
 /// 丢掉这条用户提问的回复及之后的对话，文件回到它发出时。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn restore_checkpoint(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     message_id: String,
 ) -> HostResult<riot_protocol::RestoreResult> {
@@ -276,18 +296,18 @@ async fn restore_checkpoint(
 }
 
 /// 把最近一次 Restore 撤回去。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn redo_checkpoint(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
 ) -> HostResult<riot_protocol::RestoreResult> {
     state.redo_checkpoint(&session_id).await
 }
 
 /// 可用的斜杠命令（内置 + 项目 + 全局 + 插件）。`root` 为 null 时不列项目级。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn slash_commands(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     root: Option<String>,
 ) -> HostResult<Vec<slash::SlashCommand>> {
     let plugins = state.loaded_plugins().await;
@@ -298,9 +318,9 @@ async fn slash_commands(
 }
 
 /// 配置里的 hooks 清单（含解析失败的文件、插件带的）。给设置页看。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn hooks_list(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     root: Option<String>,
 ) -> HostResult<Vec<hooks::HookInfo>> {
     let plugins = state.loaded_plugins().await;
@@ -312,9 +332,9 @@ async fn hooks_list(
 
 /// 展开一条自定义命令：`/name args` → 发给模型的 prompt。
 /// null = 没这条命令，或它是内置命令（前端按 name 执行）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn slash_expand(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     name: String,
     args: String,
@@ -324,9 +344,9 @@ async fn slash_expand(
 
 /// `@` 补全菜单的文件搜索：返回项目内相对路径。`limit` 不传用菜单的
 /// 默认条数；文件树的筛选框传大一些的值。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn search_files(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     query: String,
     limit: Option<usize>,
@@ -336,9 +356,9 @@ async fn search_files(
 
 /// 文件树的一层目录：`rel` 是相对会话根的路径（`/` 分隔），空串即根。
 /// 边界与截断规则见 [`tree`] 的模块文档。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn list_dir(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     rel: String,
 ) -> HostResult<tree::DirListing> {
@@ -346,27 +366,27 @@ async fn list_dir(
 }
 
 /// 定时任务清单（管理面板）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn schedule_list(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
 ) -> HostResult<Vec<riot_protocol::ScheduledTask>> {
     Ok(state.schedule_list().await)
 }
 
 /// 表单手动创建一个定时任务。模型那条路不走这里（内核经反向 RPC 调
 /// `schedule_create`，发起会话是上下文）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn schedule_create(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     draft: riot_protocol::ScheduleDraft,
 ) -> HostResult<riot_protocol::ScheduledTask> {
     Ok(state.schedule_create_manual(draft).await?)
 }
 
 /// 暂停 / 恢复一个定时任务。返回更新后的任务。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn schedule_set_enabled(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     id: String,
     enabled: bool,
 ) -> HostResult<riot_protocol::ScheduledTask> {
@@ -374,9 +394,9 @@ async fn schedule_set_enabled(
 }
 
 /// 编辑一个定时任务（详情面板的保存）。返回更新后的任务。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn schedule_update(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     id: String,
     patch: riot_protocol::SchedulePatch,
 ) -> HostResult<riot_protocol::ScheduledTask> {
@@ -384,45 +404,43 @@ async fn schedule_update(
 }
 
 /// 删除一个定时任务。
-#[tauri::command]
-async fn schedule_delete(state: tauri::State<'_, AppState>, id: String) -> HostResult<()> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn schedule_delete(state: State<'_, AppState>, id: String) -> HostResult<()> {
     Ok(state.schedule_delete(&id).await?)
 }
 
 /// 立即跑一次（「立即运行」按钮和错过补跑共用）。
-#[tauri::command]
-async fn schedule_run_now(state: tauri::State<'_, AppState>, id: String) -> HostResult<()> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn schedule_run_now(state: State<'_, AppState>, id: String) -> HostResult<()> {
     Ok(state.schedule_run_now(&id).await?)
 }
 
 /// 启动时发现的错过运行清单。
-#[tauri::command]
-async fn schedule_missed(
-    state: tauri::State<'_, AppState>,
-) -> HostResult<Vec<riot_protocol::MissedRun>> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn schedule_missed(state: State<'_, AppState>) -> HostResult<Vec<riot_protocol::MissedRun>> {
     Ok(state.schedule_missed().await)
 }
 
 /// 用户看过错过提示了，清掉别再弹。
-#[tauri::command]
-async fn schedule_ack_missed(state: tauri::State<'_, AppState>) -> HostResult<()> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn schedule_ack_missed(state: State<'_, AppState>) -> HostResult<()> {
     state.schedule_ack_missed().await;
     Ok(())
 }
 
 /// 排队面板：当前排着的插话清单。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn queue_list(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
 ) -> HostResult<Vec<session::QueuedSummary>> {
     state.queue_list(&session_id).await
 }
 
 /// 删掉一条排队插话。false = 条目已经不在（被注入或早被删了）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn queue_remove(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     entry_id: String,
 ) -> HostResult<bool> {
@@ -430,9 +448,9 @@ async fn queue_remove(
 }
 
 /// 撤回一条排队插话，还给前端原始输入（放回输入框编辑）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn queue_take(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     entry_id: String,
 ) -> HostResult<Option<riot_protocol::TurnInput>> {
@@ -440,9 +458,9 @@ async fn queue_take(
 }
 
 /// 停掉一个后台子 agent（面板上的停止键）。false = 没这个任务或它已结束。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn task_cancel(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     agent_id: String,
 ) -> HostResult<bool> {
@@ -450,25 +468,25 @@ async fn task_cancel(
 }
 
 /// 一个子 agent 的会话（右侧抽屉的只读视图）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn task_history(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     agent_id: String,
 ) -> HostResult<state::TaskHistoryOut> {
     state.task_history(&session_id, &agent_id).await
 }
 
-#[tauri::command]
-async fn interrupt(state: tauri::State<'_, AppState>, session_id: String) -> HostResult<bool> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn interrupt(state: State<'_, AppState>, session_id: String) -> HostResult<bool> {
     state.interrupt(&session_id).await
 }
 
 /// 本会话改了哪些文件、哪些行。只含经 Edit / Write 落下的改动 ——
 /// 用户自己在编辑器里的改动不算，那正是这个视图和 `git diff` 的区别。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn session_changes(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
 ) -> HostResult<Vec<changes::FileChange>> {
     state.changes(&session_id).await
@@ -476,18 +494,18 @@ async fn session_changes(
 
 /// 工作区相对所选基线的差异（侧边抽屉的 Git 面板）。
 /// `base` 空 = 当前分支 / HEAD。只换对比对象，不 checkout。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn session_git_changes(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     base: Option<String>,
 ) -> HostResult<riot_protocol::GitChanges> {
     state.git_changes(&session_id, base.as_deref()).await
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn respond_permission(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     ask_id: String,
     response: riot_protocol::permission::PermissionResponse,
@@ -497,9 +515,9 @@ async fn respond_permission(
         .await
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn set_permission_mode(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     mode: riot_protocol::permission::PermissionMode,
 ) -> HostResult<()> {
@@ -507,18 +525,18 @@ async fn set_permission_mode(
 }
 
 /// 本会话已授权的渗透 scope（host 列表），给前端管理面板看。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn browser_scope_list(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
 ) -> HostResult<Vec<String>> {
     state.scope_hosts(&session_id).await
 }
 
 /// 撤销一个渗透 scope 授权。之后对该目标的侵入性动作会重新要求授权。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn browser_scope_revoke(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     host: String,
 ) -> HostResult<()> {
@@ -526,9 +544,9 @@ async fn browser_scope_revoke(
 }
 
 /// 会话级采样覆盖。空字段继承 provider 的设置；下一轮生效。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn set_session_sampling(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     sampling: config::Sampling,
 ) -> HostResult<()> {
@@ -539,18 +557,15 @@ async fn set_session_sampling(
 ///
 /// 系统的目录选择框默认隐藏点开头的目录，用户看不到 `.venv` ——
 /// 探测出来给前端做一键填入。
-#[tauri::command]
-async fn detect_venvs(
-    state: tauri::State<'_, AppState>,
-    session_id: String,
-) -> HostResult<Vec<String>> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn detect_venvs(state: State<'_, AppState>, session_id: String) -> HostResult<Vec<String>> {
     state.detect_venvs(&session_id).await
 }
 
 /// 会话的 Python 虚拟环境。空字符串清除；宿主会验证目录像不像一个 venv。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn set_session_python_venv(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     path: String,
 ) -> HostResult<()> {
@@ -558,9 +573,9 @@ async fn set_session_python_venv(
 }
 
 /// 会话级追加的系统提示词。空字符串清除；下一轮生效。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn set_session_system_prompt(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     prompt: String,
 ) -> HostResult<()> {
@@ -568,9 +583,9 @@ async fn set_session_system_prompt(
 }
 
 /// 会话级思考策略。默认不干预（不发思考参数）；下一轮生效。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn set_session_thinking(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     thinking: riot_protocol::ThinkingPolicy,
 ) -> HostResult<()> {
@@ -578,9 +593,9 @@ async fn set_session_thinking(
 }
 
 /// 这个会话用的服务方 / 模型。下一轮生效。只改这一个会话。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn set_session_model(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     provider: String,
     model: String,
@@ -589,9 +604,9 @@ async fn set_session_model(
 }
 
 /// 会话的多任务模式开关。下一轮生效。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn set_session_multitask(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     on: bool,
 ) -> HostResult<()> {
@@ -600,9 +615,9 @@ async fn set_session_multitask(
 
 /// 界面按钮（转到后台 / 并行构建）→ 塞给当前轮的一条带外提醒。
 /// false = 此刻没有轮在跑。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn turn_nudge(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     nudge: riot_protocol::Nudge,
 ) -> HostResult<bool> {
@@ -613,8 +628,8 @@ async fn turn_nudge(
 ///
 /// `[约束]` 只回 `has_api_key` / `key_source`，不回 key 本身。前端不需要它，
 /// 而一旦返回过，它就会出现在 devtools、日志和错误上报里。
-#[tauri::command]
-async fn get_config(state: tauri::State<'_, AppState>) -> HostResult<config::ConfigStatus> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn get_config(state: State<'_, AppState>) -> HostResult<config::ConfigStatus> {
     Ok(config::ConfigStatus::of(state.config().await))
 }
 
@@ -626,7 +641,7 @@ async fn get_config(state: tauri::State<'_, AppState>) -> HostResult<config::Con
 /// 知道为什么。设置页要能把这两者分开显示，就得先能查到真实状态。
 ///
 /// 只查不改，随时可调。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn sandbox_status() -> riot_runtime::SandboxStatus {
     riot_runtime::sandbox::status()
 }
@@ -635,7 +650,7 @@ async fn sandbox_status() -> riot_runtime::SandboxStatus {
 ///
 /// `[约束]` 走 `spawn_blocking`。这个调用里等的是**用户去点系统对话框**，
 /// 时长完全不可控；占着 tokio 的工作线程会把别的命令一起拖住。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn sandbox_install() -> HostResult<()> {
     tokio::task::spawn_blocking(riot_runtime::sandbox::install)
         .await
@@ -647,7 +662,7 @@ async fn sandbox_install() -> HostResult<()> {
 /// 卸载命令隔离（删掉沙箱专用账户与凭证）。**Windows 上会弹一次 UAC。**
 ///
 /// `[约束]` 和安装同一条：走 `spawn_blocking`，等的是用户点系统对话框。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn sandbox_uninstall() -> HostResult<()> {
     tokio::task::spawn_blocking(riot_runtime::sandbox::uninstall)
         .await
@@ -657,6 +672,7 @@ async fn sandbox_uninstall() -> HostResult<()> {
 }
 
 /// 和 `tauri.conf.json` 的 version 同一份，设置 → 关于用来显示。
+#[cfg(feature = "desktop")]
 #[tauri::command]
 fn app_version(app: tauri::AppHandle) -> String {
     app.package_info().version.to_string()
@@ -674,11 +690,12 @@ fn app_version(app: tauri::AppHandle) -> String {
 /// （AppKit 只认主线程），结果从那边异步回来，所以这里要等。
 ///
 /// 永远是 `Ok`：`Result` 只是 Tauri 对"借了 `State` 的 async 命令"的形状要求。
+#[cfg(feature = "desktop")]
 #[tauri::command]
 async fn set_appearance(
     app: tauri::AppHandle,
     window: tauri::WebviewWindow,
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     theme: vibrancy::Appearance,
 ) -> HostResult<vibrancy::Applied> {
     let applied = vibrancy::apply(&app, &window, theme);
@@ -692,6 +709,7 @@ async fn set_appearance(
 }
 
 /// 对照 GitHub 上最新正式 Release。没网、还没发过版都不该让调用方当成崩溃。
+#[cfg(feature = "desktop")]
 #[tauri::command]
 async fn check_update(app: tauri::AppHandle) -> HostResult<update::UpdateInfo> {
     crate::update::check(&app.package_info().version.to_string()).await
@@ -702,6 +720,7 @@ async fn check_update(app: tauri::AppHandle) -> HostResult<update::UpdateInfo> {
 /// 不报错：通知发不出去只记日志，前端那边本来也没有可做的补救。走
 /// `spawn_blocking`：Windows 上第一次要写图标文件和注册表，之后每条也有一次
 /// 同步的 WinRT 调用。
+#[cfg(feature = "desktop")]
 #[tauri::command]
 async fn notify(app: tauri::AppHandle, title: String, body: String) {
     let done = tokio::task::spawn_blocking(move || notification::send(&app, &title, &body)).await;
@@ -710,10 +729,10 @@ async fn notify(app: tauri::AppHandle, title: String, body: String) {
     }
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn set_config(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
+    remote: State<'_, remote::Remote>,
     mut config: config::AppConfig,
 ) -> HostResult<config::ConfigStatus> {
     // 保存前校验：active 指向不存在的 provider 在这里报错，而不是
@@ -728,60 +747,53 @@ async fn set_config(
     // 不会拖慢保存按钮；进度由设置页轮询 mcp_status 看。
     state.reconcile_mcp().await;
     // 远程访问服务对齐新配置（开关、端口、绑定）。
-    app.state::<remote::Remote>()
-        .inner()
-        .apply(&app, &config.remote)
-        .await;
+    remote.apply(&config.remote).await;
     Ok(config::ConfigStatus::of(config))
 }
 
 /// 远程访问的运行状态：在不在听、地址、令牌、二维码。设置页用。
-#[tauri::command]
-async fn remote_status(app: tauri::AppHandle) -> HostResult<remote::RemoteStatus> {
-    let cfg = app.state::<AppState>().inner().config().await;
-    Ok(app
-        .state::<remote::Remote>()
-        .inner()
-        .status(&cfg.remote)
-        .await)
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn remote_status(
+    state: State<'_, AppState>,
+    remote: State<'_, remote::Remote>,
+) -> HostResult<remote::RemoteStatus> {
+    let cfg = state.config().await;
+    Ok(remote.status(&cfg.remote).await)
 }
 
 /// 换一枚远程访问令牌。旧链接和旧二维码即刻作废，已经连着的不掉线。
 ///
 /// `[约束]` 令牌不进日志 —— 这个函数体内不允许有 tracing 调用。
-#[tauri::command]
-async fn remote_rotate_token(app: tauri::AppHandle) -> HostResult<String> {
-    app.state::<remote::Remote>()
-        .inner()
-        .rotate_token()
-        .map_err(HostError::Config)
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn remote_rotate_token(remote: State<'_, remote::Remote>) -> HostResult<String> {
+    remote.rotate_token().map_err(HostError::Config)
 }
 
 /// 给网页版的目录选择器翻宿主机的目录。桌面窗口用系统对话框，不走这里。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn browse_dirs(path: Option<String>) -> HostResult<dir_browse::DirBrowse> {
     Ok(dir_browse::browse(path).await)
 }
 
 /// MCP 服务器的连接状态（设置页轮询它显示状态点和工具数）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn mcp_status(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
 ) -> HostResult<Vec<riot_protocol::rpc::McpServerStatus>> {
     Ok(state.mcp_statuses().await)
 }
 
 /// 手动重连一个 MCP 服务器（设置页的「重连」按钮）。
-#[tauri::command]
-async fn mcp_restart(state: tauri::State<'_, AppState>, server_id: String) -> HostResult<()> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn mcp_restart(state: State<'_, AppState>, server_id: String) -> HostResult<()> {
     state.mcp_restart(&server_id).await
 }
 
 /// 当前可用的技能清单（含解析失败的，带原因）。
 /// `root` 传当前会话的项目根；不传只列全局 + 插件 + 内置技能。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn skills_list(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     root: Option<String>,
 ) -> HostResult<Vec<skills::SkillInfo>> {
     let plugins = state.loaded_plugins().await;
@@ -792,8 +804,8 @@ async fn skills_list(
 }
 
 /// 当前 MCP 服务器的标准 JSON（`{"mcpServers": {...}}`，生态通用格式）。
-#[tauri::command]
-async fn mcp_export_json(state: tauri::State<'_, AppState>) -> HostResult<String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn mcp_export_json(state: State<'_, AppState>) -> HostResult<String> {
     Ok(config::mcp_servers_to_json(
         &state.config().await.mcp_servers,
     ))
@@ -804,9 +816,9 @@ async fn mcp_export_json(state: tauri::State<'_, AppState>) -> HostResult<String
 /// 语义是替换不是追加：JSON 视图显示的就是全部，保存回来的也该是
 /// 全部 —— 追加语义下删除一个服务器要去表单里点，两个视图就打架了。
 /// 显示名不属于标准格式，按 id 从旧配置捡回来。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn mcp_import_json(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     raw: String,
 ) -> HostResult<config::ConfigStatus> {
     let mut servers = config::mcp_servers_from_json(&raw)?;
@@ -829,26 +841,24 @@ async fn mcp_import_json(
 // ── 插件 ──────────────────────────────────────────────
 
 /// 已登记的插件：装了什么、开没开、各带了什么、哪里坏了。设置页看。
-#[tauri::command]
-async fn plugins_status(
-    state: tauri::State<'_, AppState>,
-) -> HostResult<Vec<plugins::PluginStatus>> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn plugins_status(state: State<'_, AppState>) -> HostResult<Vec<plugins::PluginStatus>> {
     Ok(state.plugins_status().await)
 }
 
 /// 市场清单。`refresh` 强制重拉，否则有缓存用缓存。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn plugins_market(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     refresh: bool,
 ) -> HostResult<Vec<plugins::Marketplace>> {
     Ok(state.plugins_market(refresh).await)
 }
 
 /// 准备安装：取下来、读清单、给确认页一份预览。不改任何配置。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn plugins_prepare(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     source: plugins::SourceRequest,
 ) -> HostResult<plugins::PluginPreview> {
     state.plugins_prepare(source).await
@@ -858,9 +868,9 @@ async fn plugins_prepare(
 ///
 /// 装完立刻接线，不要求重启：MCP 服务器现连，技能目录每轮重扫，PATH 注入
 /// 每轮现装。让用户重启一次应用才能用刚装好的东西，是很容易被当成"没装上"的。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn plugins_commit(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     token: String,
     on_progress: Channel<plugins::PluginProgress>,
 ) -> HostResult<()> {
@@ -880,16 +890,16 @@ async fn plugins_commit(
 }
 
 /// 放弃一次准备好的安装（确认页点了取消）。
-#[tauri::command]
-async fn plugins_discard(state: tauri::State<'_, AppState>, token: String) -> HostResult<()> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn plugins_discard(state: State<'_, AppState>, token: String) -> HostResult<()> {
     state.plugins_discard(&token).await;
     Ok(())
 }
 
 /// 启停一个插件。关掉 = 它的技能、命令、hooks、MCP、PATH 全部摘下，目录留着。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn plugins_set_enabled(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     id: String,
     enabled: bool,
 ) -> HostResult<()> {
@@ -897,15 +907,15 @@ async fn plugins_set_enabled(
 }
 
 /// 卸载一个插件，连带摘掉它带的 MCP 服务器。
-#[tauri::command]
-async fn plugins_uninstall(state: tauri::State<'_, AppState>, id: String) -> HostResult<()> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn plugins_uninstall(state: State<'_, AppState>, id: String) -> HostResult<()> {
     state.plugins_uninstall(&id).await
 }
 
 /// 升级到来源里的最新版。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn plugins_update(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     id: String,
     on_progress: Channel<plugins::PluginProgress>,
 ) -> HostResult<()> {
@@ -922,9 +932,9 @@ async fn plugins_update(
 }
 
 /// 整体替换市场列表。回保存后的配置，和 `set_config` 一样让设置页原地刷新。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn plugins_set_marketplaces(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     marketplaces: Vec<config::MarketplaceConfig>,
 ) -> HostResult<config::ConfigStatus> {
     state.plugins_set_marketplaces(marketplaces).await
@@ -934,9 +944,9 @@ async fn plugins_set_marketplaces(
 ///
 /// `[约束]` key 参数不能出现在任何日志或错误消息里 —— 这个函数体内
 /// 不允许有 tracing 调用。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn set_api_key(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     provider_id: String,
     key: String,
 ) -> HostResult<config::ConfigStatus> {
@@ -974,13 +984,14 @@ async fn set_api_key(
 /// `epoch` 是前端给的订阅序号，`browser_close` 带同一个数。和
 /// `subscribe_session` 的 `epoch` 是同一个理由：open / close 在宿主侧是
 /// 并发任务，落地顺序没有保证，没有序号分不出"这条 close 关的是哪次 open"。
+#[cfg(feature = "desktop")]
 #[tauri::command]
 async fn browser_open(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     webview: tauri::Webview,
     session_id: String,
     epoch: u64,
-    on_frame: Channel<tauri::ipc::InvokeResponseBody>,
+    on_frame: Channel<ipc::InvokeResponseBody>,
 ) -> HostResult<browser::access::PanelState> {
     state
         .browser_open_for(
@@ -994,9 +1005,10 @@ async fn browser_open(
 
 /// 关闭面板。停止编码 —— 没人看的时候继续推是白烧 CPU 和电。
 /// `epoch` 要和对应那次 `browser_open` 的一致，理由见那边。
+#[cfg(feature = "desktop")]
 #[tauri::command]
 async fn browser_close(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     webview: tauri::Webview,
     session_id: String,
     epoch: u64,
@@ -1008,9 +1020,9 @@ async fn browser_close(
 
 /// 地址栏跳转。用户自己输的，不问权限 —— 但 scheme 要过白名单，
 /// 理由见 [`browser::access::panel_navigable`]。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn browser_navigate(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     url: String,
 ) -> HostResult<()> {
@@ -1026,9 +1038,9 @@ async fn browser_navigate(
 ///
 /// 合成一条命令而不是 back / forward 两条:两边的实现只差一个符号，
 /// 而每多一条命令就要同步 build.rs、capabilities 和 ACL 用例三处。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn browser_history(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     delta: i32,
 ) -> HostResult<browser::access::TabInfo> {
@@ -1037,16 +1049,16 @@ async fn browser_history(
 }
 
 /// 刷新当前页面。
-#[tauri::command]
-async fn browser_reload(state: tauri::State<'_, AppState>, session_id: String) -> HostResult<()> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn browser_reload(state: State<'_, AppState>, session_id: String) -> HostResult<()> {
     let b = state.panel_browser(&session_id).await?;
     b.reload().await.map_err(HostError::Browser)
 }
 
 /// 标签栏 + 工具栏的状态。面板定期问，用来跟上页面自己发起的跳转。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn browser_state(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
 ) -> HostResult<browser::access::PanelState> {
     let b = state.panel_browser(&session_id).await?;
@@ -1054,9 +1066,9 @@ async fn browser_state(
 }
 
 /// 新开一个标签页并切过去。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn browser_new_tab(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
 ) -> HostResult<browser::access::PanelState> {
     let b = state.panel_browser(&session_id).await?;
@@ -1065,9 +1077,9 @@ async fn browser_new_tab(
 
 /// 关一个标签页。关掉最后一个就是空清单，不补新页 —— 界面据此收掉
 /// 浏览器标签（见 access::close_tab 的说明）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn browser_close_tab(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     tab: u32,
 ) -> HostResult<browser::access::PanelState> {
@@ -1077,9 +1089,9 @@ async fn browser_close_tab(
 
 /// 切到某个标签页。画面和工具栏都跟着它 —— 模型的浏览器工具也一样，
 /// 见 `BrowserAccess for HostBrowser` 的说明。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn browser_select_tab(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     tab: u32,
 ) -> HostResult<browser::access::PanelState> {
@@ -1094,9 +1106,10 @@ async fn browser_select_tab(
 /// 不设退订命令:订阅方只有工作台标签栏一个，重新订阅就替换旧通道，
 /// 而退订和新订阅在 IPC 上没有先后保证 —— 退订晚到会把新通道误清掉，
 /// 表现是"重开浏览器后新标签又开始迟到"。旧通道最多白收几声 ping。
+#[cfg(feature = "desktop")]
 #[tauri::command]
 async fn browser_watch_tabs(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     webview: tauri::Webview,
     session_id: String,
     on_change: Channel<bool>,
@@ -1116,9 +1129,9 @@ async fn browser_watch_tabs(
 /// `view_height` 是画面区实际占的 CSS 像素，推流按它封顶。
 /// `scale` 是面板所在屏幕的像素密度。它决定同一块地方用多少物理像素去画，
 /// 不改变页面的排版尺寸。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn browser_resize(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     width: i32,
     height: i32,
@@ -1133,9 +1146,9 @@ async fn browser_resize(
 }
 
 /// 把面板上的输入打到页面里。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn browser_input(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     input: browser::access::Input,
 ) -> HostResult<()> {
@@ -1147,9 +1160,9 @@ async fn browser_input(
 ///
 /// 用户在"取件"模式下点面板某处 —— 前端不把它当真实点击转发，而是调这个
 /// 拿到 selector，再交给用户/模型。坐标是视口 CSS 坐标。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn browser_pick(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     x: f64,
     y: f64,
@@ -1160,19 +1173,16 @@ async fn browser_pick(
 
 /// 页面里当前选中的文本。面板的"复制"用：页面在另一个进程里，选区得
 /// 取回来写进面板这一侧的剪贴板（网页版远程时那才是用户手里的剪贴板）。
-#[tauri::command]
-async fn browser_selection(
-    state: tauri::State<'_, AppState>,
-    session_id: String,
-) -> HostResult<String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn browser_selection(state: State<'_, AppState>, session_id: String) -> HostResult<String> {
     let b = state.panel_browser(&session_id).await?;
     b.selection_text().await.map_err(HostError::Browser)
 }
 
 /// 取件模式下鼠标移动:把高亮框移到光标下的元素上。前端已节流。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn browser_pick_hover(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     x: f64,
     y: f64,
@@ -1182,11 +1192,8 @@ async fn browser_pick_hover(
 }
 
 /// 撤掉取件高亮框（退出取件模式、鼠标离开画面、点选完成）。
-#[tauri::command]
-async fn browser_pick_clear(
-    state: tauri::State<'_, AppState>,
-    session_id: String,
-) -> HostResult<()> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn browser_pick_clear(state: State<'_, AppState>, session_id: String) -> HostResult<()> {
     // 浏览器没起来也算成功:没有页面就没有要清的高亮。
     if let Ok(b) = state.panel_browser(&session_id).await {
         b.pick_clear().await;
@@ -1203,9 +1210,10 @@ async fn browser_pick_clear(
 /// 开一个终端（在 `root` 目录起用户的默认 shell），输出通过 `on_event` 推给前端。
 ///
 /// `root` 不存在或没传就退回家目录 —— 终端还是要开，只是位置不理想。
+#[cfg(feature = "desktop")]
 #[tauri::command]
 async fn term_open(
-    terms: tauri::State<'_, term::Terminals>,
+    terms: State<'_, term::Terminals>,
     webview: tauri::Webview,
     root: Option<String>,
     cols: u16,
@@ -1222,19 +1230,15 @@ async fn term_open(
 }
 
 /// 把键盘输入写进 shell。`data` 是 xterm 给的原始串（含控制序列）。
-#[tauri::command]
-async fn term_write(
-    terms: tauri::State<'_, term::Terminals>,
-    id: u32,
-    data: String,
-) -> HostResult<()> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn term_write(terms: State<'_, term::Terminals>, id: u32, data: String) -> HostResult<()> {
     Ok(terms.write(id, &data)?)
 }
 
 /// 面板里的终端尺寸变了，PTY 跟着变 —— 不同步的话 shell 按旧宽度折行。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn term_resize(
-    terms: tauri::State<'_, term::Terminals>,
+    terms: State<'_, term::Terminals>,
     id: u32,
     cols: u16,
     rows: u16,
@@ -1243,15 +1247,15 @@ async fn term_resize(
 }
 
 /// 关一个终端（杀掉 shell）。幂等。
-#[tauri::command]
-async fn term_close(terms: tauri::State<'_, term::Terminals>, id: u32) -> HostResult<()> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn term_close(terms: State<'_, term::Terminals>, id: u32) -> HostResult<()> {
     terms.close(id);
     Ok(())
 }
 
 /// 现有的终端。面板重建标签栏、以及发现模型起了新服务，都靠它。
-#[tauri::command]
-async fn term_list(terms: tauri::State<'_, term::Terminals>) -> HostResult<Vec<term::TermSummary>> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn term_list(terms: State<'_, term::Terminals>) -> HostResult<Vec<term::TermSummary>> {
     Ok(terms.list())
 }
 
@@ -1259,9 +1263,10 @@ async fn term_list(terms: tauri::State<'_, term::Terminals>) -> HostResult<Vec<t
 ///
 /// 模型起的服务在面板打开之前就在跑了 —— 没有这条，那些输出永远到不了
 /// 用户眼前。
+#[cfg(feature = "desktop")]
 #[tauri::command]
 async fn term_attach(
-    terms: tauri::State<'_, term::Terminals>,
+    terms: State<'_, term::Terminals>,
     webview: tauri::Webview,
     id: u32,
     on_event: Channel<term::TermEvent>,
@@ -1274,20 +1279,16 @@ async fn term_attach(
 /// `[约束]` 这条命令只有面板会调 —— 模型侧的 `TerminalAccess` 里没有对应
 /// 方法，它不能给自己开权限。共享只给读，停仍然只认模型自己起的终端，
 /// 理由见 `term_access` 的模块文档。
-#[tauri::command]
-async fn term_share(
-    terms: tauri::State<'_, term::Terminals>,
-    id: u32,
-    shared: bool,
-) -> HostResult<()> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn term_share(terms: State<'_, term::Terminals>, id: u32, shared: bool) -> HostResult<()> {
     terms.set_shared(id, shared);
     Ok(())
 }
 
 /// 这个终端的前台有没有正在跑的进程。关标签前的确认用 ——
 /// 一键杀掉正忙的 dev server 不该是无声的。
-#[tauri::command]
-async fn term_busy(terms: tauri::State<'_, term::Terminals>, id: u32) -> HostResult<bool> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn term_busy(terms: State<'_, term::Terminals>, id: u32) -> HostResult<bool> {
     Ok(terms.is_busy(id))
 }
 
@@ -1302,11 +1303,8 @@ async fn term_busy(terms: tauri::State<'_, term::Terminals>, id: u32) -> HostRes
 /// `[约束]` 必须限大小。一张手机拍的照片十几 MB，读进来再 base64 变二十
 /// 多 MB，光是 IPC 那一跳就能让界面卡住一两秒 —— 而它最终还是会被服务方
 /// 的单图上限拒掉。在这里拦住，用户立刻知道是哪张图的问题。
-#[tauri::command]
-async fn read_image(
-    state: tauri::State<'_, AppState>,
-    path: String,
-) -> HostResult<content::ImageOutput> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn read_image(state: State<'_, AppState>, path: String) -> HostResult<content::ImageOutput> {
     let path = preview::resolve(&state, &path).await?;
     // 图片读取在内核 crate 里，报的是一句原文；这边包成键，原文留作细节。
     Ok(content::read_image(&path.display().to_string())
@@ -1329,11 +1327,8 @@ const MAX_PREVIEW_FILE: u64 = 32 * 1024 * 1024;
 ///
 /// 只在用户点击界面上已展示的路径时调用，语义与 `read_image` 一致：
 /// 读的是用户自己机器上、自己点开的文件。范围见 [`preview`]。
-#[tauri::command]
-async fn read_file_bytes(
-    state: tauri::State<'_, AppState>,
-    path: String,
-) -> HostResult<tauri::ipc::Response> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn read_file_bytes(state: State<'_, AppState>, path: String) -> HostResult<ipc::Response> {
     let path = preview::resolve(&state, &path).await?;
     let meta = tokio::fs::metadata(&path)
         .await
@@ -1349,15 +1344,15 @@ async fn read_file_bytes(
     let bytes = tokio::fs::read(&path)
         .await
         .map_err(|e| ui_error!("host.file.readFailed"; e))?;
-    Ok(tauri::ipc::Response::new(bytes))
+    Ok(ipc::Response::new(bytes))
 }
 
 /// 把一个目录加进项目列表（验证它存在、可 canonicalize），返回规范化的根。
 ///
 /// 只是登记，不创建会话 —— 项目和会话是两层：项目是侧边栏的分组，
 /// 会话才绑定围栏。
-#[tauri::command]
-async fn add_project(state: tauri::State<'_, AppState>, path: String) -> HostResult<String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn add_project(state: State<'_, AppState>, path: String) -> HostResult<String> {
     let f = fence::Fence::new(&path)?;
     let root = f.root().display().to_string();
 
@@ -1379,9 +1374,9 @@ async fn add_project(state: tauri::State<'_, AppState>, path: String) -> HostRes
 }
 
 /// 在某个项目下开一个新会话。会话从创建起就绑定这个目录，永不改变。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn create_session(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     root: String,
 ) -> HostResult<state::SessionInfo> {
     state.create_session(&root).await
@@ -1391,7 +1386,7 @@ async fn create_session(
 ///
 /// 侧栏和欢迎页用来标失效项目：目录是用户在访达里删的，配置里的
 /// 列表不会自己消失。每次点开再 canonicalize 失败再整页报错，太晚了。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn probe_dirs(paths: Vec<String>) -> Vec<String> {
     fence::missing_dirs(paths)
 }
@@ -1400,37 +1395,37 @@ fn probe_dirs(paths: Vec<String>) -> Vec<String> {
 ///
 /// opener 插件是分离式启动（spawn 完不等结果），目标不存在也报成功，
 /// 用户看到的就是"点了没反应"。先问一句存在与否，界面才有机会说"打不开"。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn path_exists(path: String) -> bool {
     std::path::Path::new(&path).exists()
 }
 
 /// 所有活着的会话。前端启动或刷新后用它对齐侧边栏。
-#[tauri::command]
-async fn list_sessions(state: tauri::State<'_, AppState>) -> HostResult<Vec<state::SessionInfo>> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn list_sessions(state: State<'_, AppState>) -> HostResult<Vec<state::SessionInfo>> {
     Ok(state.list_sessions().await)
 }
 
 /// 一个会话的完整历史。切回这个会话时前端用它重建对话流。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn get_history(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
 ) -> HostResult<state::HistoryOut> {
     state.history(&session_id).await
 }
 
 /// 删除会话（中断正在跑的轮子）。幂等。
-#[tauri::command]
-async fn delete_session(state: tauri::State<'_, AppState>, session_id: String) -> HostResult<()> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn delete_session(state: State<'_, AppState>, session_id: String) -> HostResult<()> {
     state.delete_session(&session_id).await;
     Ok(())
 }
 
 /// 重命名会话。空标题清除手动名，回退到第一条消息。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn rename_session(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     session_id: String,
     title: String,
 ) -> HostResult<()> {
@@ -1439,11 +1434,8 @@ async fn rename_session(
 
 /// 把项目从列表移除并关闭它下面的会话。**不删磁盘上的目录。**
 /// 返回被关闭的会话 id，前端拿它清理界面。
-#[tauri::command]
-async fn remove_project(
-    state: tauri::State<'_, AppState>,
-    root: String,
-) -> HostResult<Vec<String>> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn remove_project(state: State<'_, AppState>, root: String) -> HostResult<Vec<String>> {
     Ok(state.remove_project(&root).await)
 }
 
@@ -1451,9 +1443,9 @@ async fn remove_project(
 ///
 /// `provider_id` / `model` 不传就用当前激活的 —— 设置页测的是
 /// "正在编辑的那个"，不一定是激活的。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn test_connection(
-    state: tauri::State<'_, AppState>,
+    state: State<'_, AppState>,
     provider_id: Option<String>,
     model: Option<String>,
 ) -> HostResult<String> {
@@ -1477,7 +1469,7 @@ async fn test_connection(
 ///
 /// 传的是**正在编辑的**地址而不是已保存的配置 —— 用户的期待是"填完点
 /// 测试"，要求先保存再测会让他在两个按钮之间来回跑。空地址测内置实例。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn test_search_backend(base_url: String) -> HostResult<String> {
     Ok(web::test_searxng(&base_url)
         .await
@@ -1485,11 +1477,8 @@ async fn test_search_backend(base_url: String) -> HostResult<String> {
 }
 
 /// 拉取某个 provider 的可用模型列表（`GET /v1/models`）。
-#[tauri::command]
-async fn list_models(
-    state: tauri::State<'_, AppState>,
-    provider_id: String,
-) -> HostResult<Vec<String>> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn list_models(state: State<'_, AppState>, provider_id: String) -> HostResult<Vec<String>> {
     let config = state.config().await;
     let p = config
         .provider(&provider_id)
@@ -1551,6 +1540,7 @@ fn install_panic_hook() {
 ///
 /// `[约束]` 要在 setup 里**最先**跑。后面的外观设置靠 `get_webview_window("main")`
 /// 找窗口，那时窗口得已经在了。
+#[cfg(feature = "desktop")]
 fn create_main_window(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     use tauri_plugin_opener::OpenerExt as _;
 
@@ -1605,8 +1595,12 @@ fn create_main_window(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>
     Ok(())
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
+/// 进程级的准备：日志、panic 钩子、登录环境、全局技能目录。桌面和
+/// `riot-server` 启动时各调一次。
+///
+/// `[约束]` 必须在任何线程起来之前调用 —— 登录环境是 `set_var` 装进来的，
+/// 它不是线程安全的（见 `gui_env`）。
+pub fn init_process() {
     let directives = log_filter(
         std::env::var("RIOT_LOG").ok(),
         std::env::var("RUST_LOG").ok(),
@@ -1616,6 +1610,9 @@ pub fn run() {
             tracing_subscriber::EnvFilter::try_new(&directives)
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(DEFAULT_LOG)),
         )
+        // 颜色码只给终端。journald、docker logs、重定向到文件时它们是
+        // 一串 `[2m` `[0m`，grep 都对不上。
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stdout()))
         .init();
     // 装在 tracing 起来之后、任何业务代码之前 —— 这中间 panic 的话就只有
     // stderr 那一份了。
@@ -1626,6 +1623,88 @@ pub fn run() {
     // SSH_AUTH_SOCK / gh token，再挂上 GIT_ASKPASS。
     gui_env::inherit_login_env();
     askpass::install();
+
+    // 全局技能目录启动时就建好。设置页的「打开目录」按钮 reveal 的是它 ——
+    // 目录不存在时系统的 reveal 静默失败，按钮看起来就是坏的（用户没写过
+    // 技能之前恰恰是最需要这个按钮的时候）。建不出来只记日志：技能扫描
+    // 对缺目录本来就容忍。
+    // 豁免理由：宿主启动路径，操作自己的配置目录。
+    #[allow(clippy::disallowed_methods)]
+    if let Err(e) = std::fs::create_dir_all(skills::global_dir()) {
+        tracing::warn!(error = %e, "cannot create global skills dir; the settings 'open folder' button will be a no-op");
+    }
+}
+
+/// 宿主的后台部分：内核事件桥、定时任务、MCP 对齐、旧目录回收。桌面在
+/// Tauri setup 里调，`riot-server` 在 runtime 起来之后调。远程访问不在这里
+/// —— 两边起法不同（桌面看配置，`riot-server` 看启动参数）。
+///
+/// `[约束]` 要在 `AppState::restore` 之后调：定时任务和孤儿目录的判断都
+/// 要先有会话表。放 restore 里不行 —— spawn 要求 runtime 已经起来。
+pub fn start_background(state: &AppState) {
+    // 接上内核事件里宿主要消费的那几件(busy / mode 回流)。
+    state.spawn_host_bridge();
+    // 定时任务的调度循环（20 秒一查）。调度权威在宿主，
+    // 只在宿主运行时生效；错过的到点由启动对账收进补跑提示。
+    schedule::spawn_ticker(state.clone());
+    let s = state.clone();
+    ipc::spawn(async move {
+        // 先把旧的能力包目录迁成插件，再连 MCP：插件带的服务器由
+        // 启用中的插件目录派生，迁移完才有得派。
+        s.migrate_legacy_packs().await;
+        s.reconcile_mcp().await;
+    });
+    // 顺手收掉按会话分的旧 profile（那套已经换成全应用一份了）、
+    // 没人认领的工件目录和子 agent transcript 目录。不 await —— 启动
+    // 路径上不该等着删几个 GB 的缓存。
+    let s = state.clone();
+    ipc::spawn(async move {
+        s.gc_legacy_browser_profiles().await;
+        s.gc_artifacts().await;
+        s.gc_subagent_transcripts().await;
+    });
+}
+
+/// 网页版的静态资源从 Tauri 的 asset resolver 取：正式包里嵌在可执行文件
+/// 里，开发模式读 `dist/`。
+#[cfg(feature = "desktop")]
+struct TauriAssets(tauri::AppHandle);
+
+#[cfg(feature = "desktop")]
+impl remote::Assets for TauriAssets {
+    fn get(&self, path: &str) -> Option<remote::Asset> {
+        self.0
+            .asset_resolver()
+            .get(path.to_owned())
+            .map(|a| remote::Asset {
+                bytes: a.bytes,
+                mime: a.mime_type,
+            })
+    }
+
+    // `dev` 是 tauri-build 在 `tauri dev` 下打的 cfg。
+    fn dev_redirect(&self) -> Option<String> {
+        if cfg!(dev) {
+            self.missing_fallback()
+        } else {
+            None
+        }
+    }
+
+    fn missing_fallback(&self) -> Option<String> {
+        self.0
+            .config()
+            .build
+            .dev_url
+            .as_ref()
+            .map(|u| u.to_string())
+    }
+}
+
+#[cfg(feature = "desktop")]
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    init_process();
 
     // dev 和安装版共用 identifier「dev.riot.desktop」，Windows 上 WebView2 的用户
     // 数据目录因此都是 %LOCALAPPDATA%\dev.riot.desktop\EBWebView。这个目录被先
@@ -1646,16 +1725,6 @@ pub fn run() {
         let _ = std::fs::create_dir_all(&dir);
         // 此刻只有主线程（见 inherit_login_env 的约束），set_var 安全。
         unsafe { std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", &dir) };
-    }
-
-    // 全局技能目录启动时就建好。设置页的「打开目录」按钮 reveal 的是它 ——
-    // 目录不存在时系统的 reveal 静默失败，按钮看起来就是坏的（用户没写过
-    // 技能之前恰恰是最需要这个按钮的时候）。建不出来只记日志：技能扫描
-    // 对缺目录本来就容忍。
-    // 豁免理由：宿主启动路径，操作自己的配置目录。
-    #[allow(clippy::disallowed_methods)]
-    if let Err(e) = std::fs::create_dir_all(skills::global_dir()) {
-        tracing::warn!(error = %e, "cannot create global skills dir; the settings 'open folder' button will be a no-op");
     }
 
     // restore 而不是空表：会话和历史从上次的磁盘状态恢复。
@@ -1827,43 +1896,39 @@ pub fn run() {
                 drop(vibrancy::apply(app.handle(), &main, remembered));
             }
 
-            // 系统通知与全局 emit 要用应用句柄。要在 spawn_host_bridge
-            // 之前挂上 —— 消费 Done 通知的任务里就会用它发任务完成通知。
-            app.state::<AppState>()
-                .inner()
-                .attach_app(app.handle().clone());
-            // 接上内核事件里宿主要消费的那几件(busy / mode 回流)。
-            app.state::<AppState>().inner().spawn_host_bridge();
-            // 定时任务的调度循环（20 秒一查）。调度权威在宿主，
-            // 只在 App 运行时生效；错过的到点由启动对账收进补跑提示。
-            schedule::spawn_ticker(app.handle().clone());
             let state = app.state::<AppState>().inner().clone();
-            tauri::async_runtime::spawn(async move {
-                // 先把旧的能力包目录迁成插件，再连 MCP：插件带的服务器由
-                // 启用中的插件目录派生，迁移完才有得派。
-                state.migrate_legacy_packs().await;
-                state.reconcile_mcp().await;
-            });
-            // 远程访问：配置里开着就监听。放 setup 而不是 restore：起
-            // 服务要 runtime，而且要等 AppHandle 挂好（连接要用它取 state）。
+            // 全局事件转给窗口。要在 start_background 之前订上 —— 内核事件桥
+            // 一起来就可能发 sessions_changed。
+            let mut events = state.subscribe_events();
             let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                let cfg = handle.state::<AppState>().inner().config().await;
-                handle
-                    .state::<remote::Remote>()
-                    .inner()
-                    .apply(&handle, &cfg.remote)
-                    .await;
+            ipc::spawn(async move {
+                use tauri::Emitter;
+                loop {
+                    match events.recv().await {
+                        Ok(ev) => {
+                            if let Err(e) = handle.emit(ev.name, ev.payload) {
+                                tracing::debug!(error = %e, event = ev.name, "全局事件没发到窗口");
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
             });
-            // 顺手收掉按会话分的旧 profile（那套已经换成全应用一份了）、
-            // 没人认领的工件目录和子 agent transcript 目录。同样放 setup：
-            // 后两条要在会话表恢复完之后才能判断谁是孤儿，而且删目录要
-            // spawn_blocking。不 await —— 启动路径上不该等着删几个 GB 的缓存。
-            let state = app.state::<AppState>().inner().clone();
-            tauri::async_runtime::spawn(async move {
-                state.gc_legacy_browser_profiles().await;
-                state.gc_artifacts().await;
-                state.gc_subagent_transcripts().await;
+            start_background(&state);
+
+            // 远程访问：配置里开着就监听。放 setup 而不是 restore：起服务要
+            // runtime，静态资源要 AppHandle 的 asset resolver。
+            let remote = app.state::<remote::Remote>().inner().clone();
+            remote.attach(remote::HostCtx {
+                state: state.clone(),
+                terms: app.state::<term::Terminals>().inner().clone(),
+                version: app.package_info().version.to_string(),
+                assets: std::sync::Arc::new(TauriAssets(app.handle().clone())),
+            });
+            ipc::spawn(async move {
+                let cfg = state.config().await;
+                remote.apply(&cfg.remote).await;
             });
             Ok(())
         })

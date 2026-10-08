@@ -18,8 +18,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use riot_host_lib::config::AppConfig;
+use riot_host_lib::ipc::{Channel, InvokeResponseBody};
 use riot_host_lib::state::AppState;
-use tauri::ipc::{Channel, InvokeResponseBody};
 
 /// 确保内核二进制已构建(cargo test -p riot-host 不会连带 build 它)。
 /// 运行期的嵌套 cargo build 没有锁冲突 —— test 运行时构建锁已释放。

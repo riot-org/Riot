@@ -40,14 +40,50 @@ mod server;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU64, AtomicUsize};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use riot_protocol::{UiError, ui_error};
 use serde::Serialize;
-use tauri::AppHandle;
 use tokio::sync::{oneshot, watch};
 
 use crate::config::{REMOTE_TOKEN_KEY, RemoteBind, RemoteConfig};
+use crate::state::AppState;
+use crate::term::Terminals;
+
+/// 远程服务要用到的宿主上下文。桌面在 Tauri setup 里造一份，`riot-server`
+/// 启动时造一份 —— 连接和分发只认它，不碰 Tauri。
+#[derive(Clone)]
+pub struct HostCtx {
+    pub state: AppState,
+    pub terms: Terminals,
+    /// 显示在设置 → 关于、以及 `ready` 帧里的版本号。
+    pub version: String,
+    pub assets: Arc<dyn Assets>,
+}
+
+/// 一个静态资源。
+pub struct Asset {
+    pub bytes: Vec<u8>,
+    pub mime: String,
+}
+
+/// 网页版的前端产物从哪来。桌面走 Tauri 的 asset resolver（嵌在可执行文件
+/// 里），`riot-server` 读磁盘上的 `dist/`。
+pub trait Assets: Send + Sync {
+    /// `path` 以 `/` 开头，如 `/index.html`、`/assets/x.js`。
+    fn get(&self, path: &str) -> Option<Asset>;
+
+    /// 开发模式下前端在 Vite 那边热更新：`Some(devUrl)` = 所有页面请求都
+    /// 跳过去（磁盘上的产物多半是陈货）。
+    fn dev_redirect(&self) -> Option<String> {
+        None
+    }
+
+    /// 资源缺失时的退路（开发模式、`dist/` 还没建）。
+    fn missing_fallback(&self) -> Option<String> {
+        None
+    }
+}
 
 /// 所有连接共享的状态。
 pub struct Shared {
@@ -63,8 +99,9 @@ pub struct Shared {
 
 /// 一个正在监听的服务。
 struct Running {
-    bind: RemoteBind,
-    port: u16,
+    /// 要求绑的地址。和下一次的要求比，决定要不要重起。
+    want: SocketAddr,
+    /// 实际绑上的（端口给 0 时由系统挑）。
     addr: SocketAddr,
     /// 让 accept 循环停下(axum 的 graceful shutdown)。
     stop: Option<oneshot::Sender<()>>,
@@ -77,16 +114,26 @@ struct Running {
 }
 
 /// 远程服务的总开关。Tauri `manage` 一份，`set_config` 后调 [`Remote::apply`]。
-pub struct Remote {
+/// `Clone` 是浅拷贝：服务里的路由也要拿一份（`set_config` 经网页版调进来时
+/// 同样要对齐服务）。
+#[derive(Clone)]
+pub struct Remote(Arc<Inner>);
+
+struct Inner {
     shared: Arc<Shared>,
     running: tokio::sync::Mutex<Option<Running>>,
     /// 上次启动失败的原因（端口被占之类）。设置页要能看到。
     last_error: Mutex<Option<UiError>>,
+    /// 连接要用的宿主上下文。挂上之前 `apply` 什么都不做。
+    ctx: OnceLock<HostCtx>,
+    /// `riot-server` 的监听地址来自启动参数。钉上之后配置里的开关、端口、
+    /// 绑定一概不看 —— 在网页里关掉"远程访问"等于把自己锁在门外。
+    pinned: OnceLock<SocketAddr>,
 }
 
 impl Default for Remote {
     fn default() -> Self {
-        Self {
+        Self(Arc::new(Inner {
             shared: Arc::new(Shared {
                 token: Mutex::new(None),
                 throttle: auth::Throttle::default(),
@@ -97,27 +144,63 @@ impl Default for Remote {
             }),
             running: tokio::sync::Mutex::new(None),
             last_error: Mutex::new(None),
-        }
+            ctx: OnceLock::new(),
+            pinned: OnceLock::new(),
+        }))
     }
 }
 
 impl Remote {
+    /// 挂上宿主上下文。启动时调一次，之后的 `apply` 才会真的起服务。
+    pub fn attach(&self, ctx: HostCtx) {
+        if self.0.ctx.set(ctx).is_err() {
+            tracing::warn!("remote host context attached twice; keeping the first");
+        }
+    }
+
+    /// 把监听地址钉死（`riot-server`）。之后的 `apply` 不看配置。
+    pub fn pin(&self, addr: SocketAddr) {
+        let _ = self.0.pinned.set(addr);
+    }
+
+    /// 地址是不是由启动参数钉死的。设置页据此不给开关。
+    pub fn is_pinned(&self) -> bool {
+        self.0.pinned.get().is_some()
+    }
+
+    /// 实际在听的地址。没在听就是 `None`。
+    pub async fn listen_addr(&self) -> Option<SocketAddr> {
+        self.0.running.lock().await.as_ref().map(|r| r.addr)
+    }
+
+    /// 上次起服务失败的原因。
+    pub fn last_error(&self) -> Option<UiError> {
+        self.0.last_error.lock().expect("错误锁").clone()
+    }
+
     /// 让服务状态对齐配置：该开的开、该关的关、端口/绑定变了就重起。
     /// 幂等，启动和每次保存设置后都调。
-    pub async fn apply(&self, app: &AppHandle, cfg: &RemoteConfig) {
-        let mut g = self.running.lock().await;
-        if !cfg.enabled {
+    pub async fn apply(&self, cfg: &RemoteConfig) {
+        let inner = &*self.0;
+        let Some(ctx) = inner.ctx.get() else {
+            tracing::warn!("remote access applied before the host context was attached");
+            return;
+        };
+        let want = match inner.pinned.get() {
+            Some(a) => Some(*a),
+            None if cfg.enabled => Some(bind_addr(cfg.bind, cfg.port)),
+            None => None,
+        };
+        let mut g = inner.running.lock().await;
+        let Some(addr) = want else {
             if let Some(r) = g.take() {
                 stop(r).await;
                 tracing::info!("远程访问已关闭");
             }
-            *self.last_error.lock().expect("错误锁") = None;
+            *inner.last_error.lock().expect("错误锁") = None;
             return;
-        }
-        if let Some(r) = g.as_ref()
-            && r.bind == cfg.bind
-            && r.port == cfg.port
-        {
+        };
+        if g.as_ref().is_some_and(|r| r.want == addr) {
             return;
         }
         if let Some(r) = g.take() {
@@ -133,33 +216,34 @@ impl Remote {
                 let t = auth::generate_token();
                 if let Err(e) = crate::config::save_key(REMOTE_TOKEN_KEY, &t) {
                     tracing::error!(error = %e, "remote token could not be written to auth.json");
-                    *self.last_error.lock().expect("错误锁") =
+                    *inner.last_error.lock().expect("错误锁") =
                         Some(ui_error!("host.remote.tokenSaveFailed"; e));
                     return;
                 }
                 t
             }
         };
-        *self.shared.token.lock().expect("令牌锁") = Some(token);
+        *inner.shared.token.lock().expect("令牌锁") = Some(token);
 
-        let ip = match cfg.bind {
-            RemoteBind::Loopback => IpAddr::V4(Ipv4Addr::LOCALHOST),
-            RemoteBind::Lan => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-        };
-        let addr = SocketAddr::new(ip, cfg.port);
-        let listener = match tokio::net::TcpListener::bind(addr).await {
+        let want = addr;
+        let listener = match tokio::net::TcpListener::bind(want).await {
             Ok(l) => l,
             Err(e) => {
-                tracing::error!(%addr, error = %e, "remote access failed to bind");
-                *self.last_error.lock().expect("错误锁") =
-                    Some(ui_error!("host.remote.bindFailed", addr = addr; e));
+                tracing::error!(addr = %want, error = %e, "remote access failed to bind");
+                *inner.last_error.lock().expect("错误锁") =
+                    Some(ui_error!("host.remote.bindFailed", addr = want; e));
                 return;
             }
         };
-        let addr = listener.local_addr().unwrap_or(addr);
+        let addr = listener.local_addr().unwrap_or(want);
         let (stop_tx, stop_rx) = oneshot::channel::<()>();
         let (kick_tx, kick_rx) = watch::channel(false);
-        let router = server::router(app.clone(), Arc::clone(&self.shared), kick_rx);
+        let router = server::router(
+            ctx.clone(),
+            self.clone(),
+            Arc::clone(&inner.shared),
+            kick_rx,
+        );
         let task = tokio::spawn(async move {
             let serve = axum::serve(
                 listener,
@@ -172,10 +256,9 @@ impl Remote {
                 tracing::error!(error = %e, "远程服务异常退出");
             }
         });
-        *self.last_error.lock().expect("错误锁") = None;
+        *inner.last_error.lock().expect("错误锁") = None;
         *g = Some(Running {
-            bind: cfg.bind,
-            port: cfg.port,
+            want,
             addr,
             stop: Some(stop_tx),
             kick: kick_tx,
@@ -188,25 +271,35 @@ impl Remote {
     pub fn rotate_token(&self) -> Result<String, crate::config::ConfigError> {
         let t = auth::generate_token();
         crate::config::save_key(REMOTE_TOKEN_KEY, &t)?;
-        *self.shared.token.lock().expect("令牌锁") = Some(t.clone());
+        *self.0.shared.token.lock().expect("令牌锁") = Some(t.clone());
         Ok(t)
     }
 
     /// 设置页要看的全部状态。
     pub async fn status(&self, cfg: &RemoteConfig) -> RemoteStatus {
-        let g = self.running.lock().await;
+        let inner = &*self.0;
+        let g = inner.running.lock().await;
         let running = g.as_ref();
-        let token = self
+        let token = inner
             .shared
             .token
             .lock()
             .expect("令牌锁")
             .clone()
             .or_else(|| crate::config::load_secret(REMOTE_TOKEN_KEY));
-        let port = running.map(|r| r.port).unwrap_or(cfg.port);
-        let bind = running.map(|r| r.bind).unwrap_or(cfg.bind);
+        let pinned = inner.pinned.get().copied();
+        let addr = running
+            .map(|r| r.addr)
+            .or(pinned)
+            .unwrap_or_else(|| bind_addr(cfg.bind, cfg.port));
+        let port = addr.port();
+        let bind = if addr.ip().is_loopback() {
+            RemoteBind::Loopback
+        } else {
+            RemoteBind::Lan
+        };
         let urls = if running.is_some() {
-            access_urls(bind, port)
+            access_urls(addr)
         } else {
             Vec::new()
         };
@@ -219,7 +312,8 @@ impl Remote {
         };
         let qr_svg = login_url.as_deref().and_then(qr_svg);
         RemoteStatus {
-            enabled: cfg.enabled,
+            enabled: pinned.is_some() || cfg.enabled,
+            managed: pinned.is_some(),
             running: running.is_some(),
             bind,
             port,
@@ -228,13 +322,22 @@ impl Remote {
             login_url,
             qr_svg,
             token,
-            connections: self
+            connections: inner
                 .shared
                 .connections
                 .load(std::sync::atomic::Ordering::Relaxed),
-            error: self.last_error.lock().expect("错误锁").clone(),
+            error: inner.last_error.lock().expect("错误锁").clone(),
         }
     }
+}
+
+/// 设置页那两档监听范围对应的地址。
+fn bind_addr(bind: RemoteBind, port: u16) -> SocketAddr {
+    let ip = match bind {
+        RemoteBind::Loopback => IpAddr::V4(Ipv4Addr::LOCALHOST),
+        RemoteBind::Lan => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+    };
+    SocketAddr::new(ip, port)
 }
 
 /// 停一个服务:先踢 WebSocket 连接,再停 accept 循环,然后等 serve 任务退出。
@@ -264,6 +367,8 @@ const STOP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(3);
 #[serde(rename_all = "camelCase")]
 pub struct RemoteStatus {
     pub enabled: bool,
+    /// 监听地址由 `riot-server` 的启动参数决定，设置页不给开关、端口和绑定。
+    pub managed: bool,
     pub running: bool,
     pub bind: RemoteBind,
     pub port: u16,
@@ -284,19 +389,22 @@ pub struct RemoteStatus {
 ///
 /// 回环只有一个。局域网列出本机对外那块网卡的 IPv4 —— 用 UDP "connect"
 /// 探路由，不真发包，不依赖网卡枚举库；多网卡机器只给出默认路由那一块，
-/// 那也正是手机能连到的那一块。
-fn access_urls(bind: RemoteBind, port: u16) -> Vec<String> {
-    match bind {
-        RemoteBind::Loopback => vec![format!("http://127.0.0.1:{port}/")],
-        RemoteBind::Lan => {
-            let mut out = Vec::new();
-            if let Some(ip) = primary_lan_ip() {
-                out.push(format!("http://{ip}:{port}/"));
-            }
-            out.push(format!("http://127.0.0.1:{port}/"));
-            out
-        }
+/// 那也正是手机能连到的那一块。`riot-server` 绑到某个具体地址时就给那一个。
+pub(crate) fn access_urls(addr: SocketAddr) -> Vec<String> {
+    let port = addr.port();
+    let ip = addr.ip();
+    if ip.is_loopback() {
+        return vec![format!("http://127.0.0.1:{port}/")];
     }
+    if !ip.is_unspecified() {
+        return vec![format!("http://{addr}/")];
+    }
+    let mut out = Vec::new();
+    if let Some(ip) = primary_lan_ip() {
+        out.push(format!("http://{ip}:{port}/"));
+    }
+    out.push(format!("http://127.0.0.1:{port}/"));
+    out
 }
 
 fn primary_lan_ip() -> Option<Ipv4Addr> {
@@ -338,11 +446,19 @@ mod tests {
     #[test]
     fn 回环只给一个地址_局域网至少给回环() {
         assert_eq!(
-            access_urls(RemoteBind::Loopback, 7823),
+            access_urls(bind_addr(RemoteBind::Loopback, 7823)),
             vec!["http://127.0.0.1:7823/"]
         );
-        let lan = access_urls(RemoteBind::Lan, 7823);
+        let lan = access_urls(bind_addr(RemoteBind::Lan, 7823));
         assert!(lan.iter().any(|u| u == "http://127.0.0.1:7823/"));
+    }
+
+    #[test]
+    fn 绑到具体地址时只给那一个() {
+        let addr: SocketAddr = "10.0.0.5:7823".parse().expect("地址");
+        assert_eq!(access_urls(addr), vec!["http://10.0.0.5:7823/"]);
+        let v6: SocketAddr = "[fd00::5]:7823".parse().expect("地址");
+        assert_eq!(access_urls(v6), vec!["http://[fd00::5]:7823/"]);
     }
 
     #[test]

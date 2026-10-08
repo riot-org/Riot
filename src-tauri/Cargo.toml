@@ -16,9 +16,30 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [[bin]]
 name = "Riot"
 path = "src/main.rs"
+required-features = ["desktop"]
+
+# 无界面宿主：只有网页版。Linux 服务器上用
+# `cargo build -p riot-host --no-default-features --bin riot-server` 编，
+# 不带 desktop 就不链接 Tauri / GTK。带着 desktop 也能编能跑（本机调试用）。
+[[bin]]
+name = "riot-server"
+path = "src/bin/riot-server.rs"
+
+[features]
+default = ["desktop"]
+# Tauri 桌面窗口。关掉它得到的是 riot-server 能用的纯宿主库：Linux 上的
+# tauri crate 无条件链接 GTK，服务器上装不起也起不来（见 src/ipc.rs）。
+desktop = [
+  "dep:tauri",
+  "dep:tauri-build",
+  "dep:tauri-plugin-dialog",
+  "dep:tauri-plugin-opener",
+  "dep:tauri-plugin-single-instance",
+  "dep:tauri-plugin-notification",
+]
 
 [build-dependencies]
-tauri-build = { version = "2.6", features = [] }
+tauri-build = { version = "2.6", features = [], optional = true }
 
 [dependencies]
 # 读用户附的图片文件时要编码成 base64 交给模型。
@@ -33,14 +54,14 @@ riot-runtime.workspace = true
 riot-store.workspace = true
 riot-tools.workspace = true
 
-tauri = { version = "2.11", features = ["macos-private-api"] }
-tauri-plugin-dialog = "2.7"
-tauri-plugin-opener = "2.5"
+tauri = { version = "2.11", features = ["macos-private-api"], optional = true }
+tauri-plugin-dialog = { version = "2.7", optional = true }
+tauri-plugin-opener = { version = "2.5", optional = true }
 # 单实例。两个 Riot 进程会抢同一份 config.json、会话索引和浏览器 profile
 # （CEF 在 profile 上有进程单例锁，抢输的那个静默退出，见 src/browser/hub.rs）。
 # Windows 上双击几次就是几个进程；macOS 的 .app 本来就不会被 Finder 开第二份，
 # 但 `open -n` 可以。只在 release 里注册，见 lib.rs 的 run()。
-tauri-plugin-single-instance = "2.4"
+tauri-plugin-single-instance = { version = "2.4", optional = true }
 
 anyhow.workspace = true
 async-trait.workspace = true
@@ -55,7 +76,7 @@ regex-lite = "0.1.9"
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["signal"] }
 tokio-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
@@ -69,7 +90,7 @@ zstd.workspace = true
 # 时间只有宿主碰（riot-protocol::schedule 模块头），内核不做时区运算。
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 similar = { version = "3.1.2", default-features = false, features = ["text", "inline"] }
-tauri-plugin-notification = "2.3.3"
+tauri-plugin-notification = { version = "2.3.3", optional = true }
 # 远程访问（网页版）的 HTTP + WebSocket 服务，见 src/remote/。
 # 只开 ws：静态资源和握手用 axum 自带的路由就够，不引 tower-http。
 axum = { version = "0.8", features = ["ws"] }

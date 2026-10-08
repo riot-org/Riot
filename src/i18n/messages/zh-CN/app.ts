@@ -123,7 +123,7 @@ export default {
   "app.remote.connectingHost": "正在连接宿主…",
   "app.remote.reconnecting": "与宿主的连接断了，正在重连…",
   "app.remote.title": "连接到 Riot",
-  "app.remote.hint": "输入桌面端「设置 → 远程访问」里显示的访问令牌。扫那里的二维码可以跳过这一步。",
+  "app.remote.hint": "输入桌面端「设置 → 远程访问」里显示的访问令牌。扫那里的二维码可以跳过这一步。服务器版：在服务器上运行 riot-server token 获取登录链接。",
   "app.remote.denied": "宿主拒绝了上一次连接：{reason}",
   "app.remote.tokenPlaceholder": "访问令牌",
   "app.remote.connect": "连接",

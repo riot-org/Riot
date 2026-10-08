@@ -128,7 +128,7 @@ export default {
   "app.remote.connectingHost": "Connecting to host…",
   "app.remote.reconnecting": "Lost connection to the host. Reconnecting…",
   "app.remote.title": "Connect to Riot",
-  "app.remote.hint": "Enter the access token shown in Settings → Remote access on the desktop app. Scanning the QR code there skips this step.",
+  "app.remote.hint": "Enter the access token shown in Settings → Remote access on the desktop app. Scanning the QR code there skips this step. On a server install, run riot-server token on the server to get the login link.",
   "app.remote.denied": "The host rejected the last connection: {reason}",
   "app.remote.tokenPlaceholder": "Access token",
   "app.remote.connect": "Connect",

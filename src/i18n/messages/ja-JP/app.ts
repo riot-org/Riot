@@ -122,7 +122,7 @@ export default {
   "app.remote.connectingHost": "ホストに接続中…",
   "app.remote.reconnecting": "ホストとの接続が切れました。再接続中…",
   "app.remote.title": "Riot に接続",
-  "app.remote.hint": "デスクトップ版の「設定 → リモートアクセス」に表示されているアクセストークンを入力してください。そこの QR コードを読み取ればこの手順は不要です。",
+  "app.remote.hint": "デスクトップ版の「設定 → リモートアクセス」に表示されているアクセストークンを入力してください。そこの QR コードを読み取ればこの手順は不要です。サーバー版の場合は、サーバー上で riot-server token を実行するとログインリンクが得られます。",
   "app.remote.denied": "ホストが前回の接続を拒否しました：{reason}",
   "app.remote.tokenPlaceholder": "アクセストークン",
   "app.remote.connect": "接続",
