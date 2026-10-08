@@ -1391,7 +1391,7 @@ Rust 这里有生态优势:`tree-sitter` 和 `tree-sitter-bash` 都是原生 cra
 
 - macOS:`sandbox-exec` / seatbelt profile(**已落地**,`riot-runtime/src/sandbox.rs`)
 - Windows:专用本地账户 + 附加 ACE,底层是 vendored 的 `srt-win`(**已落地**,见 `docs/SANDBOX_WINDOWS.md`;那份文档记了为什么从 Low IL 换过来)
-- Linux:bubblewrap + seccomp(未排期)
+- Linux:bubblewrap + seccomp(**已落地**,`riot-runtime/src/sandbox_linux.rs`,见 §9.6.4)
 
 沙箱内的 Bash 可以自动放行(既然 OS 层已经挡住了),模型也可以显式请求出沙箱(需要用户同意)。
 
@@ -1437,6 +1437,18 @@ Rust 这里有生态优势:`tree-sitter` 和 `tree-sitter-bash` 都是原生 cra
 `[约束]` **子 agent 必须套父会话的同一个沙箱**(`SubagentDeps::sandbox`)。它和父共用权限闸,而闸里带着 `sandboxed`;只要子 agent 这边没套上,那个标志就是谎报,决策链会按"OS 挡着"放行一批在宿主上裸跑的写命令。入口从 Bash 换成 Task,后果一模一样。
 
 `[取舍]` ssh-agent 的 socket 放回来了,尽管它确实是一条外包通道。挡住它,私钥在 agent 里的人连 `git push` 都跑不了;而放回来并没有新增能力(今天的沙箱本来就没挡它)。记为残余风险。同样开着的还有 `ssh localhost`、本地数据库的 `COPY TO '/path'`。
+
+#### 9.6.4 Linux:bubblewrap 套 seccomp
+
+策略层和 macOS 共用(`SandboxPolicy` 的可写集、逃逸面清单都一样),只是翻译成 bwrap 的挂载:`--ro-bind / /` 打底,可写目录逐个 `--bind` 回来,逃逸面再 `--ro-bind` 盖上去。`[约束]` 顺序就是语义——bwrap 按参数顺序挂,后挂的盖住先挂的,逃逸面必须排在可写目录之后,否则 `~/.cargo` 的可写 bind 会把 `~/.cargo/bin` 的只读盖掉。不存在的逃逸面先建出来再盖(`plant_protected`),理由同 macOS:不建的话沙箱里可以凭空造一个 `.git/hooks/`。
+
+§9.6.2 的"按通道挡"在 Linux 上是 seccomp:`socket(AF_UNIX, …)` 回 `EPERM`,`socketpair` 不受影响(`multiprocessing`、管道式 IPC 照常)。同时挡掉 `io_uring_setup`(它的 socket 操作绕得过 `socket` 的过滤)、x32 ABI 和非本机架构(换个系统调用号表就绕过去了)。DNS 走 UDP,不像 macOS 那样要单独放回来。
+
+`[约束]` 过滤器经管道喂给 `--seccomp 9`,不落盘。落盘就得放在某个目录里,而那个目录多半在可写集内——沙箱里的命令改掉它,下一条命令就没过滤了。
+
+`[约束]` bwrap 只按固定路径找(`/usr/bin/bwrap`、`/usr/local/bin/bwrap`,或 `RIOT_BWRAP`),不查 PATH。PATH 上的目录(`~/.cargo/bin`、`~/.local/bin`)有的就在沙箱可写集里,查 PATH 等于让上一条沙箱命令决定下一条用什么"沙箱"。
+
+`[前提]` 能不能起是运行时才知道的:Docker 默认的 seccomp / AppArmor 不让建 user namespace,有的发行版(Ubuntu 23.10+)用 AppArmor 限制非特权 user namespace,容器里还常常挂不了新的 `/proc`。所以激活时先真跑一次 `/bin/true`(`probe`),新 `/proc` 挂不上就退到只读绑宿主的 `/proc`——代价是沙箱里 `ps` 看得到宿主进程,但 PID namespace 仍在,信号发不出去。`[约束]` 这一档必须同时拆 user namespace:同一个 user namespace 里,`/proc/<宿主 pid>/root`、`cwd` 能跳进宿主进程的挂载视图,在那边写文件不受沙箱挂载约束;隔着 user namespace 时内核拒绝访问(实测 root 和普通用户都是 `Permission denied`)。都起不来就报 `Broken` 带上 bwrap 的原话,设置页里能看到,不静默降级成"没隔离"。root 跑时加 `--unshare-user`:bwrap 对 root 不自动建 user namespace,而容器里的 root 往往没有建其它 namespace 的能力。
 
 ---
 

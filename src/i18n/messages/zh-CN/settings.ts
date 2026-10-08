@@ -212,7 +212,7 @@ export default {
 
   "settings.permission.sandbox": "命令隔离",
   "settings.permission.sandbox.desc":
-    "由操作系统限制命令能改什么。开着时，没有规则命中、也不是只读的命令可以直接放行 —— 边界由内核守着。macOS 开箱可用，Windows 需要装一次。",
+    "由操作系统限制命令能改什么。开着时，没有规则命中、也不是只读的命令可以直接放行 —— 边界由内核守着。macOS 开箱可用，Windows 需要装一次，Linux 需要装 bubblewrap。",
   "settings.permission.sandbox.workspaceWrite": "隔离（推荐）",
   "settings.permission.sandbox.workspaceWrite.desc":
     "只能改工作区、临时目录和构建缓存；macOS 上桌面 / 下载也可以。读和联网不受限。",

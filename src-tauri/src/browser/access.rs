@@ -2317,24 +2317,32 @@ fn is_browser_bundle(path: &std::path::Path) -> bool {
 /// 开发时在 crate 的 target 下（`scripts/build-browser.sh` /
 /// `scripts/build-browser.ps1` 的产物），发版后跟着主程序走。找不到时
 /// 返回 `None` —— 调用方据此装 `NoBrowser`，工具会明确说用不了。
+///
+/// `RIOT_BROWSER_DIR` 优先：服务器上浏览器包常常和 riot-server 分开放
+/// （单独一层镜像、系统包管理器装的目录）。给了但里面没有可执行文件就
+/// 当没给 —— 和找不到一样装 `NoBrowser`，而不是去猜别的位置。
 pub fn locate_app() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("RIOT_BROWSER_DIR").filter(|s| !s.is_empty()) {
+        let dir = PathBuf::from(dir);
+        return is_browser_bundle(&dir).then(|| dir.canonicalize().unwrap_or(dir));
+    }
     // 发版布局:macOS 在 Riot.app/Contents/Resources/riot-browser.app;
-    // Windows 没有 bundle，整个目录铺在主 exe 旁边的 riot-browser\ 里。
+    // Windows / Linux 没有 bundle，整个目录铺在主程序旁边的 riot-browser/ 里。
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
     {
-        #[cfg(windows)]
+        #[cfg(not(target_os = "macos"))]
         let bundled = dir.join("riot-browser");
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
         let bundled = dir.join("../Resources/riot-browser.app");
         if is_browser_bundle(&bundled) {
             return bundled.canonicalize().ok();
         }
     }
     // 开发布局（打包脚本的默认输出位置）
-    #[cfg(windows)]
+    #[cfg(not(target_os = "macos"))]
     const DEV_BUNDLE: &str = "../crates/riot-browser/target/bundle/riot-browser";
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
     const DEV_BUNDLE: &str = "../crates/riot-browser/target/bundle/riot-browser.app";
     let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(DEV_BUNDLE);
     is_browser_bundle(&dev).then(|| dev.canonicalize().unwrap_or(dev))

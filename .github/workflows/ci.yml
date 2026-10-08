@@ -132,6 +132,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy -p riot-host --no-default-features --all-targets -- -D warnings
       - run: cargo test -p riot-host --no-default-features --lib --bins --test acl
+      # Linux 命令沙箱（bubblewrap）。真跑的那几条在 bwrap 起不来时是跳过的，
+      # 所以先单独冒烟一次：起不来就在这里红，而不是测试全绿什么都没验。
+      - run: sudo apt-get install -y --no-install-recommends bubblewrap netcat-openbsd
+      - run: bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid -- /bin/true
+      - run: cargo clippy -p riot-runtime --all-targets -- -D warnings
+      - run: cargo test -p riot-runtime sandbox -- --nocapture
 
   # vendored srt-win 的**真机**验证：跑上游自带的冒烟脚本。
   #

@@ -56,6 +56,8 @@ pnpm gen
 
 macOS 上浏览器必须从 `.app` bundle 启动。`pnpm tauri dev` 已经在跑的话，打完包要重启一次，宿主只在启动时定位浏览器。Windows 用 `scripts/build-browser.ps1`，需要 VS 的「使用 C++ 的桌面开发」工作负载。
 
+Linux（只给无界面的 `riot-server` 用）跑同一个 `build-browser.sh`，CEF 由构建自动下载，产物是 `crates/riot-browser/target/bundle/riot-browser/` 平铺目录。运行时依赖和差异见 [REMOTE_ACCESS.md](REMOTE_ACCESS.md) §9。
+
 浏览器是可选能力：没打过包也能起主应用，只是 Browser 工具和面板不可用。
 
 浏览器进程全应用只有一个，所有会话共用，profile（cookie、localStorage）在配置目录旁的 `browser-profile/`，跨会话、跨重启保留 —— 在一个会话里登录过的站点，别的会话直接是登录态。想回到干净状态就退出应用后删掉那个目录。每个会话仍然有自己的标签页，互不可见。

@@ -17,8 +17,8 @@ fn main() {
     // 布局是 `Frameworks/riot-browser Helper.app/Contents/MacOS/<exe>`，
     // 框架在 `Frameworks/` 下，所以往上三层。
     //
-    // Windows 没有对应的步骤:libcef.dll 是链接期挂上的，helper 和它
-    // 同目录，加载器自己就能找到。
+    // Windows / Linux 没有对应的步骤:libcef 是链接期挂上的，helper 和它
+    // 同目录，加载器自己就能找到（Linux 靠 build.rs 写的 `$ORIGIN` rpath）。
     #[cfg(target_os = "macos")]
     {
         let Some(frameworks) = helper_frameworks_dir() else {

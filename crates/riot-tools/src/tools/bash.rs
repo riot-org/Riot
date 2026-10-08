@@ -90,13 +90,18 @@ impl Tool for Bash {
             } else {
                 "the working directory, temp directories, Desktop, Downloads and build caches"
             };
+            let channels = if ctx.platform == "linux" {
+                "Connecting to unix sockets is denied, so tools that talk to a local \
+                 daemon — `docker`, `systemctl` — always fail in the sandbox."
+            } else {
+                "Connecting to unix sockets and sending Apple Events is denied, so tools \
+                 that talk to a local daemon or another app — `docker`, `osascript` — always \
+                 fail in the sandbox."
+            };
             format!(
                 "\n\
                  - Commands run inside an **OS sandbox**. Writes are limited to {writes}; \
-                 reads are unrestricted. \
-                 Connecting to unix sockets and sending Apple Events is denied, so tools \
-                 that talk to a local daemon or another app — `docker`, `osascript` — always \
-                 fail in the sandbox.\n\
+                 reads are unrestricted. {channels}\n\
                  - When a command fails and its output carries `[riot:sandbox]`, the boundary \
                  MAY be the cause. If the target really is outside the boundary and the \
                  operation is necessary, re-run it with `sandbox: false`: it executes outside \

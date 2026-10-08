@@ -11,8 +11,8 @@
 //! 这条限制正是 `riot-browser` 独立成一个进程的原因:主应用在 `tauri dev`
 //! 下跑的是裸二进制，永远满足不了它。
 //!
-//! Windows 没有这层束缚:libcef.dll 在链接期挂上、随 exe 同目录加载，
-//! 资源按 dll 所在位置找。所以这里 Windows 只剩两件小事 —— helper 在哪、
+//! Windows 和 Linux 没有这层束缚:libcef 在链接期挂上、随 exe 同目录加载，
+//! 资源按库所在位置找。所以这两个平台只剩两件小事 —— helper 在哪、
 //! 缓存放哪。
 
 #[cfg(target_os = "macos")]
@@ -80,12 +80,17 @@ pub fn helper_exe(frameworks: &Path) -> PathBuf {
 ///
 /// `current_exe` 拿不到时退回相对路径，让加载器按工作目录找 —— 那是
 /// 几乎不会发生的分支，但返回空路径会让 CEF 静默用错误的默认 helper 名。
-#[cfg(windows)]
+#[cfg(not(target_os = "macos"))]
 pub fn helper_exe() -> PathBuf {
+    const NAME: &str = if cfg!(windows) {
+        "riot-browser-helper.exe"
+    } else {
+        "riot-browser-helper"
+    };
     std::env::current_exe()
         .ok()
-        .and_then(|exe| Some(exe.parent()?.join("riot-browser-helper.exe")))
-        .unwrap_or_else(|| PathBuf::from("riot-browser-helper.exe"))
+        .and_then(|exe| Some(exe.parent()?.join(NAME)))
+        .unwrap_or_else(|| PathBuf::from(NAME))
 }
 
 /// 浏览器数据目录。

@@ -12,8 +12,10 @@
 //! # 平台差异都在启动这一段
 //!
 //! macOS 要从 `.app` 里动态加载框架、先把 NSApp 换成 CEF 认的子类;
-//! Windows 的 libcef.dll 是链接期挂上的，资源按 dll 所在目录找，什么都
-//! 不用做。进了消息循环之后（osr / dispatch / cdp / wire）没有任何平台分支。
+//! Windows 的 libcef.dll、Linux 的 libcef.so 都是链接期挂上的，资源按库
+//! 所在目录找，什么都不用做；Linux 另外要换成无窗口系统的 headless 平台
+//! （见 [`linux_switches`]）。进了消息循环之后（osr / dispatch / cdp / wire）
+//! 没有任何平台分支。
 
 // `[约束]` Windows 上必须是 windows 子系统。这个进程由主应用带管道 spawn，
 // stdio 走管道句柄，不需要控制台；而 console 子系统的可执行文件被 GUI
@@ -32,12 +34,6 @@ mod wire;
 use cef::*;
 
 fn main() {
-    #[cfg(not(any(target_os = "macos", windows)))]
-    {
-        eprintln!("riot-browser: 目前只实现了 macOS 和 Windows");
-        std::process::exit(1);
-    }
-
     #[cfg(target_os = "macos")]
     {
         let Some(frameworks) = paths::frameworks_dir() else {
@@ -56,16 +52,16 @@ fn main() {
         run(&frameworks);
     }
 
-    // Windows 不加载任何东西:libcef.dll 由加载器按"和 exe 同目录"的
-    // 规则找到（打包脚本 scripts/build-browser.ps1 保证了这个布局），
-    // 找不到时进程根本起不来，主应用看到的是 spawn 失败而不是半死状态。
-    #[cfg(windows)]
+    // Windows 和 Linux 不加载任何东西:libcef 由加载器按"和 exe 同目录"的
+    // 规则找到（Windows 是 dll 搜索顺序，Linux 是 build.rs 写进去的
+    // `$ORIGIN` rpath；打包脚本保证了这个布局），找不到时进程根本起不来，
+    // 主应用看到的是 spawn 失败而不是半死状态。
+    #[cfg(not(target_os = "macos"))]
     run();
 }
 
 /// macOS 需要知道 Frameworks 目录在哪（框架和 helper 都在里面）;
-/// Windows 上一切和 exe 平级，没有要传的东西。
-#[cfg(any(target_os = "macos", windows))]
+/// Windows / Linux 上一切和 exe 平级，没有要传的东西。
 fn run(#[cfg(target_os = "macos")] frameworks: &std::path::Path) {
     let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
 
@@ -122,7 +118,7 @@ fn run(#[cfg(target_os = "macos")] frameworks: &std::path::Path) {
             paths::framework_dir(frameworks).to_string_lossy().as_ref(),
         );
     }
-    #[cfg(windows)]
+    #[cfg(not(target_os = "macos"))]
     {
         settings.browser_subprocess_path =
             CefString::from(paths::helper_exe().to_string_lossy().as_ref());
@@ -188,6 +184,9 @@ wrap_app! {
                 Some(&CefString::from(features.as_str())),
             );
 
+            #[cfg(target_os = "linux")]
+            linux_switches(_process_type, cl);
+
             // `[取舍]` 组件更新器保持 Chromium 的默认（开着）。
             //
             // 它在后台按需下载一批不随主程序编译的模块，存进 profile：
@@ -209,6 +208,64 @@ wrap_app! {
     }
 }
 
+/// Linux 上这个进程跑在服务器里：没有显示器、没有 GPU，常常还在容器里。
+///
+/// `[约束]` `ozone-platform=headless` 必须给。Linux 版 Chromium 默认按
+/// `$DISPLAY` / `$WAYLAND_DISPLAY` 挑 X11 或 Wayland，两个都没有时浏览器
+/// 进程在初始化阶段直接退出（`Missing X server or $DISPLAY`）—— 宿主看到的
+/// 只是"事件流断了"。离屏渲染本来就不需要窗口系统，headless 平台正好。
+///
+/// `[约束]` `disable-dev-shm-usage`：Docker 默认的 `/dev/shm` 只有 64MB，
+/// 渲染进程的共享内存不够时页面直接崩（"Aw, Snap"），面板上表现为白屏。
+/// 改走 `/tmp`，慢一点但不挑环境。
+///
+/// 只对浏览器进程加：子进程的命令行由浏览器进程按需转发，这几项它自己会带。
+#[cfg(target_os = "linux")]
+fn linux_switches(process_type: Option<&CefString>, cl: &mut CommandLine) {
+    if process_type.is_some_and(|t| !t.to_string().is_empty()) {
+        return;
+    }
+    cl.append_switch_with_value(
+        Some(&CefString::from("ozone-platform")),
+        Some(&CefString::from("headless")),
+    );
+    for s in ["disable-gpu", "disable-dev-shm-usage"] {
+        cl.append_switch(Some(&CefString::from(s)));
+    }
+}
+
+/// 网络权限直接写成默认值，不等提示。
+///
+/// `[约束]` headless 平台下 Chromium 不弹权限提示：请求在走到
+/// [`osr::OsrPermission`] 之前就被当场拒掉（实测通知、回环网络都是，
+/// 回调一次都不进；换成 X11 平台就进）。于是 macOS / Windows 上靠那个
+/// 回调放行的回环访问在这里全部失败 —— https 页面打 `http://localhost`
+/// 报 `Permission was denied ... loopback address space`，和"后端没起来"
+/// 看起来一样。
+///
+/// 放行清单和那个回调一致（见 `osr::auto_granted` 的取舍）：回环放行，
+/// 局域网明确拒绝 —— 后者本来也会被当场拒掉，写明是为了不依赖
+/// headless 平台"没人可问就拒"这个实现细节。
+#[cfg(target_os = "linux")]
+fn grant_network_defaults() {
+    let Some(ctx) = request_context_get_global_context() else {
+        eprintln!("riot-browser: 拿不到全局请求上下文，回环访问会被拒");
+        return;
+    };
+    for (kind, value) in [
+        (
+            ContentSettingTypes::LOOPBACK_NETWORK,
+            ContentSettingValues::ALLOW,
+        ),
+        (
+            ContentSettingTypes::LOCAL_NETWORK,
+            ContentSettingValues::BLOCK,
+        ),
+    ] {
+        ctx.set_content_setting(None, None, kind, value);
+    }
+}
+
 wrap_browser_process_handler! {
     struct HostProcessHandler;
 
@@ -220,6 +277,8 @@ wrap_browser_process_handler! {
             //
             // 读 stdin 的线程要等 CEF 就绪之后再起 —— 早起的话，命令会投到
             // 一个还没有 UI 线程消息循环的地方。
+            #[cfg(target_os = "linux")]
+            grant_network_defaults();
             crate::dispatch::spawn_stdin_reader();
             crate::wire::emit(&riot_protocol::browser::Event::Ready);
         }

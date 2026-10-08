@@ -35,7 +35,7 @@
 //! - macOS：[`crate::sandbox_macos`]（seatbelt / `sandbox-exec`，已落地）
 //! - Windows：[`crate::sandbox_win`]（专用本地账户 + 附加 ACE，编排
 //!   vendored 的 srt-win，已落地，见 docs/SANDBOX_WINDOWS.md）
-//! - Linux：未排期
+//! - Linux：[`crate::sandbox_linux`]（bubblewrap + seccomp，要装 `bwrap`）
 
 #![allow(clippy::disallowed_methods)]
 
@@ -233,7 +233,24 @@ impl SandboxPolicy {
         {
             crate::sandbox_win::activate(&self).map(|win| ActiveSandbox { win })
         }
-        #[cfg(not(any(target_os = "macos", windows)))]
+        #[cfg(target_os = "linux")]
+        {
+            crate::sandbox_linux::plant_protected();
+            // 理由同 macOS 的 profile_accepted：起不来的话每条命令都会失败，
+            // 而 `sandboxed` 已经报成了 true。
+            let bwrap = match crate::sandbox_linux::probe(&self) {
+                Ok(b) => b,
+                Err(e) => {
+                    tracing::warn!(error = %e, "bwrap 冒烟没过，本轮不隔离");
+                    return None;
+                }
+            };
+            Some(ActiveSandbox {
+                policy: self,
+                bwrap,
+            })
+        }
+        #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
         {
             let _ = self;
             None
@@ -245,11 +262,13 @@ impl SandboxPolicy {
 ///
 /// 后端按平台不同：macOS 持策略（每次 spawn 拼 seatbelt profile 垫
 /// argv），Windows 持沙箱账户的 SID 与本会话的授权（每次 spawn 垫成一次
-/// `srt-win exec`，Drop 时回收 ACE）。其它平台 `activate` 恒返回 None，
-/// 构造不出它。
+/// `srt-win exec`，Drop 时回收 ACE），Linux 持策略和 `bwrap` 的位置（每次
+/// spawn 垫成一次 `bwrap`）。其它平台 `activate` 恒返回 None，构造不出它。
 pub struct ActiveSandbox {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     policy: SandboxPolicy,
+    #[cfg(target_os = "linux")]
+    bwrap: crate::sandbox_linux::Bwrap,
     #[cfg(windows)]
     win: crate::sandbox_win::WinSandbox,
 }
@@ -274,8 +293,8 @@ impl ActiveSandbox {
 /// 会话设的 Python venv 和插件就静默失效」。装在最里层则外层改完 env 的
 /// spec 原样落到这里。
 pub struct SandboxedRunner {
-    // 三个平台都读它：macOS 垫 sandbox-exec、Windows 垫 srt-win，都交给它
-    // 起进程；其它平台直接透传。
+    // 每个平台都读它：macOS 垫 sandbox-exec、Windows 垫 srt-win、Linux 垫
+    // bwrap，都交给它起进程；其它平台直接透传。
     inner: std::sync::Arc<dyn ProcessRunner>,
     /// `Arc` 而不是独占：沙箱按**会话**激活一次、跨轮复用。Windows 上
     /// 激活要给可写目录写可继承的 ACE，而 `SetNamedSecurityInfoW` 会把它
@@ -325,7 +344,13 @@ impl ProcessRunner for SandboxedRunner {
             let wrapped = self.sandbox.win.wrap(spec);
             self.inner.run(wrapped, cancel).await
         };
-        #[cfg(not(any(target_os = "macos", windows)))]
+        #[cfg(target_os = "linux")]
+        let out = {
+            let wrapped =
+                crate::sandbox_linux::wrap(&self.sandbox.bwrap, &self.sandbox.policy, spec);
+            self.inner.run(wrapped, cancel).await
+        };
+        #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
         let out = {
             // 其它平台 activate 恒返回 None，构造不出 ActiveSandbox，这条
             // 跑不到 —— 存在只为能编译。
@@ -368,7 +393,7 @@ fn annotate_denial(mut out: ProcessOutput) -> ProcessOutput {
 /// 提到具体参数名（`sandbox: false`）而不是泛泛说"可以申请出沙箱"：
 /// 模型要的是下一步怎么做，而不是知道有个东西存在。
 const DENIAL_HINT: &str = "\n[riot:sandbox] 这条命令跑在 OS 沙箱里，上面的失败可能来自沙箱边界\
-（可写范围限于工作区和构建缓存；连接 unix socket 和 Apple Events 一律拒绝，\
+（可写范围限于工作区和构建缓存；连接 unix socket 一律拒绝（macOS 上还有 Apple Events），\
 所以 docker 这类要跟本机 daemon 通信的工具在沙箱内必然失败）。\
 如果目标确实在边界之外而这次操作是必要的，用 `sandbox: false` 重跑一次 —— \
 那会在沙箱外执行并请求用户确认。如果失败与边界无关（路径写错、依赖缺失、\
@@ -560,7 +585,7 @@ impl ProtectedPath {
 #[serde(rename_all = "camelCase")]
 pub struct SandboxStatus {
     /// 这个平台实现了 OS 级隔离没有。false = 代码里根本没有这一半
-    /// （目前的 Linux），跟用户装没装无关。
+    /// （macOS / Windows / Linux 之外的平台），跟用户装没装无关。
     pub implemented: bool,
     /// 现在这一刻能不能真隔离。前端该按它决定显示"生效中"还是别的。
     pub ready: bool,
@@ -614,7 +639,26 @@ pub fn status() -> SandboxStatus {
             blocker,
         }
     }
-    #[cfg(not(any(target_os = "macos", windows)))]
+    #[cfg(target_os = "linux")]
+    {
+        // 不只看 bwrap 在不在：用户命名空间被关掉、AppArmor 拦着、跑在默认
+        // seccomp 的容器里，bwrap 都在但一条命令也起不来。拿断网档冒烟 ——
+        // 它多拆一个网络命名空间，过了就说明两档都能用。
+        let probe = SandboxPolicy::WorkspaceWrite {
+            writable: Vec::new(),
+            readable: Vec::new(),
+            allow_network: false,
+        };
+        let result = crate::sandbox_linux::probe(&probe).map(drop);
+        let ready = result.is_ok();
+        SandboxStatus {
+            implemented: true,
+            ready,
+            network_isolation: ready,
+            blocker: result.err().map(|error| SandboxBlocker::Broken { error }),
+        }
+    }
+    #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
     {
         SandboxStatus {
             implemented: false,
@@ -976,7 +1020,7 @@ mod tests {
     ///
     /// 这条测试是这个模块存在的全部意义：profile 拼得再漂亮，只要
     /// `sandbox-exec` 没真拦住，`ctx.sandboxed` 就是在骗决策链。
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[tokio::test]
     async fn 工作区外的写被内核拒绝() {
         use crate::proc::SystemProcessRunner;
@@ -992,7 +1036,7 @@ mod tests {
             allow_network: true,
         };
         let Some(active) = policy.activate() else {
-            eprintln!("这台机器没有 sandbox-exec，跳过");
+            eprintln!("这台机器上沙箱起不来（没有 sandbox-exec / bwrap），跳过");
             return;
         };
         let runner = SandboxedRunner::new(
@@ -1047,7 +1091,7 @@ mod tests {
     ///
     /// 探针文件名带 pid 且是点开头：万一沙箱没生效，落在用户真实
     /// `~/.cargo/bin` 里的东西不会被 PATH 捡起来执行，收尾也会删掉。
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[tokio::test]
     async fn 逃逸面在放开的缓存树里依然写不进() {
         use crate::proc::SystemProcessRunner;
@@ -1065,7 +1109,7 @@ mod tests {
         let work = std::env::temp_dir().join(format!("riot-esc-{}", std::process::id()));
         std::fs::create_dir_all(&work).expect("建工作区");
         let Some(active) = SandboxPolicy::workspace_write(&work, &[]).activate() else {
-            eprintln!("这台机器没有 sandbox-exec，跳过");
+            eprintln!("这台机器上沙箱起不来（没有 sandbox-exec / bwrap），跳过");
             return;
         };
         let runner = SandboxedRunner::new(
@@ -1142,12 +1186,17 @@ mod tests {
     /// 没有出路、只会把沙箱关掉；只测后者，豁免就成了一个谁都能走的后门。
     /// 探针用 `nc -U` 连一个测试自己建的 socket，先跑一遍不沙箱的控制组 ——
     /// 没有它，一个用法写错的 `nc` 会让这条测试"通过"而什么都没验到。
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[tokio::test]
     async fn unix_socket_外连被拒而豁免的命令放行() {
         use crate::proc::SystemProcessRunner;
         use std::os::unix::net::UnixListener;
 
+        // macOS 自带；精简的 Linux 镜像常常没有（netcat-openbsd 才有 -U）。
+        if !std::path::Path::new("/usr/bin/nc").is_file() {
+            eprintln!("没有 /usr/bin/nc，跳过");
+            return;
+        }
         let dir = std::env::temp_dir().join(format!("riot-uds-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("建目录");
         let sock = dir.join("probe.sock");
@@ -1161,7 +1210,7 @@ mod tests {
             allow_network: true,
         };
         let Some(active) = policy.activate() else {
-            eprintln!("这台机器没有 sandbox-exec，跳过");
+            eprintln!("这台机器上沙箱起不来（没有 sandbox-exec / bwrap），跳过");
             return;
         };
         let base: std::sync::Arc<dyn ProcessRunner> =

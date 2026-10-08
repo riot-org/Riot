@@ -188,6 +188,12 @@ fn display_refresh_rate() -> Option<i32> {
     }
 }
 
+/// Linux 版只跑在服务器上：没有显示器可问，看画面的是远端浏览器。
+#[cfg(not(any(target_os = "macos", windows)))]
+fn display_refresh_rate() -> Option<i32> {
+    None
+}
+
 /// 浏览器创建完成。登记句柄、挂 CDP 观察者，然后告诉主应用它能用了。
 pub fn tab_created(tab: TabId, browser: Option<Browser>) {
     debug_assert_ne!(currently_on(ThreadId::UI), 0, "必须在 UI 线程");

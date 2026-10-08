@@ -19,6 +19,42 @@ CRATE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../crates/riot-browser" && pwd)"
 CEF_PATH="${CEF_PATH:-$HOME/.local/share/cef}"
 OUT="${1:-$CRATE_DIR/target/bundle}"
 
+# Linux：和 Windows 一样是平铺目录（见 build-browser.ps1），只给 riot-server 用。
+#
+# CEF 不用手动拉：cef-dll-sys 的 build.rs 按 CEF_PATH 自动下载（minimal
+# 包，几百 MB），再把 libcef.so 和资源拷到 target/<profile>/。这里只负责
+# 把它们和两个二进制凑进一个目录。
+#
+# 默认 release：这个包是要上服务器的，debug 版的 riot-browser 本身不大，
+# 但 dev 和发版跑同一份产物，"dev 好好的、发版才炸"那类问题就没地方藏。
+if [[ "$(uname -s)" == Linux ]]; then
+  export CEF_PATH
+  profile="${RIOT_BROWSER_BUILD:-release}"
+  (cd "$CRATE_DIR" && cargo build --quiet --profile "$profile")
+  bin="${CARGO_TARGET_DIR:-$CRATE_DIR/target}/$profile"
+  [[ "$profile" == dev ]] && bin="${CARGO_TARGET_DIR:-$CRATE_DIR/target}/debug"
+
+  # [约束] 先删再建，理由同下面 macOS 那段：正在跑的进程映射着旧的
+  # libcef.so，原地覆盖会让它在下一次缺页时读到新文件的内容然后崩。
+  bundle="$OUT/riot-browser"
+  rm -rf "$bundle"
+  mkdir -p "$bundle"
+  cp "$bin/riot-browser" "$bin/riot-browser-helper" "$bundle/"
+  # 分发包的顶层文件 + locales，和 cef-dll-sys 拷的是同一份清单。
+  # chrome-sandbox 刻意不带：它要 setuid root 才有用，而浏览器是关着
+  # 沙箱跑的（见 src/main.rs 的 no_sandbox）。
+  for f in "$bin"/*.so "$bin"/*.so.* "$bin"/*.pak "$bin"/*.bin "$bin"/*.dat "$bin"/*.json; do
+    [[ -e "$f" ]] && cp "$f" "$bundle/"
+  done
+  cp -R "$bin/locales" "$bundle/"
+  # CEF 的 Linux 包带完整调试符号：libcef.so 2.4GB，strip 后整个目录
+  # 三百多 MB。不 strip 的话发行包和镜像都大七倍，而服务器上没人会去
+  # 符号化一个 Chromium 的崩溃栈。
+  strip --strip-unneeded "$bundle"/riot-browser "$bundle"/riot-browser-helper "$bundle"/*.so
+  echo "打包完成: $bundle"
+  exit 0
+fi
+
 if [[ ! -d "$CEF_PATH/Chromium Embedded Framework.framework" ]]; then
   echo "找不到 CEF: $CEF_PATH" >&2
   echo "先跑 cef-rs 仓库里的 export-cef-dir，或设 CEF_PATH 指向已有的副本。" >&2

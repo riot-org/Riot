@@ -18,6 +18,8 @@
 pub mod fs;
 pub mod proc;
 pub mod sandbox;
+// 同 sandbox_win，不门控：参数拼装和 BPF 编码是纯逻辑，开发机上就能测。
+pub mod sandbox_linux;
 #[cfg(target_os = "macos")]
 pub mod sandbox_macos;
 // **不**门控平台。改成编排 srt-win 之后，这个模块里几乎没有 Win32 了 ——

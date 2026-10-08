@@ -244,11 +244,39 @@ setup 里起一个任务转成 `app.emit`，每条远程连接各订一份转成
 | 设置 → 远程访问 | 开关、绑定、端口 | 只读（`RemoteStatus.managed`） |
 | 前端产物 | 嵌在可执行文件里 | `--web-dir` / `RIOT_WEB_DIR`，缺省找二进制旁的 `web/` |
 | 登录链接 | 设置页 / 二维码 | `riot-server token`（`--rotate` 换一枚） |
-| 内置浏览器面板 | 有 | 没有（CEF 没有 Linux 包），模型的浏览器工具报不可用 |
-| 命令隔离 | seatbelt / Windows 沙箱 | Linux 未实现，`sandbox_status` 报 `implemented: false` |
+| 内置浏览器面板 | 有 | 有，浏览器包在二进制旁的 `riot-browser/`（或 `RIOT_BROWSER_DIR`）；没有就报不可用 |
+| 命令隔离 | seatbelt / Windows 沙箱 | bubblewrap + seccomp，要装 `bubblewrap`；起不来时设置页显示原因 |
 
 `[约束]` 启动日志里不打令牌。systemd 下 stdout 就是 journal，能读日志的人不该
 因此拿到主人身份。`riot-server token` 只在调用者自己的终端里打印。
+
+**浏览器面板。** Linux 版 `riot-browser` 和 Windows 一样是平铺目录（可执行文件、
+`libcef.so`、资源在一层），`scripts/build-browser.sh` 在 Linux 上自动走这条路：
+cef-dll-sys 构建时自己下载 CEF，脚本把产物凑成目录并 strip（CEF 带完整调试符号，
+不 strip 是 2.5GB，strip 后三百多 MB）。和另外两个平台的差别都在启动这一段：
+
+- `ozone-platform=headless`：服务器上没有 X11 / Wayland，不换平台浏览器进程
+  初始化就退出。离屏渲染本来就不需要窗口系统。
+- headless 平台下 Chromium 不弹权限提示，请求走不到 `OsrPermission` 就被拒。
+  回环放行 / 局域网拒绝改成启动时写进 profile 的默认值（`grant_network_defaults`），
+  语义和另外两个平台一致。
+- `disable-dev-shm-usage`：Docker 默认 64MB 的 `/dev/shm` 不够渲染进程用。
+
+运行时要 libnss3、libgbm、libasound2 等一批库（不含 GTK，清单见 Dockerfile）和
+字体 —— 缺 CJK 字体时中文页面是方块。
+
+**命令沙箱。** 用 bubblewrap（`apt install bubblewrap`），设计见 ARCHITECTURE
+§9.6.4。常见的起不来：
+
+- Docker 里：默认的 seccomp / AppArmor 配置不让建 user namespace，要
+  `--security-opt seccomp=unconfined --security-opt apparmor=unconfined`。
+- Ubuntu 23.10 起非特权 user namespace 受 AppArmor 限制，报
+  `setting up uid map: Permission denied` 一类错误。给 `/usr/bin/bwrap` 一份带
+  `userns,` 的 AppArmor profile，或（不推荐）
+  `sysctl kernel.apparmor_restrict_unprivileged_userns=0`。
+
+Docker 镜像用 tini 当 PID 1：agent 命令留下的孤儿进程最后都归 PID 1，
+`riot-server` 自己当 PID 1 的话不回收它们，僵尸会一直堆。
 
 **部署。** `scripts/package-server.sh` 打 tar 包（布局即默认查找布局），
 `deploy/server/riot-server.service` 是 systemd unit，`deploy/server/Dockerfile`

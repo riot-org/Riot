@@ -210,7 +210,7 @@ export default {
 
   "settings.permission.sandbox": "コマンドの分離",
   "settings.permission.sandbox.desc":
-    "コマンドが変更できる範囲を OS が制限します。オンの間は、どのルールにも一致せず読み取り専用でもないコマンドが確認なしで実行できます —— 境界はカーネルが守ります。macOS ではそのまま使え、Windows では一度インストールが必要です。",
+    "コマンドが変更できる範囲を OS が制限します。オンの間は、どのルールにも一致せず読み取り専用でもないコマンドが確認なしで実行できます —— 境界はカーネルが守ります。macOS ではそのまま使え、Windows では一度インストールが必要、Linux では bubblewrap が必要です。",
   "settings.permission.sandbox.workspaceWrite": "分離（推奨）",
   "settings.permission.sandbox.workspaceWrite.desc":
     "ワークスペース、一時フォルダ、ビルドキャッシュのみ変更可能。macOS ではデスクトップ / ダウンロードも可。読み取りとネットワークは制限しません。",

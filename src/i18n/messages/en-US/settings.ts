@@ -225,7 +225,7 @@ export default {
 
   "settings.permission.sandbox": "Command isolation",
   "settings.permission.sandbox.desc":
-    "The operating system limits what commands can modify. While on, commands that match no rule and aren't read-only run without asking; the kernel holds the boundary. Works out of the box on macOS; Windows needs a one-time install.",
+    "The operating system limits what commands can modify. While on, commands that match no rule and aren't read-only run without asking; the kernel holds the boundary. Works out of the box on macOS; Windows needs a one-time install; Linux needs bubblewrap.",
   "settings.permission.sandbox.workspaceWrite": "Isolated (recommended)",
   "settings.permission.sandbox.workspaceWrite.desc":
     "Can only modify the workspace, temp directories, and build caches; on macOS, Desktop / Downloads too. Reading and network are unrestricted.",
