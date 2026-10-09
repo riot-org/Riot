@@ -77,6 +77,37 @@ export const transcriptView = new Map<string, { top: number; stick: boolean }>()
 const distFromBottom = (box: HTMLElement) => Math.max(0, -box.scrollTop);
 
 /**
+ * 把对话列的顶边钉在整数像素上：底下垫 0~1px 的 margin，让「列高 +
+ * 垫高」恒为整数。
+ *
+ * 倒排容器里列是从底边往上排的，顶边 = 容器底 − 列高。列高几乎总是
+ * 小数（正文行高 1.7 × 14px = 23.8px），翻着历史时下方每长一行，画面
+ * 就被顶走一个小数距离。scrollTop 只能写整数（WKWebView 还朝零截断），
+ * 补偿必然剩下 <1px 的余数。早先把余数塞进 thread-col 的 translateY，
+ * 但引擎绘制时滚动偏移和合成层 transform **各自**对齐设备像素，两次
+ * 取整的误差不相抵：余数每变一次（每长一行就变），画面就差出一个设备
+ * 像素 —— 生成时翻上去看，正文一直在上下抖一个像素。
+ *
+ * 从根上把位移变成整数：列高怎么长，顶边都只按整像素挪，补偿只写
+ * 整数 scrollTop，画面分毫不动。垫的是 margin 而不是 padding：不改列
+ * 自己的尺寸，ResizeObserver 不会因为这里再触发一轮（在回调里改被观察
+ * 元素的尺寸会报 "ResizeObserver loop"）。
+ *
+ * 锚点上方的长高不用管：倒排容器保持"距底距离"，上方长高本来就不动
+ * 视口。
+ *
+ * `[约束]` 只在翻离底部（锚点补偿生效）时垫，贴底时清掉（`on = false`）。
+ * 贴底时钉住的是列的**底边**，垫高每帧在 0~1px 之间变，底边就跟着
+ * 抖 —— 等于把抖动从翻历史时搬到了贴底时。
+ */
+function snapColTop(col: HTMLElement, on: boolean) {
+  const h = col.getBoundingClientRect().height;
+  const pad = Math.ceil(h - 0.001) - h;
+  const want = on && pad > 0.001 ? `${pad}px` : "";
+  if (col.style.marginBottom !== want) col.style.marginBottom = want;
+}
+
+/**
  * 一轮问答：一条用户消息开一轮，之后的过程组、回答、报错都归它，直到
  * 下一条用户消息为止。
  *
@@ -473,20 +504,6 @@ export function Transcript({
   const anchor = useRef<{ el: Element; top: number } | null>(null);
   /** 补偿写入后 scrollTop 的回读值。scroll 事件里等值命中 = 补偿滚动。 */
   const expectedTop = useRef<number | null>(null);
-  /**
-   * 亚像素残差的 transform 修正量。引擎把 scrollTop 取整到整数 CSS
-   * 像素（WKWebView 还朝零截断），光靠滚动补偿必然留下 <1px 的绘制
-   * 抖动 —— 折叠动画的每一帧余数都不同，上方内容就闪。整数部分走
-   * scrollTop，余数落到 thread-col 的 translateY（合成层支持亚像素），
-   * 开合时上方内容纹丝不动。列里的全屏查看器都是 portal 到 body 的，
-   * 这个 transform 不会劫持它们的 fixed 定位。
-   */
-  const colShift = useRef(0);
-  const setColShift = (v: number) => {
-    colShift.current = v;
-    const col = boxRef.current?.querySelector<HTMLElement>(".thread-col");
-    if (col) col.style.transform = v ? `translateY(${v}px)` : "";
-  };
   // 渲染期就写：正式包隐藏面板时 scroll 发生在 commit 里，
   // effect 还没跑，闭包里的 armed 仍是 true，会把清零后的 0 记进去。
   const armedRef = useRef(armed);
@@ -498,15 +515,16 @@ export function Transcript({
   };
 
   const captureAnchor = () => {
-    // 重记基线前清掉残差修正：基线要取自然几何。清零带来的 ≤0.5px
-    // 位移发生在用户正在滚动的时刻，动势掩住了它。
-    if (colShift.current !== 0) setColShift(0);
+    const box = boxRef.current;
+    const col = box?.querySelector<HTMLElement>(".thread-col");
+    // 基线要在垫好之后量：交出跟随的这一刻垫高从无到有，列整体挪一点
+    // （≤1px，发生在用户正在滚动的时候，动势掩住了它）。先量后垫的话
+    // 基线和之后每一帧都差着这一点小数，补偿永远对不齐。
+    if (col) snapColTop(col, !stick.current);
     if (stick.current) {
       anchor.current = null;
       return;
     }
-    const box = boxRef.current;
-    const col = box?.querySelector(".thread-col");
     if (!box || !col || !col.children.length) {
       anchor.current = null;
       return;
@@ -670,7 +688,8 @@ export function Transcript({
     box.scrollTop = 0;
     stick.current = true;
     anchor.current = null;
-    if (colShift.current !== 0) setColShift(0);
+    const col = box.querySelector<HTMLElement>(".thread-col");
+    if (col) snapColTop(col, false);
     rememberView(box);
     // 程序化滚动被 pinning 挡掉 onScroll，这里自己收按钮 ——
     // 不收的话点了「回到底部」它还挂着。
@@ -803,6 +822,7 @@ export function Transcript({
     const col = box?.querySelector(".thread-col");
     if (!box || !col) return;
     const ro = new ResizeObserver(() => {
+      snapColTop(col as HTMLElement, !stick.current);
       if (stick.current) {
         // 贴底本是免费的（scrollTop 恒为 0 指着底部），pinBottom 只是
         // 把补偿期间可能攒下的几像素残差归零，顺手收掉回程按钮。
@@ -817,18 +837,16 @@ export function Transcript({
       // 让 onScroll 认出这次滚动不是用户翻的；基线不重记（见 anchor
       // 注释）。pinning 帧（restoreView 正在二次补写）不掺和；隐藏的
       // 保活面板（!armed）量出来的是假布局，也不动。
+      //
+      // snapColTop 让列高（连同垫的 margin）恒为整数，下方长高把画面
+      // 顶走的量也就恒为整数 —— 只写整数 scrollTop 就补得分毫不差，
+      // 不留亚像素残差。Math.round 只是吸掉浮点噪声。
       const a = anchor.current;
       if (a && a.el.isConnected && armedRef.current && !pinning.current) {
-        // dy 是布局几何的偏差（去掉 transform 修正），伺服对它做；
-        // dy + colShift 是画面上的偏差，决定这一帧要不要动手。
-        const rawTop =
-          a.el.getBoundingClientRect().top - box.getBoundingClientRect().top - colShift.current;
-        const dy = rawTop - a.top;
-        if (Math.abs(dy + colShift.current) > 0.05) {
-          const desired = box.scrollTop + dy;
-          box.scrollTop = Math.round(desired);
+        const dy = a.el.getBoundingClientRect().top - box.getBoundingClientRect().top - a.top;
+        if (Math.abs(dy) > 0.05) {
+          box.scrollTop = box.scrollTop + Math.round(dy);
           expectedTop.current = box.scrollTop;
-          setColShift(-(desired - box.scrollTop));
           rememberView(box);
         }
       }
@@ -988,8 +1006,8 @@ export function Transcript({
         {findOpen && armed ? <FindBar box={boxRef} onClose={() => setFindOpen(false)} /> : null}
       </main>
       {/* 删除确认 portal 到 body、遮罩盖整个窗口（和别处的确认框一样）。
-          就地渲染不行：main 是倒排滚动容器、内部 thread-col 带 transform，
-          会把 fixed 遮罩的包含块从视口改成滚动区，弹窗偏移错位。 */}
+          就地渲染的话它是倒排滚动容器的孩子，列上哪天再挂 transform /
+          contain，fixed 遮罩的包含块就从视口变成滚动区，弹窗偏移错位。 */}
       {confirmDel ? (
         <ConfirmDialog c={confirmDel} portal onClose={() => setConfirmDel(null)} />
       ) : null}

@@ -2879,8 +2879,8 @@ html[data-host='web'] body {
   gap: 14px;
   /* 对话流的垂直间距（原因见 .transcript）。border-box 下含在
      min-height 里，短会话不会因此多出 32px 滚动。
-     devtools 里看到的内联 translateY 是 Transcript 的锚点补偿在补
-     scrollTop 取整丢掉的亚像素余数，不是这里的样式。 */
+     devtools 里看到的内联 margin-bottom（0~1px）是 Transcript 的
+     snapColTop 在把列高凑成整数，不是这里的样式。 */
   padding: 24px 0 8px;
   /* 倒排容器的 flex 子项。min-height 撑满一屏：col-reverse 会把不足
      一屏的内容坠到底部，撑满之后消息照旧从顶上排；shrink-0 防压缩。 */
