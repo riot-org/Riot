@@ -10600,6 +10600,12 @@ button.field-slider-state:hover {
 .changes-panel .change-diff {
   max-height: none;
   overflow-y: visible;
+  /* 竖向滚动必须能接力给 .changes-body。overflow-x: auto 会把上面的
+     overflow-y: visible 算成 auto，长行横向溢出时这块就成了滚动容器：滚轮
+     先落到它身上，它竖向没得滚，基础样式的 overscroll-behavior: none 又不许
+     接力 —— 光标停在宽 diff 上整个面板滚不动。横向仍然 none：滚到头不回弹，
+     也不触发触控板的"后退"手势。 */
+  overscroll-behavior-y: auto;
 }
 
 /* 比对失败但还留着旧列表时的注脚：说清下面是旧的。 */
