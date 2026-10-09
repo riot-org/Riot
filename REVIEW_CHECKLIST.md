@@ -669,17 +669,9 @@
 
 ## H 组:网站 / 脚本 / CI / 文档
 
-### ☐ H1 · website —— 🟢 低 · 约 3.5k 行(快速过)
+### ☐ H1 · website —— 已拆到 [riot-org/riot-website](https://github.com/riot-org/riot-website)
 
-| 文件 | 行数 |
-|---|---|
-| `website/style.css` | 1708 |
-| `website/script.js` | 1204 |
-| `website/index.html` | 557 |
-
-**审查要点**
-- 下载链接指向与版本更新机制;外链 `rel="noopener"`
-- script.js 里有没有引入第三方跟踪;表单提交目标
+本仓库不再包含官网。审查下载链接、外链 `rel="noopener"`、以及 `script.js` 有没有第三方跟踪时，看那个仓库。
 
 ### ☐ H2 · 构建脚本与 CI —— 🟡 中 · 约 2.5k 行
 

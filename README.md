@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="website/assets/riot-logo.png" width="96" alt="Riot" />
+  <img src="assets/riot-logo.png" width="96" alt="Riot" />
 
 # Riot
 
