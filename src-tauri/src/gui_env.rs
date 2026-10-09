@@ -180,7 +180,7 @@ fn passwd_shell() -> Option<String> {
     shell_for_uid(&passwd, uid)
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 fn shell_for_uid(passwd: &str, uid: u32) -> Option<String> {
     passwd.lines().find_map(|line| {
         let f: Vec<&str> = line.split(':').collect();
