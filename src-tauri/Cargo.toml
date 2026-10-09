@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 description = "Tauri 宿主：窗口、内核进程监管、PTY、文件系统"
+# 同包还有 riot-server。tauri dev 跑的是不带 --bin 的 cargo run，
+# 不指定的话两个二进制都在 desktop 特性下可见，cargo 会直接拒绝启动。
+default-run = "Riot"
 
 [lib]
 # Tauri v2 把逻辑放 lib.rs、main.rs 只做薄壳，为的是 mobile target 能复用入口。
