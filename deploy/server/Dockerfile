@@ -1,4 +1,5 @@
-# Riot 无界面版的镜像。在仓库根目录构建：
+# Riot 无界面版的镜像。发版的现成镜像是 ghcr.io/caiwuu/riot-server:<版本>
+# （x86_64 / arm64），自己编就在仓库根目录：
 #
 #   docker build -f deploy/server/Dockerfile -t riot-server .
 #   docker run -d --name riot -p 127.0.0.1:7823:7823 -v riot-home:/home/riot \

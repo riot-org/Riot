@@ -12,6 +12,12 @@
 #   Riot_<ver>/Riot_<ver>_aarch64.dmg
 #   Riot_<ver>/Riot_<ver>_x64-setup.exe
 #
+# Linux 服务器版不进 Release 资产，出 Docker 镜像推到 GHCR：
+#   ghcr.io/<owner>/riot-server:<ver>        多架构，pull 时自动选
+#   ghcr.io/<owner>/riot-server:<ver>-amd64 / <ver>-arm64
+#   ghcr.io/<owner>/riot-server:latest       只在推 tag 正式发版时更新
+# GHCR 上的包第一次推上去默认是私有的，要公开得去包设置里改一次。
+#
 # 未配置 Apple 证书时 macOS 仍能打出 dmg，只是没签名，别人要右键打开。
 # 需要公证时在仓库 Secrets 里加 APPLE_CERTIFICATE（p12 的 base64）、
 # APPLE_CERTIFICATE_PASSWORD、APPLE_ID、APPLE_PASSWORD、APPLE_TEAM_ID。
@@ -24,8 +30,13 @@ on:
       - "v*"
   workflow_dispatch:
 
+# `[约束]` 全仓库一个组，不按 ref 分。create-release 的「查有没有草稿 →
+# 没有就建」不是原子的：推 tag（ref 是 refs/tags/…）和手动跑（refs/heads/master）
+# 按 ref 分组时会同时跑，两边都查到没有、各建一份，资产又拆到两个 Release
+# 里。同一版本同时推 `Riot_*` 和 `v*` 两个 tag 也是这样。排队跑，后一次
+# 就会复用前一次建的那份。
 concurrency:
-  group: release-${{ github.ref }}
+  group: release
   cancel-in-progress: false
 
 permissions:
@@ -46,6 +57,7 @@ jobs:
       - id: ensure
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
           version=$(python3 -c "import json; print(json.load(open('src-tauri/tauri.conf.json'))['version'])")
@@ -54,7 +66,7 @@ jobs:
           body="$(printf '%s\n' \
             'macOS：`Riot_*_aarch64.dmg`（Apple Silicon）' \
             'Windows：`Riot_*_x64-setup.exe`' \
-            'Linux 服务器（无界面，网页访问）：`riot-server-*-linux-x86_64.tar.gz` / `riot-server-*-linux-aarch64.tar.gz`')"
+            "Linux 服务器（无界面，网页访问）：\`docker pull ghcr.io/${IMAGE_OWNER,,}/riot-server:${version}\`（x86_64 / arm64）")"
 
           # 草稿必须扫列表。同一 tag 若已经拆成多份，拿资产最多的那份。
           # 用 awk 收齐，不用 head：pipefail 下提前关管道会 SIGPIPE。
@@ -230,41 +242,86 @@ jobs:
           tauriScript: pnpm tauri
           retryAttempts: 2
 
-  # Linux 无界面版：tar 包里是 riot-server + 内核 + 内置浏览器（CEF，strip 后
-  # 三百多 MB，cef-dll-sys 构建时自己下载）+ 前端产物 + systemd unit。
-  # 在 22.04 上编，glibc 2.35 —— 更新的发行版也能跑。
-  server-linux:
+  # Linux 无界面版：Docker 镜像（deploy/server/Dockerfile），里面是 riot-server
+  # + 内核 + 内置浏览器（CEF）+ 前端产物。两个架构各在原生 runner 上编 ——
+  # QEMU 模拟编 CEF 和 Rust 要一个多小时。每个架构推一个带后缀的标签，
+  # 再由 server-image-manifest 合成多架构标签。
+  server-image:
     needs: create-release
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, ubuntu-22.04-arm]
+        include:
+          - os: ubuntu-24.04
+            arch: amd64
+          - os: ubuntu-24.04-arm
+            arch: arm64
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 150
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      version: ${{ steps.meta.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with: { version: 10 }
-      - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: pnpm }
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm build
-      # cef-dll-sys 用 cmake + Ninja 编 CEF 的 C++ 包装层。runner 镜像里不一定
-      # 两样都有（arm 镜像尤其），显式装上。
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake ninja-build
-      - id: pkg
-        run: echo "tarball=$(scripts/package-server.sh | tail -1)" >> "$GITHUB_OUTPUT"
-      - env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
         run: |
           set -euo pipefail
           version=$(python3 -c "import json; print(json.load(open('src-tauri/tauri.conf.json'))['version'])")
-          gh release upload "Riot_${version}" "${{ steps.pkg.outputs.tarball }}" --clobber
+          # GHCR 的镜像名必须小写。
+          owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "image=ghcr.io/${owner}/riot-server" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/server/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          push: true
+          provenance: false
+          tags: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}-${{ matrix.arch }}
+          # 按架构分开缓存：CEF 下载和 Rust release 编译是大头，命中时快很多。
+          cache-from: type=gha,scope=riot-server-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=riot-server-${{ matrix.arch }}
+
+  # 两个架构都推上去之后合成多架构标签。`latest` 只在推 tag 正式发版时动 ——
+  # 手动跑的是草稿，不该顶掉别人正在 pull 的版本。
+  server-image-manifest:
+    needs: server-image
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - env:
+          IMAGE: ${{ needs.server-image.outputs.image }}
+          VERSION: ${{ needs.server-image.outputs.version }}
+        run: |
+          set -euo pipefail
+          tags=(-t "${IMAGE}:${VERSION}")
+          if [[ "${{ github.event_name }}" != "workflow_dispatch" ]]; then
+            tags+=(-t "${IMAGE}:latest")
+          fi
+          docker buildx imagetools create "${tags[@]}" \
+            "${IMAGE}:${VERSION}-amd64" "${IMAGE}:${VERSION}-arm64"
+          docker buildx imagetools inspect "${IMAGE}:${VERSION}"
 
   # 推 tag 两边都挂上再转正。手动跑保持 draft，核对资产后再点发布。
   publish:
-    needs: [create-release, bundle, server-linux]
+    needs: [create-release, bundle, server-image-manifest]
     if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:

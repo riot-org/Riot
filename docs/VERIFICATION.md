@@ -515,7 +515,7 @@ pub enum ToolFault {
 
 ```rust
 #[tokio::test]
-#[ignore]  // 只在 CI 的 nightly job 跑
+#[ignore]  // 只在 CI 手动触发的 chaos job 跑
 async fn chaos_soak() {
     for seed in 0..500 {
         let faults = FaultConfig::random(seed);
@@ -679,7 +679,7 @@ def restore_stale():         # 启动时捡回上次没恢复的
 
 ## 7. CI 流水线
 
-两人小团队,日常 push 只拦干净机器上会漏的三类:协议生成物、内核 debug 测试、Windows 宿主。rustfmt、变异、release 复测、macOS host、混沌长跑放到 nightly / `workflow_dispatch`,避免改 UI 也被第二份清单卡住。
+两人小团队,日常 push 只拦干净机器上会漏的三类:协议生成物、内核 debug 测试、Windows 宿主。rustfmt、变异、release 复测、macOS host、混沌长跑只在 `workflow_dispatch` 手动触发时跑,避免改 UI 也被第二份清单卡住。
 
 host 的 sidecar / 浏览器占位抽在 `.github/actions/prepare-host`,`host` 和 `chaos-host` 共用,不要在某个 job 里手写一份。
 
@@ -689,9 +689,9 @@ contract:  pnpm gen && git diff --exit-code schemas/ src/bridge/generated.ts
 test:      cargo clippy/test --workspace --exclude riot-host   # 含 golden / fault / e2e
 host:      Windows 上 cargo test -p riot-host                  # 先 prepare-host
 
-# nightly / 手动
+# 手动触发(workflow_dispatch)
 extra:         cargo test --workspace --exclude riot-host --release
-host-macos:    与 host 同一套,只在 nightly 跑
+host-macos:    与 host 同一套,只在手动触发时跑
 mutation:      scripts/mutate.py
 chaos:         cargo test -p riot-core --release chaos_soak
 chaos-host:    cargo test -p riot-host --release -- --ignored

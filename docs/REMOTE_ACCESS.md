@@ -283,7 +283,10 @@ cef-dll-sys 构建时自己下载 CEF，脚本把产物凑成目录并 strip（C
 Docker 镜像用 tini 当 PID 1：agent 命令留下的孤儿进程最后都归 PID 1，
 `riot-server` 自己当 PID 1 的话不回收它们，僵尸会一直堆。
 
-**部署。** `scripts/package-server.sh` 打 tar 包（布局即默认查找布局），
+**部署。** 发版出的是 Docker 镜像（`.github/workflows/release.yml`）：
+`ghcr.io/caiwuu/riot-server:<版本>`，x86_64 / arm64 合在一个多架构标签里，
+`docker run` 的参数见 `deploy/server/Dockerfile` 开头。不用 Docker 的话
+`scripts/package-server.sh` 打 tar 包（布局即默认查找布局），
 `deploy/server/riot-server.service` 是 systemd unit，`deploy/server/Dockerfile`
 是镜像。都默认只听本机：网页版没有 TLS，对外经反向代理 / 隧道，外部地址写进
 `RIOT_REMOTE_ALLOWED_ORIGINS`（§5 的 Origin 校验）。agent 以服务账户的身份跑
