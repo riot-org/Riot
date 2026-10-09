@@ -97,6 +97,27 @@ pub struct Shared {
     pub allowed_origins: Vec<String>,
 }
 
+impl Shared {
+    /// 现在有效的令牌：以 auth.json 为准，内存里那份只是缓存。
+    ///
+    /// `riot-server token --rotate` 是另一个进程，它只改得了 auth.json。
+    /// 只认缓存的话，轮换要等重启才生效 —— 正怀疑登录链接泄露的人以为
+    /// 旧的已经作废，其实谁拿着它都还能连进来。每次鉴权读一个小文件，
+    /// 鉴权一条连接只有一次，代价可以忽略。读不到（文件被删、坏了）就
+    /// 退回缓存，不让一次读失败把所有人挡在外面。
+    ///
+    /// `[约束]` 这样做的前提是沙箱写不了 auth.json（`sandbox::secret_files`），
+    /// 否则沙箱里的命令写一枚自己的令牌就能连进来。
+    pub fn current_token(&self) -> Option<String> {
+        let on_disk = crate::config::load_secret(REMOTE_TOKEN_KEY);
+        let mut cached = self.token.lock().expect("令牌锁");
+        if on_disk.is_some() {
+            cached.clone_from(&on_disk);
+        }
+        cached.clone()
+    }
+}
+
 /// 一个正在监听的服务。
 struct Running {
     /// 要求绑的地址。和下一次的要求比，决定要不要重起。
@@ -280,13 +301,7 @@ impl Remote {
         let inner = &*self.0;
         let g = inner.running.lock().await;
         let running = g.as_ref();
-        let token = inner
-            .shared
-            .token
-            .lock()
-            .expect("令牌锁")
-            .clone()
-            .or_else(|| crate::config::load_secret(REMOTE_TOKEN_KEY));
+        let token = inner.shared.current_token();
         let pinned = inner.pinned.get().copied();
         let addr = running
             .map(|r| r.addr)

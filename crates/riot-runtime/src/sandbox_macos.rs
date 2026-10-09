@@ -6,7 +6,7 @@
 
 #![allow(clippy::disallowed_methods)]
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use riot_protocol::tool::ProcessSpec;
 
@@ -106,6 +106,9 @@ pub(crate) fn profile(policy: &SandboxPolicy) -> String {
         p.push_str(&deny_section(protected.iter().map(|pp| pp.path.as_path())));
     }
 
+    // 密钥文件读写都挡（见 secret_files）。同样排在 allow 之后。
+    p.push_str(&secret_section(&crate::sandbox::secret_files()));
+
     p.push_str(&unix_socket_section());
 
     // Apple Events：和 unix socket 同一类外包通道，只是接收方从 daemon
@@ -184,6 +187,22 @@ fn deny_section<'a>(paths: impl Iterator<Item = &'a Path>) -> String {
     s
 }
 
+/// 读写都不许的文件。`literal` 而不是 `subpath`：挡的是这一个文件，
+/// 不存在时也照样挡住「新建一个」。
+fn secret_section(paths: &[PathBuf]) -> String {
+    if paths.is_empty() {
+        return String::new();
+    }
+    let mut s = String::from("(deny file-read* file-write*\n");
+    for p in paths {
+        s.push_str("  (literal ");
+        s.push_str(&sbpl_str(&p.to_string_lossy()));
+        s.push_str(")\n");
+    }
+    s.push_str(")\n");
+    s
+}
+
 /// 把一条命令改写成"在沙箱里跑这条命令"。
 pub(crate) fn wrap(policy: &SandboxPolicy, spec: ProcessSpec) -> ProcessSpec {
     let mut args = vec!["-p".to_owned(), profile(policy), spec.program];
@@ -214,7 +233,6 @@ fn sbpl_str(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     fn policy_for(dir: &Path) -> SandboxPolicy {
         // 只放工作区，不带临时目录和缓存 —— 测的是边界本身。
@@ -223,6 +241,26 @@ mod tests {
             readable: vec![],
             allow_network: true,
         }
+    }
+
+    /// 密钥文件读写都挡，而且排在可写目录的放行之后 —— 工作区是主目录时
+    /// auth.json 落在放行的子树里，先 deny 后 allow 就被盖掉了。
+    #[test]
+    fn 密钥文件读写都挡_压在放行之后() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let p = profile(&policy_for(dir.path()));
+        for f in crate::sandbox::secret_files() {
+            let lit = format!("(literal {})", sbpl_str(&f.to_string_lossy()));
+            let at = p.find(&lit).expect("密钥文件要进 profile");
+            let deny = p[..at]
+                .rfind("(deny file-read* file-write*\n")
+                .expect("在读写 deny 段里");
+            assert!(
+                deny > p.find("(allow file-write*").expect("有放行段"),
+                "{p}"
+            );
+        }
+        assert_eq!(secret_section(&[]), "");
     }
 
     #[test]

@@ -174,7 +174,7 @@ fn token(listen: SocketAddr, rotate: bool) -> ExitCode {
     }
     if rotate {
         eprintln!(
-            "Token rotated. A running server picks it up on restart; pages logged in with the old one keep working until they reconnect."
+            "Token rotated. New logins need the new link right away; pages already logged in with the old one keep working until they reconnect."
         );
     }
     ExitCode::SUCCESS

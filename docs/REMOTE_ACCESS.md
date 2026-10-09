@@ -275,6 +275,11 @@ cef-dll-sys 构建时自己下载 CEF，脚本把产物凑成目录并 strip（C
   `userns,` 的 AppArmor profile，或（不推荐）
   `sysctl kernel.apparmor_restrict_unprivileged_userns=0`。
 
+沙箱里读全开，唯独 `auth.json` 读写都挡（`sandbox::secret_files`）：里面有
+模型 key 和主人令牌，而 `riot-server` 的远程服务一直在回环上听着 —— 读到令牌
+就能以主人身份在沙箱外执行命令。宿主每次鉴权都以 auth.json 为准，所以
+`riot-server token --rotate` 对新连接即时生效。
+
 Docker 镜像用 tini 当 PID 1：agent 命令留下的孤儿进程最后都归 PID 1，
 `riot-server` 自己当 PID 1 的话不回收它们，僵尸会一直堆。
 

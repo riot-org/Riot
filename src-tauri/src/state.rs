@@ -3172,9 +3172,29 @@ pub struct HostEvent {
     pub payload: serde_json::Value,
 }
 
+impl HostEvent {
+    /// 订阅方落后（`RecvError::Lagged`）之后补发的那几条。
+    ///
+    /// 丢掉的不全是"该重拉列表了"的重复提醒：`schedule_run` 带着运行结果，
+    /// 前端靠它刷任务面板。补不回原样的事件，但能让前端把会话表和任务表
+    /// 整个重拉一遍，界面至少和宿主对得上。
+    pub fn resync() -> [HostEvent; 2] {
+        [
+            HostEvent {
+                name: "sessions_changed",
+                payload: serde_json::Value::Null,
+            },
+            HostEvent {
+                name: "schedule_changed",
+                payload: serde_json::Value::Null,
+            },
+        ]
+    }
+}
+
 /// 全局事件的缓冲。都是低频事件（会话表、定时任务），订阅方落后这么多条
-/// 说明它已经卡死了；落后的订阅方收到 `Lagged` 后接着收，丢掉的几条只是
-/// "该重拉列表了"的重复提醒。
+/// 说明它已经卡死了；落后的订阅方收到 `Lagged` 后补一轮
+/// [`HostEvent::resync`] 再接着收。
 const EVENT_BUS_CAPACITY: usize = 256;
 
 /// 宿主配置的沙箱档位 → 传输档位。

@@ -26,6 +26,7 @@ FROM ubuntu:22.04 AS build
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
  && apt-get install -y --no-install-recommends build-essential pkg-config curl ca-certificates git \
+      cmake ninja-build \
  && rm -rf /var/lib/apt/lists/*
 RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
 ENV PATH=/root/.cargo/bin:$PATH
@@ -34,6 +35,7 @@ COPY . .
 RUN cargo build --release --locked -p riot-host --no-default-features --bin riot-server \
  && cargo build --release --locked -p riot-kernel
 # 内置浏览器（CEF）。cef-dll-sys 构建时自己下载 CEF，产物是 riot-browser/ 平铺目录。
+# 它的 build.rs 用 cmake + Ninja 编 CEF 的 C++ 包装层，所以上面要装 cmake、ninja-build。
 RUN scripts/build-browser.sh /out
 
 FROM ubuntu:22.04

@@ -641,9 +641,21 @@ async fn get_config(state: State<'_, AppState>) -> HostResult<config::ConfigStat
 /// 知道为什么。设置页要能把这两者分开显示，就得先能查到真实状态。
 ///
 /// 只查不改，随时可调。
+///
+/// `[约束]` 走 `spawn_blocking`：Linux 上这一查是真跑一次 bwrap（同步等，
+/// 带上限），不能占着 tokio 的工作线程。
 #[cfg_attr(feature = "desktop", tauri::command)]
 async fn sandbox_status() -> riot_runtime::SandboxStatus {
-    riot_runtime::sandbox::status()
+    tokio::task::spawn_blocking(riot_runtime::sandbox::status)
+        .await
+        .unwrap_or_else(|e| riot_runtime::SandboxStatus {
+            implemented: true,
+            ready: false,
+            network_isolation: false,
+            blocker: Some(riot_runtime::SandboxBlocker::Broken {
+                error: format!("sandbox probe panicked: {e}"),
+            }),
+        })
 }
 
 /// 跑那次一次性的提权安装。**Windows 上会弹两次 UAC。**
@@ -1904,14 +1916,18 @@ pub fn run() {
             ipc::spawn(async move {
                 use tauri::Emitter;
                 loop {
-                    match events.recv().await {
-                        Ok(ev) => {
-                            if let Err(e) = handle.emit(ev.name, ev.payload) {
-                                tracing::debug!(error = %e, event = ev.name, "全局事件没发到窗口");
-                            }
+                    let batch = match events.recv().await {
+                        Ok(ev) => vec![ev],
+                        // 落后了：丢的那几条补不回来，让前端整表重拉。
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            crate::state::HostEvent::resync().into()
                         }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    };
+                    for ev in batch {
+                        if let Err(e) = handle.emit(ev.name, ev.payload) {
+                            tracing::debug!(error = %e, event = ev.name, "全局事件没发到窗口");
+                        }
                     }
                 }
             });

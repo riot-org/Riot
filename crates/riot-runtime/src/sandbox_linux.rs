@@ -19,6 +19,8 @@
 //! - 读全开（`--ro-bind / /`），写限于 `writable`。
 //! - 逃逸面在可写 bind **之后**再只读 bind 一次，后挂的盖住先挂的 ——
 //!   和 SBPL「后写覆盖先写」同一个顺序约束。
+//! - 密钥文件（[`crate::sandbox::secret_files`]）读写都挡：拿 `/dev/null`
+//!   只读盖上去。
 //! - unix socket：seccomp 拦 `socket(AF_UNIX, …)`，挡的是把活外包给沙箱外
 //!   daemon 的那条通道（docker、tmux server、本地数据库）。理由见
 //!   `sandbox_macos::unix_socket_section`。
@@ -31,6 +33,8 @@
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::time::{Duration, Instant};
 
 use riot_protocol::tool::ProcessSpec;
 
@@ -59,6 +63,8 @@ pub(crate) fn locate() -> Option<PathBuf> {
 pub(crate) struct Bwrap {
     pub exe: PathBuf,
     pub proc: ProcMount,
+    /// 编好的 seccomp 过滤器。探测时编一次，每次 spawn 原样喂进管道。
+    pub seccomp: Vec<u8>,
 }
 
 /// `/proc` 怎么给。
@@ -75,6 +81,34 @@ pub(crate) enum ProcMount {
     Host,
 }
 
+/// 这台机器上上次冒烟通过的 `/proc` 挂法。0 = 还不知道。
+///
+/// 能不能新挂 procfs 是机器（容器）的性质，不随会话变。记下来之后每次
+/// 激活先试它：容器里 Fresh 必然失败，不记的话每个会话、每次打开设置页
+/// 都要先白跑一次注定失败的 bwrap。
+static KNOWN_PROC: AtomicU8 = AtomicU8::new(0);
+
+impl ProcMount {
+    fn code(self) -> u8 {
+        match self {
+            Self::Fresh => 1,
+            Self::Host => 2,
+        }
+    }
+
+    fn from_code(c: u8) -> Option<Self> {
+        match c {
+            1 => Some(Self::Fresh),
+            2 => Some(Self::Host),
+            _ => None,
+        }
+    }
+}
+
+/// 冒烟最多等多久。正常是几毫秒；卡住的 bwrap（挂死的网络盘在可写表里、
+/// 等一个不会来的 AppArmor 决定）不能把激活或设置页一起拖死。
+const SMOKE_DEADLINE: Duration = Duration::from_secs(10);
+
 /// 找到 bwrap，并冒烟出这台机器能用的 `/proc` 挂法。
 ///
 /// 冒烟就是在沙箱里跑一次 `/bin/true`，和 seatbelt 的 `profile_accepted`
@@ -86,14 +120,31 @@ pub(crate) enum ProcMount {
 pub(crate) fn probe(policy: &SandboxPolicy) -> Result<Bwrap, String> {
     let exe = locate()
         .ok_or_else(|| "找不到 bwrap。装上 bubblewrap（apt install bubblewrap）".to_owned())?;
+    let seccomp = seccomp_program().ok_or_else(|| {
+        format!(
+            "这个 CPU 架构（{}）还没有 seccomp 过滤器，命令沙箱只支持 x86_64 和 aarch64",
+            std::env::consts::ARCH
+        )
+    })?;
+    // 上次通过的挂法排最前；其余照常兜着（机器状态变了的话，比如换了
+    // 容器参数重启，下一次激活会重新找）。
+    let mut order = vec![ProcMount::Fresh, ProcMount::Host];
+    if let Some(known) = ProcMount::from_code(KNOWN_PROC.load(Ordering::Relaxed)) {
+        order.retain(|p| *p != known);
+        order.insert(0, known);
+    }
     let mut first_err = None;
-    for proc in [ProcMount::Fresh, ProcMount::Host] {
+    for proc in order {
         let b = Bwrap {
             exe: exe.clone(),
             proc,
+            seccomp: seccomp.clone(),
         };
         match smoke(&b, policy) {
-            Ok(()) => return Ok(b),
+            Ok(()) => {
+                KNOWN_PROC.store(proc.code(), Ordering::Relaxed);
+                return Ok(b);
+            }
             Err(e) => {
                 first_err.get_or_insert(e);
             }
@@ -115,14 +166,38 @@ fn smoke(bwrap: &Bwrap, policy: &SandboxPolicy) -> Result<(), String> {
             sandbox_exempt: false,
         },
     );
-    let out = std::process::Command::new(&spec.program)
+    let mut child = std::process::Command::new(&spec.program)
         .args(&spec.args)
         .current_dir("/")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
-        .output()
+        .spawn()
         .map_err(|e| format!("起不来 {}：{e}", bwrap.exe.display()))?;
+    // 同步等，带上限。调用方都在阻塞线程上（激活走 spawn_blocking，
+    // 设置页的查询也是），这里不碰 runtime。
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if started.elapsed() < SMOKE_DEADLINE => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "bwrap 冒烟 {} 秒没结束，当作起不来",
+                    SMOKE_DEADLINE.as_secs()
+                ));
+            }
+            Err(e) => return Err(format!("等 bwrap 冒烟失败：{e}")),
+        }
+    }
+    // 状态已经收过了，这里只是把 stderr 读完（wait 返回缓存的状态）。
+    let out = child
+        .wait_with_output()
+        .map_err(|e| format!("读 bwrap 冒烟输出失败：{e}"))?;
     if out.status.success() {
         return Ok(());
     }
@@ -134,12 +209,15 @@ fn smoke(bwrap: &Bwrap, policy: &SandboxPolicy) -> Result<(), String> {
     })
 }
 
-/// 把逃逸面里还不存在、允许预建的那些建出来。
+/// 把逃逸面里还不存在、允许预建的那些建出来，密钥文件也一样。
 ///
 /// bwrap 只能把只读挂载压在**存在的**路径上，而「不存在」本身就是缺口：
 /// `~/.cargo` 可写，沙箱就能**新建**一个 `config.toml`，内容照样被沙箱外的
 /// cargo 读走。所以和 Windows 一样先建空占位再盖只读；不许预建的（cargo
 /// 老配置名，见 `escape_surfaces`）宁可留着那个洞。
+///
+/// 密钥文件建成空的 0600：宿主读到空文件按「没有密钥」处理，写的时候
+/// 照常覆盖。
 pub(crate) fn plant_protected() {
     for p in crate::sandbox::escape_surfaces() {
         if !p.plant || p.path.exists() {
@@ -156,6 +234,24 @@ pub(crate) fn plant_protected() {
         };
         if let Err(e) = made {
             tracing::warn!(path = %p.path.display(), error = %e, "逃逸面占位没建出来，这一处不受保护");
+        }
+    }
+    for f in crate::sandbox::secret_files() {
+        if f.exists() {
+            continue;
+        }
+        let made = f
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| {
+                let mut o = std::fs::OpenOptions::new();
+                o.write(true).create_new(true);
+                #[cfg(unix)]
+                std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
+                o.open(&f).map(drop)
+            });
+        if let Err(e) = made {
+            tracing::warn!(path = %f.display(), error = %e, "密钥文件占位没建出来，沙箱可能新建它");
         }
     }
 }
@@ -177,7 +273,7 @@ pub(crate) fn plant_protected() {
 pub(crate) fn wrap(bwrap: &Bwrap, policy: &SandboxPolicy, spec: ProcessSpec) -> ProcessSpec {
     let script = format!(
         "printf '{}' | exec \"$@\" {SECCOMP_FD}<&0 0</dev/null",
-        printf_escape(&seccomp_program())
+        printf_escape(&bwrap.seccomp)
     );
     let mut args = vec![
         "-c".to_owned(),
@@ -185,7 +281,12 @@ pub(crate) fn wrap(bwrap: &Bwrap, policy: &SandboxPolicy, spec: ProcessSpec) -> 
         "riot-sandbox".to_owned(),
         bwrap.exe.to_string_lossy().into_owned(),
     ];
-    args.extend(bwrap_args(policy, bwrap.proc, &spec.cwd));
+    args.extend(bwrap_args(
+        policy,
+        bwrap.proc,
+        &crate::sandbox::secret_files(),
+        &spec.cwd,
+    ));
     args.push("--".to_owned());
     args.push(spec.program);
     args.extend(spec.args);
@@ -212,9 +313,14 @@ const SECCOMP_FD: u32 = 9;
 /// `bwrap` 自己的参数（不含 `--` 和命令）。
 ///
 /// `[约束]` 顺序就是挂载顺序，后挂的盖住先挂的：根只读 → 可写目录 →
-/// 逃逸面只读 → `/dev`、`/proc`。逃逸面排在可写目录前面的话会被
-/// `~/.cargo` 的可写 bind 整个盖掉，静默重新可写。
-fn bwrap_args(policy: &SandboxPolicy, proc: ProcMount, cwd: &Path) -> Vec<String> {
+/// 逃逸面只读 → 密钥文件 → `/dev`、`/proc`。逃逸面排在可写目录前面的话
+/// 会被 `~/.cargo` 的可写 bind 整个盖掉，静默重新可写；密钥文件同理。
+fn bwrap_args(
+    policy: &SandboxPolicy,
+    proc: ProcMount,
+    secrets: &[PathBuf],
+    cwd: &Path,
+) -> Vec<String> {
     let SandboxPolicy::WorkspaceWrite {
         writable,
         // 读本来就全开，手填的 allowRead 是 Windows 专属的概念。
@@ -228,7 +334,10 @@ fn bwrap_args(policy: &SandboxPolicy, proc: ProcMount, cwd: &Path) -> Vec<String
 
     let path = |p: &Path| p.to_string_lossy().into_owned();
     let mut a: Vec<String> = vec!["--ro-bind".into(), "/".into(), "/".into()];
-    for dir in writable {
+    // 可写表是激活时定的，会话中途被删掉的目录（`rm -rf ~/.cache`）要跳过：
+    // bwrap 对不存在的源路径直接报错，不跳的话之后每条命令都起不来，而
+    // 界面上还显示隔离生效中。删掉的目录重建之前本来也没有东西可写。
+    for dir in writable.iter().filter(|d| d.exists()) {
         a.extend(["--bind".into(), path(dir), path(dir)]);
     }
     for p in crate::sandbox::escape_surfaces() {
@@ -237,6 +346,10 @@ fn bwrap_args(policy: &SandboxPolicy, proc: ProcMount, cwd: &Path) -> Vec<String
         if p.path.exists() {
             a.extend(["--ro-bind".into(), path(&p.path), path(&p.path)]);
         }
+    }
+    // 拿 /dev/null 盖上：读到的是空，写不进去（只读挂载），删不掉（挂载点）。
+    for f in secrets.iter().filter(|f| f.is_file()) {
+        a.extend(["--ro-bind".into(), "/dev/null".into(), path(f)]);
     }
     // 全新的 /dev：null、zero、urandom、tty、pts、shm 都在，宿主的磁盘设备
     // 不在。新挂的 /proc 要配 --unshare-pid，顺带让沙箱看不见、也 kill 不到
@@ -251,7 +364,9 @@ fn bwrap_args(policy: &SandboxPolicy, proc: ProcMount, cwd: &Path) -> Vec<String
     // - root：不拆的话它直接去建挂载命名空间，而容器里的 root 没有
     //   CAP_SYS_ADMIN，报 "Creating new namespace failed: Operation not permitted"。
     // - 宿主 /proc：同一用户命名空间里，`/proc/<宿主 pid>/root`、`cwd` 能跳进
-    //   宿主进程的挂载视图，那边是可写的。隔着用户命名空间时内核拒绝访问。
+    //   宿主进程的挂载视图，那边是可写的。隔着用户命名空间时内核拒绝访问
+    //   （`cap_ptrace_access_check` 要求同一个 user ns，或在对方的 ns 里有
+    //   CAP_SYS_PTRACE —— 同 kuid 也不够）。
     if running_as_root() || proc == ProcMount::Host {
         a.push("--unshare-user".into());
     }
@@ -268,7 +383,19 @@ fn bwrap_args(policy: &SandboxPolicy, proc: ProcMount, cwd: &Path) -> Vec<String
     a
 }
 
-/// seccomp 过滤器（经典 BPF），按本机架构编好的字节。
+/// 本机架构的 `(AUDIT_ARCH_*, __NR_socket)`。
+///
+/// `[约束]` 只列真核对过调用号的架构。别的架构不能拿 x86_64 的数凑：
+/// 架构号对不上，过滤器第一条就把**每一个**系统调用都拒了（连 execve），
+/// 表现成一句看不懂的冒烟失败。
+#[cfg(target_arch = "x86_64")]
+const ARCH: Option<(u32, u32)> = Some((0xC000_003E, 41));
+#[cfg(target_arch = "aarch64")]
+const ARCH: Option<(u32, u32)> = Some((0xC000_00B7, 198));
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+const ARCH: Option<(u32, u32)> = None;
+
+/// seccomp 过滤器（经典 BPF），按本机架构编好的字节。没核对过的架构是 `None`。
 ///
 /// 拦三样，其余放行：
 /// - `socket(AF_UNIX, …)`：unix socket 外连，理由见模块头。`socketpair`
@@ -282,12 +409,8 @@ fn bwrap_args(policy: &SandboxPolicy, proc: ProcMount, cwd: &Path) -> Vec<String
 ///
 /// 被拦的一律回 `EPERM`，stderr 上是 "Operation not permitted" ——
 /// 正好落进 `looks_denied`，模型会看到沙箱提示。
-fn seccomp_program() -> Vec<u8> {
-    #[cfg(target_arch = "aarch64")]
-    const ARCH: (u32, u32) = (0xC000_00B7, 198); // AUDIT_ARCH_AARCH64, __NR_socket
-    #[cfg(not(target_arch = "aarch64"))]
-    const ARCH: (u32, u32) = (0xC000_003E, 41); // AUDIT_ARCH_X86_64, __NR_socket
-    let (audit_arch, nr_socket) = ARCH;
+fn seccomp_program() -> Option<Vec<u8>> {
+    let (audit_arch, nr_socket) = ARCH?;
 
     const LD_ABS: u16 = 0x20; // BPF_LD | BPF_W | BPF_ABS
     const JEQ: u16 = 0x15; // BPF_JMP | BPF_JEQ | BPF_K
@@ -320,7 +443,7 @@ fn seccomp_program() -> Vec<u8> {
         out.push(jf);
         out.extend_from_slice(&k.to_le_bytes());
     }
-    out
+    Some(out)
 }
 
 /// 每个字节都写成 `printf` 格式串里的三位八进制转义。
@@ -352,15 +475,54 @@ mod tests {
     /// 根的只读 bind 会把可写目录整个盖掉，表现是「沙箱一开什么都写不了」。
     #[test]
     fn 根只读在前可写目录在后() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let w = dir.path().to_string_lossy().into_owned();
         let a = bwrap_args(
-            &policy(vec!["/w".into()], true),
+            &policy(vec![dir.path().into()], true),
             ProcMount::Fresh,
-            Path::new("/w"),
+            &[],
+            dir.path(),
         );
         let root = position(&a, &["--ro-bind", "/", "/"]).expect("根要只读挂回来");
-        let work = position(&a, &["--bind", "/w", "/w"]).expect("可写目录要 bind 回来");
+        let work = position(&a, &["--bind", &w, &w]).expect("可写目录要 bind 回来");
         assert!(root < work, "{a:?}");
-        assert_eq!(&a[a.len() - 2..], ["--chdir", "/w"]);
+        assert_eq!(&a[a.len() - 2..], ["--chdir", w.as_str()]);
+    }
+
+    /// 会话中途被删掉的可写目录不能再交给 bwrap：它对不存在的源路径直接
+    /// 报错，之后每条命令都起不来。
+    #[test]
+    fn 不存在的可写目录跳过() {
+        let a = bwrap_args(
+            &policy(vec!["/riot/没有这个目录".into()], true),
+            ProcMount::Fresh,
+            &[],
+            Path::new("/"),
+        );
+        assert!(!a.iter().any(|x| x.contains("没有这个目录")), "{a:?}");
+    }
+
+    /// 密钥文件拿 /dev/null 盖上，而且压在可写目录之后 —— 工作区是主目录
+    /// 时 auth.json 在可写的子树里，先盖后 bind 就被冲掉了。不存在的不挂
+    /// （bwrap 会报错），那种情况由 plant_protected 先建出来。
+    #[test]
+    fn 密钥文件用_dev_null_盖住且在可写目录之后() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let secret = dir.path().join("auth.json");
+        std::fs::write(&secret, "{}").expect("写");
+        let missing = dir.path().join("missing.json");
+        let a = bwrap_args(
+            &policy(vec![dir.path().into()], true),
+            ProcMount::Fresh,
+            &[secret.clone(), missing.clone()],
+            Path::new("/"),
+        );
+        let w = dir.path().to_string_lossy();
+        let s = secret.to_string_lossy();
+        let allow = position(&a, &["--bind", &w, &w]).expect("可写");
+        let hide = position(&a, &["--ro-bind", "/dev/null", &s]).expect("密钥要盖住");
+        assert!(hide > allow, "{a:?}");
+        assert!(!a.iter().any(|x| x.ends_with("missing.json")), "{a:?}");
     }
 
     /// 逃逸面要压在可写 bind 之后，否则 `~/.cargo` 的可写 bind 会把
@@ -377,6 +539,7 @@ mod tests {
         let a = bwrap_args(
             &policy(vec![cargo.clone()], true),
             ProcMount::Fresh,
+            &[],
             Path::new("/"),
         );
         let s = surface.path.to_string_lossy();
@@ -387,10 +550,11 @@ mod tests {
     }
 
     /// 容器里退回 bind 宿主的 /proc，但必须是只读的 —— 可写的话沙箱能改
-    /// `/proc/sys`、往宿主进程的 `/proc/<pid>/mem` 里写。
+    /// `/proc/sys`、往宿主进程的 `/proc/<pid>/mem` 里写。还必须拆用户命名
+    /// 空间，否则 `/proc/<宿主 pid>/root` 能跳回宿主的可写视图。
     #[test]
     fn 宿主_proc_只读挂() {
-        let a = bwrap_args(&policy(vec![], true), ProcMount::Host, Path::new("/"));
+        let a = bwrap_args(&policy(vec![], true), ProcMount::Host, &[], Path::new("/"));
         assert!(
             position(&a, &["--ro-bind", "/proc", "/proc"]).is_some(),
             "{a:?}"
@@ -401,8 +565,13 @@ mod tests {
 
     #[test]
     fn 断网档才拆网络命名空间() {
-        let on = bwrap_args(&policy(vec![], true), ProcMount::Fresh, Path::new("/"));
-        let off = bwrap_args(&policy(vec![], false), ProcMount::Fresh, Path::new("/"));
+        let on = bwrap_args(&policy(vec![], true), ProcMount::Fresh, &[], Path::new("/"));
+        let off = bwrap_args(
+            &policy(vec![], false),
+            ProcMount::Fresh,
+            &[],
+            Path::new("/"),
+        );
         assert!(!on.contains(&"--unshare-net".to_owned()));
         assert!(off.contains(&"--unshare-net".to_owned()));
     }
@@ -422,6 +591,7 @@ mod tests {
         let b = Bwrap {
             exe: PathBuf::from("/usr/bin/bwrap"),
             proc: ProcMount::Fresh,
+            seccomp: seccomp_program().unwrap_or_default(),
         };
         let w = wrap(&b, &policy(vec![], true), spec);
         assert_eq!(w.program, "/bin/sh");
@@ -440,7 +610,11 @@ mod tests {
     /// 一个 `'` 会撑破外面那层单引号。
     #[test]
     fn 过滤器全部转义成八进制() {
-        let esc = printf_escape(&seccomp_program());
+        let Some(prog) = seccomp_program() else {
+            eprintln!("这个架构没有过滤器，跳过");
+            return;
+        };
+        let esc = printf_escape(&prog);
         assert!(
             esc.chars().all(|c| c == '\\' || c.is_ascii_digit()),
             "{esc}"
@@ -457,7 +631,10 @@ mod tests {
     /// 要么连 `read` 都被拦。
     #[test]
     fn 过滤器的跳转都落在两个出口上() {
-        let prog = seccomp_program();
+        let Some(prog) = seccomp_program() else {
+            eprintln!("这个架构没有过滤器，跳过");
+            return;
+        };
         let insn: Vec<(u16, u8, u8, u32)> = prog
             .chunks(8)
             .map(|c| {

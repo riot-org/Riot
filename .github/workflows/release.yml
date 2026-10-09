@@ -230,8 +230,9 @@ jobs:
           tauriScript: pnpm tauri
           retryAttempts: 2
 
-  # Linux 无界面版：tar 包里是 riot-server + 内核 + 前端产物 + systemd unit。
-  # 在 22.04 上编，glibc 2.35 —— 更新的发行版也能跑。没有内置浏览器（CEF）。
+  # Linux 无界面版：tar 包里是 riot-server + 内核 + 内置浏览器（CEF，strip 后
+  # 三百多 MB，cef-dll-sys 构建时自己下载）+ 前端产物 + systemd unit。
+  # 在 22.04 上编，glibc 2.35 —— 更新的发行版也能跑。
   server-linux:
     needs: create-release
     strategy:
@@ -249,6 +250,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      # cef-dll-sys 用 cmake + Ninja 编 CEF 的 C++ 包装层。runner 镜像里不一定
+      # 两样都有（arm 镜像尤其），显式装上。
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake ninja-build
       - id: pkg
         run: echo "tarball=$(scripts/package-server.sh | tail -1)" >> "$GITHUB_OUTPUT"
       - env:

@@ -199,7 +199,7 @@ pub async fn serve(
         deny(&mut ws_tx, ui_text!("host.remote.throttled")).await;
         return;
     }
-    let expected = shared.token.lock().expect("令牌锁").clone();
+    let expected = shared.current_token();
     let ok = expected
         .as_deref()
         .is_some_and(|exp| super::auth::token_matches(exp, &token));
@@ -243,20 +243,26 @@ pub async fn serve(
     let events_out = Arc::clone(&out);
     let forwarder = tokio::spawn(async move {
         loop {
-            match events.recv().await {
-                Ok(ev) if FORWARDED_EVENTS.contains(&ev.name) => {
-                    if events_out
-                        .send_frame(&ServerFrame::Event {
-                            name: ev.name,
-                            payload: ev.payload,
-                        })
-                        .is_err()
-                    {
-                        break;
-                    }
+            let batch = match events.recv().await {
+                Ok(ev) => vec![ev],
+                // 落后了：丢的那几条补不回来，让前端整表重拉。
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::debug!(skipped = n, "远程连接的全局事件落后，补发重拉");
+                    crate::state::HostEvent::resync().into()
                 }
-                Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
                 Err(broadcast::error::RecvError::Closed) => break,
+            };
+            for ev in batch {
+                if !FORWARDED_EVENTS.contains(&ev.name) {
+                    continue;
+                }
+                let sent = events_out.send_frame(&ServerFrame::Event {
+                    name: ev.name,
+                    payload: ev.payload,
+                });
+                if sent.is_err() {
+                    return;
+                }
             }
         }
     });

@@ -1442,13 +1442,15 @@ Rust 这里有生态优势:`tree-sitter` 和 `tree-sitter-bash` 都是原生 cra
 
 策略层和 macOS 共用(`SandboxPolicy` 的可写集、逃逸面清单都一样),只是翻译成 bwrap 的挂载:`--ro-bind / /` 打底,可写目录逐个 `--bind` 回来,逃逸面再 `--ro-bind` 盖上去。`[约束]` 顺序就是语义——bwrap 按参数顺序挂,后挂的盖住先挂的,逃逸面必须排在可写目录之后,否则 `~/.cargo` 的可写 bind 会把 `~/.cargo/bin` 的只读盖掉。不存在的逃逸面先建出来再盖(`plant_protected`),理由同 macOS:不建的话沙箱里可以凭空造一个 `.git/hooks/`。
 
+读全开,唯独密钥文件(`sandbox::secret_files`,现在只有 `auth.json`)拿 `/dev/null` 只读盖上——macOS 对应 `(deny file-read* file-write* (literal …))`。里面除了模型 key 还有远程访问的主人令牌,而 `riot-server` 的远程服务一直在回环上听着:读到令牌就能以主人身份让宿主在沙箱外执行命令。写也要挡:宿主每次鉴权都重读 auth.json(令牌轮换即时生效),能写它就能给自己发令牌。配置目录的位置规则因此挪进了 riot-runtime(`config_base_dir`),内核和沙箱共用一份。可写目录在会话中途被删掉的话跳过(bwrap 对不存在的源路径直接失败,不跳就是之后每条命令都起不来)。
+
 §9.6.2 的"按通道挡"在 Linux 上是 seccomp:`socket(AF_UNIX, …)` 回 `EPERM`,`socketpair` 不受影响(`multiprocessing`、管道式 IPC 照常)。同时挡掉 `io_uring_setup`(它的 socket 操作绕得过 `socket` 的过滤)、x32 ABI 和非本机架构(换个系统调用号表就绕过去了)。DNS 走 UDP,不像 macOS 那样要单独放回来。
 
 `[约束]` 过滤器经管道喂给 `--seccomp 9`,不落盘。落盘就得放在某个目录里,而那个目录多半在可写集内——沙箱里的命令改掉它,下一条命令就没过滤了。
 
 `[约束]` bwrap 只按固定路径找(`/usr/bin/bwrap`、`/usr/local/bin/bwrap`,或 `RIOT_BWRAP`),不查 PATH。PATH 上的目录(`~/.cargo/bin`、`~/.local/bin`)有的就在沙箱可写集里,查 PATH 等于让上一条沙箱命令决定下一条用什么"沙箱"。
 
-`[前提]` 能不能起是运行时才知道的:Docker 默认的 seccomp / AppArmor 不让建 user namespace,有的发行版(Ubuntu 23.10+)用 AppArmor 限制非特权 user namespace,容器里还常常挂不了新的 `/proc`。所以激活时先真跑一次 `/bin/true`(`probe`),新 `/proc` 挂不上就退到只读绑宿主的 `/proc`——代价是沙箱里 `ps` 看得到宿主进程,但 PID namespace 仍在,信号发不出去。`[约束]` 这一档必须同时拆 user namespace:同一个 user namespace 里,`/proc/<宿主 pid>/root`、`cwd` 能跳进宿主进程的挂载视图,在那边写文件不受沙箱挂载约束;隔着 user namespace 时内核拒绝访问(实测 root 和普通用户都是 `Permission denied`)。都起不来就报 `Broken` 带上 bwrap 的原话,设置页里能看到,不静默降级成"没隔离"。root 跑时加 `--unshare-user`:bwrap 对 root 不自动建 user namespace,而容器里的 root 往往没有建其它 namespace 的能力。
+`[前提]` 能不能起是运行时才知道的:Docker 默认的 seccomp / AppArmor 不让建 user namespace,有的发行版(Ubuntu 23.10+)用 AppArmor 限制非特权 user namespace,容器里还常常挂不了新的 `/proc`。所以激活时先真跑一次 `/bin/true`(`probe`),新 `/proc` 挂不上就退到只读绑宿主的 `/proc`——代价是沙箱里 `ps` 看得到宿主进程,但 PID namespace 仍在,信号发不出去。`[约束]` 这一档必须同时拆 user namespace:同一个 user namespace 里,`/proc/<宿主 pid>/root`、`cwd` 能跳进宿主进程的挂载视图,在那边写文件不受沙箱挂载约束;隔着 user namespace 时内核拒绝访问(实测 root 和普通用户都是 `Permission denied`)。通过的那一档记在进程里,下次激活先试它——容器里 Fresh 注定失败,不记的话每个会话都白跑一次。冒烟带 10 秒上限,卡住当作起不来。过滤器只为核对过调用号的 x86_64 / aarch64 编;别的架构直接报"架构不支持",不拿 x86_64 的数凑出一个拒绝一切的过滤器。都起不来就报 `Broken` 带上 bwrap 的原话,设置页里能看到,不静默降级成"没隔离"。root 跑时加 `--unshare-user`:bwrap 对 root 不自动建 user namespace,而容器里的 root 往往没有建其它 namespace 的能力。
 
 ---
 

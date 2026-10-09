@@ -113,11 +113,24 @@ async fn static_asset(State(ctx): State<Ctx>, req: Request) -> Response {
     // index.html。正式包里 resolver 自己会这么兜；开发模式它读的是磁盘上的
     // dist/，对 `/` 会去 read 一个目录然后失败，所以这里先替它换成入口页。
     let is_route = path.ends_with('/') || !path.rsplit('/').next().unwrap_or("").contains('.');
-    let asset = if is_route {
-        assets.get("/index.html")
-    } else {
-        assets.get(&path).or_else(|| assets.get("/index.html"))
-    };
+    //
+    // 查找放到阻塞线程上：`riot-server` 的 [`super::Assets`] 每次都读磁盘，
+    // 几 MB 的 chunk 直接在 runtime 的工作线程上读，会把 WebSocket 推送和
+    // 命令分发一起卡住。桌面那份在内存里，多一次线程切换无所谓。
+    let lookup = Arc::clone(assets);
+    let wanted = path.clone();
+    let asset = tokio::task::spawn_blocking(move || {
+        if is_route {
+            lookup.get("/index.html")
+        } else {
+            lookup.get(&wanted).or_else(|| lookup.get("/index.html"))
+        }
+    })
+    .await
+    .unwrap_or_else(|e| {
+        tracing::error!(error = %e, "static asset lookup panicked");
+        None
+    });
     let Some(asset) = asset else {
         // 开发模式、dist 没建：跳去 Vite。正式包里 index.html 一定在，
         // 走不到这里。

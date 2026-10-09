@@ -719,6 +719,56 @@ pub(crate) fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
 }
 
+/// 平台的配置根目录（Riot 的配置在它下面的 `riot/`）。
+///
+/// 内核的 `config.rs` 和沙箱共用这一份规则：沙箱要知道密钥文件在哪，才能
+/// 把它挡在外面（见 [`secret_files`]）。两边各写一份的话，哪天一边改了
+/// 位置，另一边就在保护一个不存在的文件。
+pub fn config_base_dir() -> Option<PathBuf> {
+    if let Ok(x) = std::env::var("XDG_CONFIG_HOME")
+        && !x.is_empty()
+    {
+        return Some(PathBuf::from(x));
+    }
+    // Windows 的惯例位置是 %APPDATA%。不能走下面的 HOME 分支:Windows
+    // 通常没有 HOME 这个变量，掉进"当前目录"兜底的话，装好的应用会把
+    // config.json 和 auth.json 写进 Program Files 或 System32。
+    #[cfg(windows)]
+    {
+        if let Ok(x) = std::env::var("APPDATA")
+            && !x.is_empty()
+        {
+            return Some(PathBuf::from(x));
+        }
+    }
+    let home = std::env::var("HOME").ok()?;
+    #[cfg(target_os = "macos")]
+    return Some(PathBuf::from(home).join("Library/Application Support"));
+    #[cfg(not(target_os = "macos"))]
+    return Some(PathBuf::from(home).join(".config"));
+}
+
+/// 沙箱里**读写都不许**碰的文件。
+///
+/// 现在只有 `auth.json`：模型 API key，以及远程访问（网页版）的主人令牌。
+/// 读全开的沙箱拿到令牌，就能经回环连上本机的远程服务、以主人身份在
+/// 沙箱外执行命令 —— `riot-server` 上那个服务一直开着。写也要挡：宿主
+/// 每次鉴权都以 auth.json 为准（令牌轮换要即时生效），能写它就能给自己
+/// 发一枚令牌。
+///
+/// `[约束]` 和 [`escape_surfaces`] 分开：那张表只挡写、Windows 也要打
+/// DENY ACE；这张表要连读一起挡，而 Windows 的沙箱是另一个账户，本来就
+/// 读不到真实用户 `%APPDATA%` 下的东西。
+pub(crate) fn secret_files() -> Vec<PathBuf> {
+    let Some(base) = config_base_dir() else {
+        return Vec::new();
+    };
+    let dir = base.join("riot");
+    // seatbelt 按解开链接后的路径匹配，bwrap 挂载也要真实路径。
+    let dir = dir.canonicalize().unwrap_or(dir);
+    vec![dir.join("auth.json")]
+}
+
 /// 去重 + 丢掉不存在的（canonicalize 失败即视为不存在）。
 ///
 /// 丢不存在的不是洁癖：Windows 给目录写 ACE（SetNamedSecurityInfoW）对
