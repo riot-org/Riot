@@ -731,6 +731,7 @@ mod tests {
             id: MessageId::from_raw("a1"),
             content: vec![
                 AssistantContent::Thinking {
+                    duration_ms: None,
                     text: "内心戏".into(),
                     signature: Some("sig".into()),
                 },
@@ -799,6 +800,7 @@ mod tests {
             id: MessageId::from_raw("a1"),
             content: vec![
                 AssistantContent::Thinking {
+                    duration_ms: None,
                     text: "内心戏".into(),
                     signature: Some("sig".into()),
                 },

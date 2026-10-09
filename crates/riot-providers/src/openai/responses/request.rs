@@ -191,6 +191,7 @@ pub fn convert_input(messages: &[Message], strip_thinking_signatures: bool) -> V
                         AssistantContent::Thinking {
                             text: thinking,
                             signature,
+                            ..
                         } => {
                             if strip_thinking_signatures {
                                 continue;

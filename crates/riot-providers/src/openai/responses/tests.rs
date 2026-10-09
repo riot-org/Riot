@@ -257,6 +257,7 @@ fn 思考签名回传_没有则不发() {
         id: MessageId::from_raw("a1"),
         content: vec![
             AssistantContent::Thinking {
+                duration_ms: None,
                 text: "先分析".into(),
                 signature: Some(r#"{"id":"rs_1","encrypted_content":"enc"}"#.into()),
             },
@@ -283,6 +284,7 @@ fn 思考签名回传_没有则不发() {
     let no_sig = vec![Message::Assistant {
         id: MessageId::from_raw("a1"),
         content: vec![AssistantContent::Thinking {
+            duration_ms: None,
             text: "先分析".into(),
             signature: None,
         }],
@@ -311,6 +313,7 @@ fn 回传推理项_json_里_summary_空也要发() {
         id: MessageId::from_raw("a1"),
         content: vec![
             AssistantContent::Thinking {
+                duration_ms: None,
                 // 没请求摘要时正文就是空的，这是最常见的形状
                 text: String::new(),
                 signature: Some(r#"{"id":"rs_1","encrypted_content":"enc"}"#.into()),
@@ -341,6 +344,7 @@ fn 签名缺_id_的推理项不回传() {
         id: MessageId::from_raw("a1"),
         content: vec![
             AssistantContent::Thinking {
+                duration_ms: None,
                 text: "想了想".into(),
                 signature: Some(r#"{"encrypted_content":"enc"}"#.into()),
             },
@@ -377,6 +381,7 @@ fn 只有推理项没有后继项的助手消息整条丢掉() {
         Message::Assistant {
             id: MessageId::from_raw("a1"),
             content: vec![AssistantContent::Thinking {
+                duration_ms: None,
                 text: String::new(),
                 signature: Some(r#"{"id":"rs_1","encrypted_content":"enc"}"#.into()),
             }],

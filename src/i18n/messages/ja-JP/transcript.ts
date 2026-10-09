@@ -82,7 +82,7 @@ export default {
   "transcript.fold.web": "Web {count} 回",
   "transcript.fold.browser": "ブラウザ {count} ステップ",
   "transcript.fold.other": "その他 {count} ステップ",
-  "transcript.fold.thinkingOnly": "思考プロセス · {count} 文字",
+  "transcript.fold.thinkingOnly": "思考プロセス · {dur}",
   "transcript.fold.failed": "{count} 件失敗",
 
   "transcript.task.subtask": "サブタスク",

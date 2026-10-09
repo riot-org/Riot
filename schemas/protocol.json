@@ -618,6 +618,15 @@
         },
         {
           "properties": {
+            "duration_ms": {
+              "description": "这段思考花了多久（毫秒）：从第一个思考增量到模型转去写正文 /\n调工具（或消息收尾）。主循环按注入的时钟量（见 agent_loop），\nprovider 不填。\n\n只给界面显示「思考了 12 秒」，**不**回传给模型。量不出来\n（非流式、时钟没走、旧会话）就是 None，界面不显示时长。",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "signature": {
               "description": "签名与模型绑定。换模型前必须剥离，否则 API 400。\n由 INV-9 断言保证。",
               "type": [

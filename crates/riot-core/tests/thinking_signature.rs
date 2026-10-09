@@ -26,6 +26,7 @@ async fn 换模型后续跑不因旧_thinking_签名而中断() {
             id: MessageId::from_raw("a1"),
             content: vec![
                 AssistantContent::Thinking {
+                    duration_ms: None,
                     text: "先想想".into(),
                     signature: Some("claude-sig".into()),
                 },

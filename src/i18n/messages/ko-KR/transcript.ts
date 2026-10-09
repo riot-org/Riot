@@ -90,7 +90,7 @@ export default {
   "transcript.fold.web": "웹 요청 {count}회",
   "transcript.fold.browser": "브라우저 {count}단계",
   "transcript.fold.other": "기타 {count}단계",
-  "transcript.fold.thinkingOnly": "사고 과정 · {count}자",
+  "transcript.fold.thinkingOnly": "사고 과정 · {dur}",
   "transcript.fold.failed": "{count}개 실패",
 
   // 하위 agent(Task) 카드, 백그라운드 작업 패널, 하위 agent 세션 보기

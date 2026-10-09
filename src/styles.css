@@ -3141,9 +3141,6 @@ html[data-host='web'] body {
   .plan-caret {
     animation: none;
   }
-  .think-block.live .chevron {
-    animation: none;
-  }
   .chevron {
     transition: none;
   }
@@ -3824,7 +3821,7 @@ html[data-host='web'] body {
   color: var(--text);
 }
 
-/* 活动直播：一行，右端贴最新的字，和 fold-peek 同一个视觉。 */
+/* 活动直播：一行，超长截尾。 */
 .task-activity {
   flex: 1;
   min-width: 0;
@@ -9478,35 +9475,83 @@ button.field-slider-state:hover {
   flex: none;
 }
 
-/* 直播预览：一行框，右端贴着最新的字，左端渐隐 —— 视觉上文字向左滚过。
-   fold-peek 是过程组组头的同款（见 ProcessGroup 的 live 形态）。
-   mask 渐变里的 #000 只是"不透明"的意思，不是颜色，两套主题一样。 */
-.think-peek,
-.fold-peek {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  justify-content: flex-end;
-  overflow: hidden;
-  white-space: nowrap;
-  color: var(--text-faint);
-  font-size: 11px;
-  mask-image: linear-gradient(to right, transparent, #000 56px);
-  -webkit-mask-image: linear-gradient(to right, transparent, #000 56px);
+/* ── 流光（shimmer）：正在进行中的文字上扫过一道光 ─────────
+ *
+ * 学 Claude 的 "Thinking…"：转圈图标只说明"在动"，文字自己流着光，
+ * 一眼就能看出这一行是现在进行时。所有"正在跑"的文字统一用这一个
+ * 效果 —— 直播思考、过程组组头、底部状态行、运行中的工具卡 / 子 agent、
+ * 进行中的 todo。
+ *
+ * 做法：文字填充透明（-webkit-text-fill-color，不动 color），背景裁到
+ * 字形上（background-clip: text），背景是一条横向渐变在移动。渐变按
+ * **元素自己的字色**配：底色把 currentColor 压暗一点，亮带往 --text 提。
+ * 于是淡字、亮字、深浅两套主题都看得见光，不用逐处调色。用的是
+ * -webkit-text-fill-color 而不是 color: transparent —— 后者会让渐变里的
+ * currentColor 也变成透明。
+ *
+ * `[约束]` 整段包在 @supports 里：不支持 background-clip:text 或
+ * color-mix 的引擎上，填充色透明而背景没画出来，字会整个消失。降级
+ * 就是不流光，字照常显示。
+ *
+ * 背景比元素宽 2.5 倍、位置从 100% 走到 0%，亮带（渐变中点）就从元素
+ * 左外侧扫到右外侧，两头各留一段停顿，不是一刻不停地闪。 */
+@supports ((background-clip: text) or (-webkit-background-clip: text)) and
+  (color: color-mix(in srgb, red 50%, blue)) {
+  .shimmer,
+  .wait-note-text,
+  .tool-running .tool-name,
+  .tool-running .task-card-title,
+  .task-row-running .task-title,
+  .subagent-head-running .subagent-head-title,
+  .todo-item.in_progress .todo-text {
+    background-image: linear-gradient(
+      90deg,
+      color-mix(in srgb, currentColor 62%, transparent) 0%,
+      color-mix(in srgb, currentColor 62%, transparent) 40%,
+      color-mix(in srgb, currentColor 30%, var(--text)) 50%,
+      color-mix(in srgb, currentColor 62%, transparent) 60%,
+      color-mix(in srgb, currentColor 62%, transparent) 100%
+    );
+    background-size: 250% 100%;
+    background-repeat: no-repeat;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: shimmer 2.2s linear infinite;
+  }
 }
 
-.think-peek-text,
-.fold-peek-text {
+/* 减少动效：不流光，字照常显示。必须排在上面那段之后才压得住。 */
+@media (prefers-reduced-motion: reduce) {
+  .shimmer,
+  .wait-note-text,
+  .tool-running .tool-name,
+  .tool-running .task-card-title,
+  .task-row-running .task-title,
+  .subagent-head-running .subagent-head-title,
+  .todo-item.in_progress .todo-text {
+    animation: none;
+    background-image: none;
+    -webkit-text-fill-color: currentColor;
+  }
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0% 0;
+  }
+}
+
+/* 思考时长。直播时每秒走，落定后是总时长（见 ThinkingBlock）。
+   等宽数字：比例数字每跳一秒宽度都在变，后面的东西跟着晃。 */
+.think-time {
   flex: none;
-}
-
-.think-chars {
   font-size: 11px;
   opacity: 0.75;
-}
-
-.think-block.live .chevron {
-  animation: blink 1.2s infinite;
+  font-variant-numeric: tabular-nums;
 }
 
 .think-body {
@@ -9602,6 +9647,17 @@ button.field-slider-state:hover {
 
 .fold-live-label {
   flex: none;
+}
+
+/* 正在跑的工具的参数摘要（命令、文件名）。静态截尾，不追输出尾行 ——
+   那样会像跑马灯一样往左推（见 ProcessFold 的 liveActivity）。 */
+.fold-live-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-faint);
+  font-size: 11px;
 }
 
 /* 失败数常驻头部但弱化成和步数同级的灰字 —— 探索里的中途失败（grep

@@ -53,6 +53,8 @@ export default {
   "common.daysAgo": "{count} days ago",
   "common.daysAgo#one": "{count} day ago",
   "common.chars": "{count} characters",
+  "common.durSec": "{s}s",
+  "common.durMinSec": "{m}m {s}s",
   "common.chars#one": "{count} character",
   "common.lines": "{count} lines",
   "common.lines#one": "{count} line",

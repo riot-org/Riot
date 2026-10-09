@@ -92,8 +92,7 @@ export default {
   "transcript.fold.browser#one": "{count} browser step",
   "transcript.fold.other": "{count} other steps",
   "transcript.fold.other#one": "{count} other step",
-  "transcript.fold.thinkingOnly": "Thinking · {count} characters",
-  "transcript.fold.thinkingOnly#one": "Thinking · {count} character",
+  "transcript.fold.thinkingOnly": "Thinking · {dur}",
   "transcript.fold.failed": "{count} failed",
 
   "transcript.task.subtask": "Subtask",

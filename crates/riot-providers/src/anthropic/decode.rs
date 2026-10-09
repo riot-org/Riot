@@ -284,11 +284,16 @@ impl StreamDecoder {
                     }
                 }
                 BlockAccumulator::Thinking { text, signature } => {
-                    content.push(AssistantContent::Thinking { text, signature });
+                    content.push(AssistantContent::Thinking {
+                        duration_ms: None,
+                        text,
+                        signature,
+                    });
                 }
                 BlockAccumulator::RedactedThinking { data } => {
                     // 加密块没有明文，但签名位要留着，否则重放时服务端会拒。
                     content.push(AssistantContent::Thinking {
+                        duration_ms: None,
                         text: String::new(),
                         signature: Some(data),
                     });
@@ -631,6 +636,7 @@ mod tests {
                 assert_eq!(
                     content[0],
                     AssistantContent::Thinking {
+                        duration_ms: None,
                         text: "让我想想".into(),
                         signature: Some("sig_abc".into()),
                     },

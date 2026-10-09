@@ -562,6 +562,7 @@ mod tests {
         let m = Message::Assistant {
             id: MessageId::from_raw("m1"),
             content: vec![AssistantContent::Thinking {
+                duration_ms: None,
                 text: "...".into(),
                 signature: Some("sig".into()),
             }],

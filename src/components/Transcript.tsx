@@ -52,7 +52,13 @@ import { ConfirmDialog, type ConfirmRequest } from "./ConfirmDialog";
 import { PlanModeIcon } from "./icons";
 import { LazyMarkdown, Markdown } from "./Markdown";
 import { AskChoiceCard, ModeSwitchCard } from "./PermissionDialog";
-import { type Block, groupBlocks, ProcessGroup, ThinkingBlock } from "./ProcessFold";
+import {
+  type Block,
+  groupBlocks,
+  ProcessGroup,
+  type ThinkClock,
+  ThinkingBlock,
+} from "./ProcessFold";
 import { SmoothFold } from "./SmoothFold";
 import { TaskNoticeCard } from "./TaskPanel";
 import { ShotViewer, ToolCard } from "./ToolCard";
@@ -423,6 +429,7 @@ export function Transcript({
   items,
   streaming,
   thinking,
+  thinkClock,
   busy,
   compacting,
   waitSince,
@@ -445,6 +452,8 @@ export function Transcript({
   items: Item[];
   streaming: string;
   thinking: string;
+  /** 正在流的思考的计时（见 useSession 的 thinkingClock）。 */
+  thinkClock?: ThinkClock | null;
   busy: boolean;
   /** 前台才接 ⌘F。保活的隐藏实例不能跟前台抢查找。 */
   armed?: boolean;
@@ -953,14 +962,18 @@ export function Transcript({
                   key={b.id}
                   items={b.items}
                   live={b.live}
-                  {...(b === liveFold && thinking ? { thinkingText: thinking } : {})}
+                  {...(b === liveFold && thinking
+                    ? { thinkingText: thinking, thinkingClock: thinkClock ?? null }
+                    : {})}
                 />
               );
             })}
           </div>
         ))}
 
-        {thinking && !liveFold ? <ThinkingBlock text={thinking} live /> : null}
+        {thinking && !liveFold ? (
+          <ThinkingBlock text={thinking} live clock={thinkClock ?? null} />
+        ) : null}
         {/* animated：正在流的这一条里，新长出来的块逐个淡入 —— token
             是成撮到的，不淡的话是一坨一坨往外蹦。落定成 Row 之后就是
             普通历史消息，不再带这个开关（见 styles.css 的
@@ -1198,7 +1211,7 @@ export const Row = memo(function Row({
         </div>
       );
     case "thinking":
-      return <ThinkingBlock text={item.text} />;
+      return <ThinkingBlock text={item.text} durationMs={item.durationMs} />;
     case "tool":
       return <ToolCard tool={item} eager={!!hydrate} />;
     case "error":

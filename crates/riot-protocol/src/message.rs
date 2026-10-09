@@ -242,6 +242,14 @@ pub enum AssistantContent {
         /// 由 INV-9 断言保证。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         signature: Option<String>,
+        /// 这段思考花了多久（毫秒）：从第一个思考增量到模型转去写正文 /
+        /// 调工具（或消息收尾）。主循环按注入的时钟量（见 agent_loop），
+        /// provider 不填。
+        ///
+        /// 只给界面显示「思考了 12 秒」，**不**回传给模型。量不出来
+        /// （非流式、时钟没走、旧会话）就是 None，界面不显示时长。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u64>,
     },
     ToolUse {
         id: ToolUseId,
@@ -554,6 +562,7 @@ mod tests {
             id: MessageId::from_raw("m1"),
             content: vec![
                 AssistantContent::Thinking {
+                    duration_ms: None,
                     text: "想一想".into(),
                     signature: Some("sig".into()),
                 },

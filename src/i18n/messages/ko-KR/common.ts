@@ -50,6 +50,8 @@ export default {
   "common.hoursAgo": "{count}시간 전",
   "common.daysAgo": "{count}일 전",
   "common.chars": "{count}자",
+  "common.durSec": "{s}초",
+  "common.durMinSec": "{m}분 {s}초",
   "common.lines": "{count}줄",
   "common.items": "{count}개 항목",
   "common.files": "파일 {count}개",

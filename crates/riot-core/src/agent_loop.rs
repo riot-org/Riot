@@ -31,6 +31,7 @@ use crate::guard::guarded;
 use crate::invariant;
 use crate::invariants;
 use crate::state::{AgentDeps, AgentState, BatchContext, BatchEvent, StopDecision, Transition};
+use crate::think_timer::ThinkTimer;
 use crate::todo_nudge;
 use crate::turn::TurnAccumulator;
 
@@ -124,6 +125,8 @@ pub fn run_agent(
 
             // ── 3. 流式消费模型输出 ──────────────────────────────
             let mut turn = TurnAccumulator::new();
+            // 每段思考的耗时，盖到消息的思考块上（见 think_timer）。
+            let mut think_timer = ThinkTimer::default();
             let mut model_stream = deps.provider.stream(request, cancel.child_token());
 
             // `[约束]` 取消之后给下游一个宽限期，超了就自己收场 ——
@@ -153,9 +156,13 @@ pub fn run_agent(
                     }
                 };
                 match item {
-                    ProviderEvent::Delta(d) => yield AgentEvent::Delta(d),
+                    ProviderEvent::Delta(d) => {
+                        think_timer.on_delta(&d, deps.clock.now_ms());
+                        yield AgentEvent::Delta(d);
+                    }
                     ProviderEvent::Usage(u) => turn.merge_usage(&u),
-                    ProviderEvent::Message(m) => {
+                    ProviderEvent::Message(mut m) => {
+                        think_timer.stamp(&mut m, deps.clock.now_ms());
                         turn.push(m.clone());
                         yield AgentEvent::Message(m);
                     }

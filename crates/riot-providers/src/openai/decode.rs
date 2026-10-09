@@ -196,6 +196,7 @@ impl StreamDecoder {
 
         if !self.thinking.is_empty() {
             content.push(AssistantContent::Thinking {
+                duration_ms: None,
                 text: std::mem::take(&mut self.thinking),
                 // OpenAI 格式没有签名机制。留 None，INV-9 的剥离逻辑
                 // 对它是空操作。

@@ -353,7 +353,11 @@ impl StreamDecoder {
                         .unwrap_or_default()
                     });
                     if !text.is_empty() || signature.is_some() {
-                        content.push(AssistantContent::Thinking { text, signature });
+                        content.push(AssistantContent::Thinking {
+                            duration_ms: None,
+                            text,
+                            signature,
+                        });
                     }
                 }
                 "message" => {
@@ -398,6 +402,7 @@ impl StreamDecoder {
         });
         if !self.thinking.is_empty() || signature.is_some() {
             content.push(AssistantContent::Thinking {
+                duration_ms: None,
                 text: std::mem::take(&mut self.thinking),
                 signature,
             });

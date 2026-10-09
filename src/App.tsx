@@ -74,6 +74,7 @@ import { closeSessionTerminals, TerminalPanel } from "./components/TerminalPanel
 import { hasActiveTodos, TodoPanel } from "./components/TodoPanel";
 import {
   forgetSession,
+  thinkingClock,
   useSession,
   waitStartedAt,
 } from "./hooks/useSession";
@@ -2546,6 +2547,7 @@ function Chat({
             items={session.items}
             streaming={session.streaming}
             thinking={session.thinking}
+            thinkClock={thinkingClock(sessionId, session.thinking)}
             busy={session.busy}
             compacting={session.compacting}
             waitSince={waitStartedAt(sessionId)}

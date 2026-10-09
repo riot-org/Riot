@@ -74,7 +74,8 @@ export type Item =
     }
   /** `stopped` = 用户按停止截断的半截回答（内核定稿的，见 finalize_partial）。 */
   | { kind: "assistant"; id: string; text: string; stopped?: boolean; at?: number }
-  | { kind: "thinking"; id: string; text: string }
+  /** `durationMs`：这段思考花了多久（内核量的，见 riot-core 的 think_timer）。旧会话没有。 */
+  | { kind: "thinking"; id: string; text: string; durationMs?: number }
   | {
       kind: "tool";
       id: string;
@@ -345,6 +346,35 @@ function touchSession(id: string): SessionState | undefined {
   return hit;
 }
 
+/**
+ * 每个会话正在流的那段思考从什么时候开始、什么时候停（转去写正文那一刻）。
+ *
+ * 和 waitStartAt 同一个理由挂在模块级：思考块随会话切换重挂载，组件内
+ * 计时活不过去。落定后的时长以内核盖在消息上的 `duration_ms` 为准，这里
+ * 只管直播那一段的计时。
+ */
+const thinkClocks = new Map<string, { start: number; end?: number }>();
+
+/**
+ * 直播思考的计时。`thinking` 为空说明这段已经落定，顺手清掉；水合进来的
+ * 半截思考没有真实起点，从此刻起数（诚实的下界）。
+ */
+export function thinkingClock(
+  sessionId: string,
+  thinking: string,
+): { start: number; end?: number } | null {
+  if (!thinking) {
+    thinkClocks.delete(sessionId);
+    return null;
+  }
+  let c = thinkClocks.get(sessionId);
+  if (!c) {
+    c = { start: Date.now() };
+    thinkClocks.set(sessionId, c);
+  }
+  return c;
+}
+
 /** 状态行计时的起点。null = 此刻没有在等的东西。 */
 export function waitStartedAt(sessionId: string): number | null {
   return waitStartAt.get(sessionId) ?? null;
@@ -354,6 +384,7 @@ export function waitStartedAt(sessionId: string): number | null {
 export function forgetSession(id: string) {
   sessionCache.delete(id);
   waitStartAt.delete(id);
+  thinkClocks.delete(id);
 }
 
 export function useSession(
@@ -546,15 +577,27 @@ export function useSession(
       switch (event.type) {
         case "delta":
           if (event.kind === "text") {
+            // 开始写正文 = 这段思考结束，计时停在这里。
+            const c = thinkClocks.get(sessionId);
+            if (c && c.end === undefined) c.end = Date.now();
             pendingText.current += event.text;
             schedule();
           } else if (event.kind === "thinking") {
+            const c = thinkClocks.get(sessionId);
+            // 停过之后又思考 = 新的一段（交错思考），重新起表。
+            if (!c || c.end !== undefined) thinkClocks.set(sessionId, { start: Date.now() });
             pendingThinking.current += event.text;
             schedule();
           } else if (event.kind === "tool_start") {
             // 卡片立刻出现，不等参数流完。Write 的整份文件在参数里，
             // 生成要几十秒 —— 那段时间屏幕上不能什么都没有。
             flush();
+            // 前面那段思考要落定了，先用前端量的时长顶着（整条消息到了会换成
+            // 内核量的）。在 updater 外面读：StrictMode 会把 updater 跑两遍，
+            // 里面删表的话第二遍就读不到了。
+            const clock = thinkClocks.get(sessionId);
+            const thinkMs = clock ? (clock.end ?? Date.now()) - clock.start : 0;
+            thinkClocks.delete(sessionId);
             setState((s) => {
               if (s.items.some((it) => it.kind === "tool" && it.id === event.tool_use_id)) {
                 return s;
@@ -569,6 +612,7 @@ export function useSession(
                   kind: "thinking",
                   id: `${event.tool_use_id}-k`,
                   text: s.thinking,
+                  ...(thinkMs > 0 ? { durationMs: thinkMs } : {}),
                 });
                 if (!settled.current.thinking.includes(s.thinking)) {
                   settled.current.thinking.push(s.thinking);
@@ -2060,7 +2104,12 @@ export function messagesToItems(msgs: Message[], skipSynthetic = false): Item[] 
             ...stampOf(msg.meta),
           });
         } else if (c.type === "thinking" && c.text.trim()) {
-          items.push({ kind: "thinking", id: `${msg.id}-k${items.length}`, text: c.text });
+          items.push({
+            kind: "thinking",
+            id: `${msg.id}-k${items.length}`,
+            text: c.text,
+            ...(c.duration_ms ? { durationMs: c.duration_ms } : {}),
+          });
         } else if (c.type === "tool_use") {
           items.push({
             kind: "tool",
@@ -2281,7 +2330,12 @@ function applyMessage(s: SessionState, event: Extract<AgentEvent, { type: "messa
       if (c.type === "text" && c.text.trim()) {
         items.push({ kind: "assistant", id: `${msg.id}-t`, text: c.text, ...stopped, ...at });
       } else if (c.type === "thinking" && c.text.trim()) {
-        items.push({ kind: "thinking", id: `${msg.id}-k`, text: c.text });
+        items.push({
+          kind: "thinking",
+          id: `${msg.id}-k`,
+          text: c.text,
+          ...(c.duration_ms ? { durationMs: c.duration_ms } : {}),
+        });
       } else if (c.type === "tool_use") {
         // 卡片多半已经在了（tool_start 时就插好、参数边流边填）。这里补
         // 上完整参数 —— 再 push 一张的话，一次调用会显示成两张卡。

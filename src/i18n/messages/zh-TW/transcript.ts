@@ -80,7 +80,7 @@ export default {
   "transcript.fold.web": "網路 {count} 次",
   "transcript.fold.browser": "瀏覽器 {count} 步",
   "transcript.fold.other": "其他 {count} 步",
-  "transcript.fold.thinkingOnly": "思考過程 · 共 {count} 字",
+  "transcript.fold.thinkingOnly": "思考過程 · {dur}",
   "transcript.fold.failed": "{count} 項失敗",
 
   "transcript.task.subtask": "子任務",

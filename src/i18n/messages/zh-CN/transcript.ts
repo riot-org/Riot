@@ -91,7 +91,7 @@ export default {
   "transcript.fold.web": "联网 {count} 次",
   "transcript.fold.browser": "浏览器 {count} 步",
   "transcript.fold.other": "其他 {count} 步",
-  "transcript.fold.thinkingOnly": "思考过程 · 共 {count} 字",
+  "transcript.fold.thinkingOnly": "思考过程 · {dur}",
   "transcript.fold.failed": "{count} 项失败",
 
   // 子 agent（Task）卡片、后台任务面板、子 agent 会话视图

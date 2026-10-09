@@ -50,6 +50,8 @@ export default {
   "common.hoursAgo": "{count} 時間前",
   "common.daysAgo": "{count} 日前",
   "common.chars": "{count} 文字",
+  "common.durSec": "{s} 秒",
+  "common.durMinSec": "{m} 分 {s} 秒",
   "common.lines": "{count} 行",
   "common.items": "{count} 件",
   "common.files": "{count} ファイル",

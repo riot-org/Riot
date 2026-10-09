@@ -28,6 +28,7 @@ pub mod summarize;
 // `features = ["testing"]`（riot-tools 的同名 feature 是同一个模式）。
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
+mod think_timer;
 pub mod todo_nudge;
 pub mod turn;
 

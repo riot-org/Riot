@@ -581,7 +581,9 @@ fn convert_assistant_content(c: &AssistantContent, retry: &RetryContext) -> serd
     match c {
         AssistantContent::Text { text } => serde_json::json!({ "type": "text", "text": text }),
 
-        AssistantContent::Thinking { text, signature } => {
+        AssistantContent::Thinking {
+            text, signature, ..
+        } => {
             // 换模型时必须剥离签名。签名与模型绑定，拿 A 的签名去 B 重放
             // 会 400，而错误信息里不会提到签名两个字。
             let sig = if retry.strip_thinking_signatures {
@@ -937,6 +939,7 @@ mod tests {
     #[test]
     fn 降级时自动剥离_thinking_签名() {
         let msgs = vec![assistant(vec![AssistantContent::Thinking {
+            duration_ms: None,
             text: "想了想".into(),
             signature: Some("sig_from_opus".into()),
         }])];

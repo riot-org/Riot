@@ -357,6 +357,7 @@ fn 思考内容不回传() {
         id: MessageId::from_raw("a1"),
         content: vec![
             AssistantContent::Thinking {
+                duration_ms: None,
                 text: "让我想想……".into(),
                 signature: None,
             },
@@ -483,6 +484,7 @@ fn 思考内容不计入估算() {
             id: MessageId::from_raw("a1"),
             content: vec![
                 AssistantContent::Thinking {
+                    duration_ms: None,
                     text: text.into(),
                     signature: None,
                 },
