@@ -52,6 +52,7 @@ export default {
   "host.dir.outsideProject": "这个目录在项目之外。",
   "host.dir.permissionDenied": "没有权限读这个目录。",
   "host.dir.readFailed": "读目录失败。",
+  "host.env.saveFailed": "环境变量没存上。",
   "host.venv.invalid": "{path} 不像一个虚拟环境：找不到 {python}。应该填 venv 的根目录（python -m venv 创建出来的那个）。",
   "host.term.spawnFailed": "终端起不来。",
   "host.term.closed": "终端 {id} 已经关了。",

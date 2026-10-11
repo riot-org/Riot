@@ -13,6 +13,7 @@ pub mod browser;
 pub mod delete;
 pub mod diagnostics;
 pub mod edit;
+pub mod env;
 #[cfg(any(test, feature = "testing"))]
 pub mod fakeproc;
 pub mod glob;
@@ -97,6 +98,9 @@ pub fn builtin() -> Vec<Arc<dyn Tool>> {
     // 删文件。和 Write / Edit 一样记基线，回退 / 改动栏才看得见删除 ——
     // Bash 的 rm 看不见。追加在末尾，不动前缀。
     tools.push(Arc::new(Delete));
+    // 向用户要环境变量（API key、密码）：表单收值、注入命令、不进上下文。
+    // 追加在末尾，不动前缀。
+    tools.push(Arc::new(env::RequestEnv));
     tools
 }
 

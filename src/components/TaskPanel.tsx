@@ -189,8 +189,29 @@ export function BackgroundTasksPanel({
                 title={t("transcript.task.openSession")}
                 onClick={() => openSubagent(task.id, task.title)}
               >
-                {task.title}
+                {/* 流光挂在里层 span 上：挂在 button 自己身上的话，全局
+                    button:hover 的 background 简写会把 background-clip:text
+                    重置掉，而字的填充色还是透明 —— 悬停时字直接消失。 */}
+                <span className="task-title-text">{task.title}</span>
               </button>
+              {/* 它自己的清单进度。「转到后台」之后前台面板不再显示那份
+                  清单（见 TodoPanel），进度就看这里。 */}
+              {task.status === "running" && task.todo ? (
+                <span
+                  className="task-todo"
+                  title={t("transcript.task.todoProgress", {
+                    done: task.todo.done,
+                    total: task.todo.total,
+                  })}
+                >
+                  <span className="task-todo-count">
+                    {task.todo.done}/{task.todo.total}
+                  </span>
+                  {task.todo.current ? (
+                    <span className="task-todo-current">{task.todo.current}</span>
+                  ) : null}
+                </span>
+              ) : null}
               <span className="task-activity" title={renderUiText(task.activity)}>
                 {task.status === "running" ? renderUiText(task.activity) : statusLabel(task.status)}
               </span>

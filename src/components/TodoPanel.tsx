@@ -34,6 +34,11 @@ interface TodoEntry {
 function latest(items: Item[]): { callId: string; todos: TodoEntry[] } | null {
   for (let i = items.length - 1; i >= 0; i--) {
     const it = items[i];
+    // 清单之后「转到后台」过（分叉自己）：活连同清单交给了后台那份，
+    // 前台这份从此不再更新，留在输入框上方就是一张永远停在半路的清单。
+    // 进度改在后台任务那一行看（见 TaskPanel）。前台之后再建新清单
+    // 照常显示 —— 它在分叉之后，倒序先遇到它。
+    if (it?.kind === "tool" && isForkSelf(it)) return null;
     if (it?.kind !== "tool" || it.name !== "TodoWrite") continue;
     const input = it.input as Record<string, unknown>;
     if (Array.isArray(input?.todos) && input.todos.length > 0) {
@@ -41,6 +46,11 @@ function latest(items: Item[]): { callId: string; todos: TodoEntry[] } | null {
     }
   }
   return null;
+}
+
+/** 「转到后台」那种分叉自己的 Task 调用（`resume: "self"`）。 */
+function isForkSelf(it: Extract<Item, { kind: "tool" }>): boolean {
+  return it.name === "Task" && (it.input as Record<string, unknown>)?.resume === "self";
 }
 
 /**

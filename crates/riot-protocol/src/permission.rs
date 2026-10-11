@@ -400,6 +400,34 @@ pub enum AskPreview {
         /// 允许选多项。
         allow_multiple: bool,
     },
+    /// 模型要用户提供几个环境变量（`RequestEnv` 工具）：API key、密码这类
+    /// 不该贴进对话的值。界面渲染成对话里的表单。
+    ///
+    /// `[约束]` 值**不走这条通道回来**。表单把值直接存进设置（宿主的
+    /// `env_var_set`，落 auth.json），回答里只有存好的名字
+    /// （[`PermissionResponse::Allow`] 的 `choice`）—— 走通道的话，值会进
+    /// 工具输入、进 transcript、进模型上下文，这个功能就白做了。
+    EnvVars {
+        /// 模型给的理由原文（为什么要这些变量），不翻译。
+        reason: String,
+        vars: Vec<EnvVarAsk>,
+    },
+}
+
+/// 表单里的一个变量。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct EnvVarAsk {
+    /// 变量名，`MOSS_API_KEY` 这种。
+    pub name: String,
+    /// 模型写的说明：这是什么、去哪里拿。原文，不翻译。
+    #[serde(default)]
+    pub description: String,
+    /// 获取这个值的页面（控制台的 API key 页）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
+    /// 设置里已经有了。表单上显示「已配置」，留空就沿用。
+    #[serde(default)]
+    pub set: bool,
 }
 
 /// 结构化提问的一个候选项。

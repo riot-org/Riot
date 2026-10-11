@@ -49,6 +49,7 @@ use riot_protocol::message::{Attachment, Message, MessageMeta, UserContent};
 use riot_protocol::task::{BackgroundTaskStatus, BackgroundTaskView, TaskNotice};
 use riot_protocol::text::UiText;
 use riot_protocol::ui_text;
+use riot_tools::tools::names::TODO_WRITE;
 use tokio_util::sync::CancellationToken;
 
 use crate::session::SessionSink;
@@ -228,6 +229,12 @@ impl BackgroundTasks {
         initial: Vec<Message>,
         view_from: usize,
     ) {
+        let mut view = view;
+        // 起跑时就带上它手里那份清单的进度：分叉出来的继承了前台的历史，
+        // 清单就在里面 —— 不然在它第一次重写清单之前，那一行没有进度。
+        if view.todo.is_none() {
+            view.todo = initial.iter().rev().find_map(latest_todo);
+        }
         let mut g = self.lock();
         let snapshot = view.clone();
         if let Some(e) = g.iter_mut().find(|e| e.view.id == view.id) {
@@ -265,13 +272,28 @@ impl BackgroundTasks {
 
     /// 子 agent 产生了一条消息（assistant 回复、工具结果）。界面打开着
     /// 它的会话时靠这条追上进度。
+    ///
+    /// 消息里有 TodoWrite 就顺手更新清单进度，后台任务那一行据此显示
+    /// 「3/5 · 正在写文档」。
     pub fn push_message(&self, id: &AgentId, message: Message) {
+        let todo = latest_todo(&message);
         let mut g = self.lock();
         let Some(e) = g.iter_mut().find(|e| &e.view.id == id) else {
             return;
         };
         if let Some(m) = &mut e.messages {
             m.push(message);
+        }
+        let changed = match todo {
+            Some(t) if e.view.todo.as_ref() != Some(&t) => {
+                e.view.todo = Some(t);
+                Some(e.view.clone())
+            }
+            _ => None,
+        };
+        drop(g);
+        if let Some(v) = changed {
+            self.emit(v);
         }
     }
 
@@ -455,6 +477,20 @@ fn is_descendant_of<'a>(all: &'a [Entry], mut v: &'a BackgroundTaskView, ancesto
 }
 
 /// 收场状态对应的活动行。None = 还在跑，活动行保持原样。
+/// 一条消息里最后一次 TodoWrite 的清单进度。
+fn latest_todo(message: &Message) -> Option<riot_protocol::task::TodoProgress> {
+    use riot_protocol::message::AssistantContent;
+    let Message::Assistant { content, .. } = message else {
+        return None;
+    };
+    content.iter().rev().find_map(|c| match c {
+        AssistantContent::ToolUse { name, input, .. } if name == TODO_WRITE => {
+            riot_protocol::task::TodoProgress::from_todo_input(input)
+        }
+        _ => None,
+    })
+}
+
 fn status_activity(status: BackgroundTaskStatus) -> Option<UiText> {
     match status {
         BackgroundTaskStatus::Running => None,
@@ -594,6 +630,7 @@ pub fn reconstruct_views(
                                 finished_at_ms: (!background)
                                     .then_some(meta.created_at_ms)
                                     .flatten(),
+                                todo: None,
                             });
                         }
                     }
@@ -635,6 +672,7 @@ pub fn reconstruct_views(
             tokens: 0,
             started_at_ms: s.meta.created_at_ms,
             finished_at_ms: None,
+            todo: None,
         });
     }
     out.sort_by_key(|v| v.started_at_ms);
@@ -762,6 +800,7 @@ mod tests {
             tokens: 0,
             started_at_ms: 0,
             finished_at_ms: None,
+            todo: None,
         }
     }
 
@@ -781,6 +820,66 @@ mod tests {
             vec![msg("q")],
             0,
         );
+    }
+
+    #[test]
+    fn 子_agent_写清单时进度跟着更新() {
+        use riot_protocol::message::AssistantContent;
+        let t = BackgroundTasks::new(SessionSink::default());
+        start(&t, "a", true, CancellationToken::new());
+        let todo = |todos: serde_json::Value| Message::Assistant {
+            id: MessageId::from_raw("m"),
+            content: vec![AssistantContent::ToolUse {
+                id: riot_protocol::id::ToolUseId::from_raw("tu"),
+                name: TODO_WRITE.into(),
+                input: serde_json::json!({ "todos": todos }),
+            }],
+            usage: None,
+            meta: Default::default(),
+        };
+        let progress = |t: &BackgroundTasks| t.snapshot()[0].todo.clone();
+        assert_eq!(progress(&t), None, "还没写过清单");
+
+        // 分叉继承的历史里已有清单：起跑就带着进度。
+        t.start(
+            view("fork", true),
+            Kind::Fork,
+            CancellationToken::new(),
+            vec![
+                msg("q"),
+                todo(serde_json::json!([
+                    { "content": "x", "status": "completed" },
+                    { "content": "y", "status": "pending" },
+                ])),
+            ],
+            2,
+        );
+        let fork = t
+            .snapshot()
+            .into_iter()
+            .find(|v| v.id.as_str() == "fork")
+            .unwrap();
+        assert_eq!(fork.todo.map(|p| (p.done, p.total)), Some((1, 2)));
+
+        t.push_message(&AgentId::from_raw("a"), msg("别的消息"));
+        assert_eq!(progress(&t), None);
+
+        t.push_message(
+            &AgentId::from_raw("a"),
+            todo(serde_json::json!([
+                { "content": "修 bug", "status": "completed", "activeForm": "正在修 bug" },
+                { "content": "写文档", "status": "in_progress", "activeForm": "正在写文档" },
+            ])),
+        );
+        let p = progress(&t).expect("有进度");
+        assert_eq!(
+            (p.done, p.total, p.current.as_deref()),
+            (1, 2, Some("正在写文档"))
+        );
+
+        // 流式写参数时的半截输入（空清单）不该把进度抹掉。
+        t.push_message(&AgentId::from_raw("a"), todo(serde_json::json!([])));
+        assert_eq!(progress(&t).map(|p| p.done), Some(1));
     }
 
     #[tokio::test]

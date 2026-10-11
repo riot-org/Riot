@@ -39,6 +39,8 @@
     "allow-notify",
     "allow-set-config",
     "allow-set-api-key",
+    "allow-env-vars-list",
+    "allow-env-var-set",
     "allow-add-project",
     "allow-create-session",
     "allow-probe-dirs",

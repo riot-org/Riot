@@ -1020,6 +1020,74 @@ pub fn load_secret(name: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// 用户环境变量（设置 → 环境变量）在 auth.json 里的键前缀。
+///
+/// 和 API key、远程令牌住同一个文件：同是"不该进可分享配置"的秘密，
+/// 同样 0600、同样被命令沙箱挡在外面（见 riot-runtime 的 `secret_files`）。
+/// 加前缀是为了不和 provider 的 `api_key_env` 撞名 —— 用户完全可能把
+/// `OPENAI_API_KEY` 同时配成环境变量。
+pub const USER_ENV_PREFIX: &str = "env:";
+
+/// 变量名合不合法：字母或下划线开头，后面字母、数字、下划线。
+/// shell 里引用不了的名字（带横杠、空格）存了也用不上。
+pub fn valid_env_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// 读出全部用户环境变量，按名字排序。
+pub fn load_user_env() -> Vec<(String, String)> {
+    load_user_env_at(&auth_path())
+}
+
+pub fn load_user_env_at(p: &Path) -> Vec<(String, String)> {
+    let mut vars: Vec<(String, String)> = load_auth(p)
+        .into_iter()
+        .filter_map(|(k, v)| {
+            let name = k.strip_prefix(USER_ENV_PREFIX)?;
+            (valid_env_name(name) && !v.is_empty()).then(|| (name.to_owned(), v))
+        })
+        .collect();
+    vars.sort_by(|a, b| a.0.cmp(&b.0));
+    vars
+}
+
+/// 设置（或删除，`value` 为空时）一个用户环境变量。
+pub fn save_user_env(name: &str, value: &str) -> Result<(), ConfigError> {
+    save_user_env_at(&auth_path(), name, value)
+}
+
+pub fn save_user_env_at(p: &Path, name: &str, value: &str) -> Result<(), ConfigError> {
+    if !valid_env_name(name) {
+        return Err(ConfigError::Parse(ui_error!(
+            "kernel.config.envName",
+            name = name
+        )));
+    }
+    save_key_at(p, &format!("{USER_ENV_PREFIX}{name}"), value)
+}
+
+/// 设置页里的一行：名字和打码后的值。整值只在宿主和内核之间走。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct UserEnvEntry {
+    pub name: String,
+    /// `sk-m••••7890` 这样：留头尾几位让人认得出是哪一把，中间打码。
+    pub masked: String,
+}
+
+/// 值的打码形状。短于 12 个字符的全部打码 —— 头尾各露 4 位时，密码
+/// 这种短值就几乎露全了。
+pub fn mask_env_value(value: &str) -> String {
+    let chars: Vec<char> = value.chars().collect();
+    if chars.len() < 12 {
+        return "•".repeat(chars.len().clamp(4, 8));
+    }
+    let head: String = chars[..4].iter().collect();
+    let tail: String = chars[chars.len() - 4..].iter().collect();
+    format!("{head}••••{tail}")
+}
+
 /// 命令隔离的强度。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -2117,8 +2185,16 @@ mod tests {
         let mine_only = parse(&format!(
             r#"{{ {base} "pluginMarketplaces": [ {{ "id": "mine", "source": "someone/other" }} ] }}"#
         ));
-        let ids: Vec<&str> = mine_only.plugin_marketplaces.iter().map(|m| m.id.as_str()).collect();
-        assert_eq!(ids, vec![OFFICIAL_MARKETPLACE, "mine"], "补在最前面，自定义的保留");
+        let ids: Vec<&str> = mine_only
+            .plugin_marketplaces
+            .iter()
+            .map(|m| m.id.as_str())
+            .collect();
+        assert_eq!(
+            ids,
+            vec![OFFICIAL_MARKETPLACE, "mine"],
+            "补在最前面，自定义的保留"
+        );
 
         let disabled = parse(&format!(
             r#"{{ {base} "pluginMarketplaces": [ {{ "id": "riot", "source": "riot-org/riot-marketplace", "enabled": false }} ] }}"#
@@ -3292,6 +3368,38 @@ mod tests {
             .mode();
         assert_eq!(mode & 0o777, 0o600, "auth.json 权限是 {mode:o}，应该是 600");
         std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn 用户环境变量存在_auth_json_里_和_api_key_互不干扰() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("auth.json");
+        save_key_at(&p, "OPENAI_API_KEY", "sk-provider").unwrap();
+        save_user_env_at(&p, "OPENAI_API_KEY", "sk-user").unwrap();
+        save_user_env_at(&p, "MOSS_API_KEY", "moss-1").unwrap();
+        assert_eq!(
+            load_user_env_at(&p),
+            vec![
+                ("MOSS_API_KEY".to_owned(), "moss-1".to_owned()),
+                ("OPENAI_API_KEY".to_owned(), "sk-user".to_owned()),
+            ]
+        );
+        // provider 那份没被盖掉。
+        assert_eq!(
+            load_auth(&p).get("OPENAI_API_KEY").map(String::as_str),
+            Some("sk-provider")
+        );
+        // 空值 = 删除。
+        save_user_env_at(&p, "MOSS_API_KEY", "").unwrap();
+        assert_eq!(load_user_env_at(&p).len(), 1);
+    }
+
+    #[test]
+    fn 环境变量名要能在_shell_里引用() {
+        assert!(valid_env_name("MOSS_API_KEY") && valid_env_name("_x1"));
+        assert!(!valid_env_name("1ABC") && !valid_env_name("A-B") && !valid_env_name(""));
+        let d = tempfile::tempdir().unwrap();
+        assert!(save_user_env_at(&d.path().join("auth.json"), "bad name", "v").is_err());
     }
 
     #[test]

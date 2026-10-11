@@ -6,7 +6,7 @@ import { PLAN_TOOL } from "../lib/plan";
 import { Chevron } from "./Chevron";
 import { Markdown } from "./Markdown";
 import { SmoothFold } from "./SmoothFold";
-import { summarize, ToolCard } from "./ToolCard";
+import { hasImage, summarize, ToolCard, ToolThumb } from "./ToolCard";
 
 /** 正在流的那段思考的计时（见 useSession 的 thinkingClock）。`end` = 已转去写正文。 */
 export type ThinkClock = { start: number; end?: number };
@@ -42,8 +42,8 @@ export type Block =
   | { kind: "fold"; id: string; items: FoldItem[]; live: boolean };
 
 /**
- * 不折叠的工具：编辑类卡片默认展开 diff / 内容（见 ToolCard），
- * 是用户要看的工作产物 —— 折进组里等于把成果藏起来。
+ * 不折叠的工具：编辑类卡片是用户要看的工作产物 —— 折进组里等于把
+ * 成果藏起来。卡片本身默认收着，摘要行带「+N −M」（见 ToolCard）。
  */
 /**
  * Task 也不折：子 agent 的卡片是一条"标题 · 模型 · 正在做什么"的直播行，
@@ -67,11 +67,9 @@ function foldable(it: Item): it is FoldItem {
   if (it.kind === "thinking") return true;
   if (it.kind !== "tool") return false;
   if (KEEP_VISIBLE.has(it.name)) return false;
-  // 截图 / 读图不折：图的意义就是给人看（ToolCard 里默认展开的理由），
-  // 折进组里用户不知道图已经在这，会转头让模型"把图贴出来"。
-  // 运行中还没有图，带图工具落定的瞬间会被这条摘出组、以独立卡现身 ——
-  // 那是内容的自然生长，不算跳动。
-  if (it.resultImage || it.resultImagePath) return false;
+  // 截图 / 读图也折：组头右侧挂着组里那几张图的缩略图（见 GroupThumbs），
+  // 用户知道图在这，悬停就能看。早先带图的工具单独成卡、整图铺开，连读
+  // 几张图就把回答冲出屏幕。
   // 注意：运行中的工具**也折**。早先不折、单独成卡直播，跑完再收进
   // 组 —— 那一收一增的行数变化让生成期的底部随每个工具弹跳一次。
   // 直播职责移到了组头（见 ProcessGroup 的 live 形态），高度恒为一行。
@@ -211,6 +209,30 @@ function liveActivity(
   return null;
 }
 
+/** 组头最多挂几张缩略图，再多的收成「+N」。 */
+const GROUP_THUMBS = 3;
+
+/**
+ * 组头右侧：组里带图工具的缩略图（照 Claude）。挂最近的几张 —— 最新的
+ * 图最可能是用户想看的那张；更早的数成「+N」，点开组逐条都有。
+ */
+function GroupThumbs({ items }: { items: FoldItem[] }) {
+  const tools = items.filter(
+    (it): it is Extract<FoldItem, { kind: "tool" }> => it.kind === "tool" && hasImage(it),
+  );
+  if (tools.length === 0) return null;
+  const shown = tools.slice(-GROUP_THUMBS);
+  const more = tools.length - shown.length;
+  return (
+    <span className="group-thumbs">
+      {more > 0 ? <span className="group-thumbs-more">+{more}</span> : null}
+      {shown.map((it) => (
+        <ToolThumb key={it.id} tool={it} />
+      ))}
+    </span>
+  );
+}
+
 /**
  * 一段探索过程，折成一行摘要（学 Cursor 的 "Explored …"）。
  *
@@ -251,43 +273,47 @@ export const ProcessGroup = memo(
 
     return (
       <div className={live ? "fold-block live" : "fold-block"}>
-        <button
-          type="button"
-          className="fold-head"
-          // 同 think-head：点击只为开合，不拿焦点 —— WKWebView 会把
-          // focused button 滚进视野，正好滚离底部。
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => setOpen(!open)}
-          aria-expanded={open}
-        >
-          <Chevron open={open} />
-          {live ? (
-            <span className="fold-live-icon" aria-hidden>
-              ◐
-            </span>
-          ) : null}
-          {act ? (
-            <>
-              <span className="fold-live-label shimmer">{act.label}</span>
-              {act.detail ? (
-                <span className="fold-live-detail shimmer" title={act.detail}>
-                  {act.detail}
-                </span>
-              ) : null}
-              {act.thinking && thinkingClock ? <LiveElapsed clock={thinkingClock} /> : null}
-            </>
-          ) : (
-            <span className="fold-label" title={summary}>
-              {summary}
-            </span>
-          )}
-          <span className="fold-count">{tn("transcript.steps", items.length)}</span>
-          {fails > 0 ? (
-            <span className={endedFail ? "fold-fail fold-fail-final" : "fold-fail"}>
-              {tn("transcript.fold.failed", fails)}
-            </span>
-          ) : null}
-        </button>
+        {/* 缩略图是自己的按钮，不能嵌在组头的 button 里，所以并排放。 */}
+        <div className="fold-head-row">
+          <button
+            type="button"
+            className="fold-head"
+            // 同 think-head：点击只为开合，不拿焦点 —— WKWebView 会把
+            // focused button 滚进视野，正好滚离底部。
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => setOpen(!open)}
+            aria-expanded={open}
+          >
+            <Chevron open={open} />
+            {live ? (
+              <span className="fold-live-icon" aria-hidden>
+                ◐
+              </span>
+            ) : null}
+            {act ? (
+              <>
+                <span className="fold-live-label shimmer">{act.label}</span>
+                {act.detail ? (
+                  <span className="fold-live-detail shimmer" title={act.detail}>
+                    {act.detail}
+                  </span>
+                ) : null}
+                {act.thinking && thinkingClock ? <LiveElapsed clock={thinkingClock} /> : null}
+              </>
+            ) : (
+              <span className="fold-label" title={summary}>
+                {summary}
+              </span>
+            )}
+            <span className="fold-count">{tn("transcript.steps", items.length)}</span>
+            {fails > 0 ? (
+              <span className={endedFail ? "fold-fail fold-fail-final" : "fold-fail"}>
+                {tn("transcript.fold.failed", fails)}
+              </span>
+            ) : null}
+          </button>
+          <GroupThumbs items={items} />
+        </div>
         <SmoothFold open={open}>
           <div className="fold-body">
             {items.map((it) =>

@@ -51,7 +51,7 @@ import { Composer } from "./Composer";
 import { ConfirmDialog, type ConfirmRequest } from "./ConfirmDialog";
 import { PlanModeIcon } from "./icons";
 import { LazyMarkdown, Markdown } from "./Markdown";
-import { AskChoiceCard, ModeSwitchCard } from "./PermissionDialog";
+import { AskChoiceCard, EnvVarsCard, ModeSwitchCard } from "./PermissionDialog";
 import {
   type Block,
   groupBlocks,
@@ -994,11 +994,19 @@ export function Transcript({
           />
         ) : null}
         {choiceAsk && onAnswerChoice ? (
-          <AskChoiceCard
-            key={choiceAsk.requestId}
-            ask={choiceAsk.detail}
-            onAnswer={onAnswerChoice}
-          />
+          choiceAsk.detail.preview.kind === "env_vars" ? (
+            <EnvVarsCard
+              key={choiceAsk.requestId}
+              ask={choiceAsk.detail}
+              onAnswer={onAnswerChoice}
+            />
+          ) : (
+            <AskChoiceCard
+              key={choiceAsk.requestId}
+              ask={choiceAsk.detail}
+              onAnswer={onAnswerChoice}
+            />
+          )
         ) : null}
         {/*
          * 状态行在整个忙碌期间常驻，**不和流式内容二选一**。

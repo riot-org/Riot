@@ -49,6 +49,16 @@ export function BookmarkIcon() {
   );
 }
 
+/** 环境变量：一把钥匙。 */
+export function KeyIcon() {
+  return (
+    <svg {...S} aria-hidden>
+      <circle cx="5.4" cy="10.6" r="2.7" />
+      <path d="M7.4 8.6l5.3-5.3M10.6 5.4l1.6 1.6M11.9 4.1l1.2 1.2" />
+    </svg>
+  );
+}
+
 /** 权限：盾牌。 */
 export function ShieldIcon() {
   return (

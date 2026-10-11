@@ -98,6 +98,7 @@ export default {
   "kernel.config.unreadable": "The file could not be read.",
   "kernel.config.badJson": "Not valid JSON.",
   "kernel.config.encode": "Failed to serialise the config.",
+  "kernel.config.envName": "Invalid variable name “{name}”: use letters, digits and underscores, not starting with a digit.",
   "kernel.config.mcpImportShape": 'Unexpected shape. Expected {"mcpServers": {"name": {"command": …}}}',
   "kernel.config.mcpImportEmpty": "It contains no servers.",
   "kernel.config.mcpImportUnnamed": 'Unexpected shape. Each server needs a name: {"mcpServers": {"name": {"command": …}}}',

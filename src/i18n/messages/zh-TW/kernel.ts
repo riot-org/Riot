@@ -97,6 +97,7 @@ export default {
   "kernel.config.unreadable": "檔案讀不出來。",
   "kernel.config.badJson": "不是合法的 JSON。",
   "kernel.config.encode": "設定序列化失敗。",
+  "kernel.config.envName": "變數名「{name}」不合法：只能用字母、數字、底線，且不能以數字開頭。",
   "kernel.config.mcpImportShape": '形狀不對。期待 {"mcpServers": {"名稱": {"command": …}}}',
   "kernel.config.mcpImportEmpty": "裡面一個伺服器都沒有。",
   "kernel.config.mcpImportUnnamed": '形狀不對。每個伺服器要有名稱：{"mcpServers": {"名稱": {"command": …}}}',

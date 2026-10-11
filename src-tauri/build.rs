@@ -27,6 +27,8 @@ const COMMANDS: &[&str] = &[
     "notify",
     "set_config",
     "set_api_key",
+    "env_vars_list",
+    "env_var_set",
     "add_project",
     "create_session",
     "probe_dirs",

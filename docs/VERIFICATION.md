@@ -56,7 +56,7 @@ L5 是后加的,因为 L3 的替身太"干净"了。黄金回放用 `ScriptedPro
 原始字节 → SseParser → StreamDecoder → AnthropicProvider → run_agent → AgentEvent
 ```
 
-分片故意切成 7 字节(质数,跟任何字段长度都不对齐),让每次运行都顺带压一遍解析器的边界处理。这一层立刻抓到了一个 L3 完全看不见的 bug,见 README 的 bug 表。
+分片故意切成 7 字节(质数,跟任何字段长度都不对齐),让每次运行都顺带压一遍解析器的边界处理。这一层立刻抓到了一个 L3 完全看不见的 bug。
 
 **`riot-tools/tests/with_agent_loop.rs`** —— 工具侧:
 
@@ -416,6 +416,8 @@ async fn golden_replay() {
 | `queued_message` | 插话在工具结果后 drain |
 | `multi_turn_10` | 十轮对话,状态累积正确 |
 
+`[现状]` 已有的基准在 `crates/riot-core/tests/golden/`:`simple_text`、`single_tool`、`parallel_reads`、`tool_error`、`interrupt_mid_tool`,以及表外补上的 `auth_error`、`compact_failure_retries`、`context_overflow_retry`、`context_overflow_exhausted`、`max_turns`、`output_limit_recovery`。插话 drain 由 `tests/queued_input.rs` 覆盖。`mixed_batch`、`invalid_input`、`edit_without_read`、`permission_ask`、`permission_deny`、`multi_turn_10` 还没有基准。
+
 ### 4.5 更新基准
 
 改动主循环后,如果确认新行为是对的:
@@ -506,6 +508,8 @@ pub enum ToolFault {
 | `permission_timeout` | 权限请求无人应答 | 超时后 **deny**(不是 allow);会话继续 |
 | `max_output_escalate` | 首次 `max_output_tokens` | 升到 64k 重试一次;再失败则注入续写消息 |
 | `api_error_no_stop_hook` | 配了 stop hook + API 错误 | hook **没有**被执行(INV-6) |
+
+`[现状]` 表里的用例名是规划,大多还没有同名测试。已落地的故障测试:`crates/riot-core/tests/fault_injection.rs`(不变量报警、启动前取消、截断与流中断的配对补齐、空响应、混沌浸泡)、`tests/stop_gate.rs`(stop hook 连续拦截熔断)、`agent_loop.rs` 里的压缩熔断单测、`riot-providers/src/retry.rs` 的重试单测。
 
 `[约束]` `fallback_on_529` 和 `api_error_no_stop_hook` 这两个用例优先级最高。它们对应的是已知会造成严重后果的 bug(前者静默失败,后者烧钱)。
 
@@ -660,7 +664,7 @@ def restore_stale():         # 启动时捡回上次没恢复的
 
 **抽查**
 
-5. 新工具的 trait 实现:`is_concurrency_safe` 有没有正确声明?`max_result_size_chars` 合不合理?
+5. 新工具的 trait 实现:`is_concurrency_safe` 有没有正确声明?输出有没有自己的截断(超 64KiB 的文本会被统一落盘,见 ARCHITECTURE §6.7)?
 6. 新的 `stream!` 块里有没有偷偷用 `?`。
 
 **不用看**

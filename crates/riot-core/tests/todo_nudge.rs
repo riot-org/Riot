@@ -77,15 +77,24 @@ fn tools() -> Arc<ScriptedToolRunner> {
     Arc::new(ScriptedToolRunner::new(results))
 }
 
-/// 事件流里的提醒（synthetic user + 提到 TodoWrite 的 SystemReminder）。
+/// 事件流里跑轮中的提醒（synthetic user + 「多少次调用没更新」那条）。
 fn nudges(events: &[AgentEvent]) -> Vec<&str> {
+    reminders(events, "since you last updated")
+}
+
+/// 收尾前对账清单的提醒。
+fn closing(events: &[AgentEvent]) -> Vec<&str> {
+    reminders(events, "You are about to finish")
+}
+
+fn reminders<'a>(events: &'a [AgentEvent], marker: &str) -> Vec<&'a str> {
     events
         .iter()
         .filter_map(|e| match e {
             AgentEvent::Message(Message::User { content, meta, .. }) if meta.synthetic => {
                 content.iter().find_map(|c| match c {
                     UserContent::Attachment(Attachment::SystemReminder { text })
-                        if text.contains(TODO_WRITE) =>
+                        if text.contains(marker) =>
                     {
                         Some(text.as_str())
                     }
@@ -105,6 +114,8 @@ async fn 连续不更新清单会收到一次提醒_且带清单现状() {
     ]);
     let mut script = vec![todo_call(0, pending)];
     script.extend((0..NUDGE_AFTER_CALLS).map(read_call));
+    script.push(finish());
+    // 清单停在没做完：收尾前会被提醒对账一次，模型再答一轮。
     script.push(finish());
     let provider = Arc::new(ScriptedProvider::new(script));
     let deps = mock_deps_with(
@@ -168,6 +179,8 @@ async fn 提醒后归零_继续无视再攒满才再提() {
     // 两倍到线：第一次提醒后计数归零，再攒满一次才第二次提醒。
     script.extend((0..NUDGE_AFTER_CALLS * 2).map(read_call));
     script.push(finish());
+    // 清单停在没做完：收尾前会被提醒对账一次，模型再答一轮。
+    script.push(finish());
     let provider = Arc::new(ScriptedProvider::new(script));
     let deps = mock_deps_with(
         Arc::clone(&provider) as _,
@@ -191,6 +204,8 @@ async fn 中途更新了清单就重新计数() {
     // 差一次到线时更新了清单 —— 计数归零，后面再来 NUDGE_AFTER_CALLS - 1 次也不到线。
     script.push(todo_call(1, pending));
     script.extend((NUDGE_AFTER_CALLS..NUDGE_AFTER_CALLS * 2 - 1).map(read_call));
+    script.push(finish());
+    // 清单停在没做完：收尾前会被提醒对账一次，模型再答一轮。
     script.push(finish());
     let provider = Arc::new(ScriptedProvider::new(script));
     let deps = mock_deps_with(
@@ -228,4 +243,112 @@ async fn 清单全部完成或没用清单都不提醒() {
         "没用清单是 prompt 的事，这里只管用了不更新"
     );
     assert!(riot_core::invariants::take_violations().is_empty());
+}
+
+#[tokio::test]
+async fn 收尾时清单没做完会提醒对账一次() {
+    let pending = serde_json::json!([
+        { "content": "修 bug", "status": "completed", "activeForm": "x" },
+        { "content": "写文档", "status": "in_progress", "activeForm": "x" },
+    ]);
+    let done = serde_json::json!([
+        { "content": "修 bug", "status": "completed", "activeForm": "x" },
+        { "content": "写文档", "status": "completed", "activeForm": "x" },
+    ]);
+    // 说完了却没勾清单 → 提醒 → 模型补一次 TodoWrite → 再说完。
+    let script = vec![
+        todo_call(0, pending),
+        finish(),
+        todo_call(1, done),
+        finish(),
+    ];
+    let provider = Arc::new(ScriptedProvider::new(script));
+    let deps = mock_deps_with(
+        Arc::clone(&provider) as _,
+        tools(),
+        Arc::new(FakeCompactor::default()),
+    );
+
+    let events = collect(state(), deps).await;
+
+    assert!(matches!(
+        events.last(),
+        Some(AgentEvent::Done {
+            reason: TerminalReason::Completed
+        })
+    ));
+    let got = closing(&events);
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert!(got[0].contains("[in_progress] 写文档"), "{}", got[0]);
+    assert!(!got[0].contains("修 bug"), "已完成的不该列：{}", got[0]);
+    assert!(riot_core::invariants::take_violations().is_empty());
+}
+
+#[tokio::test]
+async fn 对账提醒每个_run_只给一次() {
+    let pending = serde_json::json!([
+        { "content": "写文档", "status": "pending", "activeForm": "x" },
+    ]);
+    // 模型被提醒后仍不勾（真没做 / 用户叫停）：那就是事实，照常收尾，不再催。
+    let script = vec![todo_call(0, pending), finish(), finish()];
+    let provider = Arc::new(ScriptedProvider::new(script));
+    let deps = mock_deps_with(
+        Arc::clone(&provider) as _,
+        tools(),
+        Arc::new(FakeCompactor::default()),
+    );
+
+    let events = collect(state(), deps).await;
+
+    assert!(matches!(
+        events.last(),
+        Some(AgentEvent::Done {
+            reason: TerminalReason::Completed
+        })
+    ));
+    assert_eq!(closing(&events).len(), 1);
+}
+
+#[tokio::test]
+async fn 交给后台之后收尾不催对账() {
+    let pending = serde_json::json!([
+        { "content": "写文档", "status": "in_progress", "activeForm": "x" },
+    ]);
+    // 「转到后台」：分叉自己，剩下的项归后台那份做，前台立刻收尾是对的。
+    let fork = vec![ProviderEvent::Message(assistant_tool_use(
+        "m_fork",
+        "t_fork",
+        riot_core::todo_nudge::TASK,
+        serde_json::json!({ "resume": "self", "description": "写文档", "prompt": "继续" }),
+    ))];
+    let script = vec![todo_call(0, pending), fork, finish()];
+    let provider = Arc::new(ScriptedProvider::new(script));
+    let mut results = HashMap::new();
+    results.insert(
+        TODO_WRITE.to_owned(),
+        ScriptedResult::Ok {
+            text: "清单已更新".into(),
+        },
+    );
+    results.insert(
+        riot_core::todo_nudge::TASK.to_owned(),
+        ScriptedResult::Ok {
+            text: "已在后台分叉".into(),
+        },
+    );
+    let deps = mock_deps_with(
+        Arc::clone(&provider) as _,
+        Arc::new(ScriptedToolRunner::new(results)),
+        Arc::new(FakeCompactor::default()),
+    );
+
+    let events = collect(state(), deps).await;
+
+    assert!(matches!(
+        events.last(),
+        Some(AgentEvent::Done {
+            reason: TerminalReason::Completed
+        })
+    ));
+    assert!(closing(&events).is_empty(), "活在后台手里，不该催");
 }

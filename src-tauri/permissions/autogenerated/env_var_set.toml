@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-env-var-set"
+description = "Enables the env_var_set command without any pre-configured scope."
+commands.allow = ["env_var_set"]
+
+[[permission]]
+identifier = "deny-env-var-set"
+description = "Denies the env_var_set command without any pre-configured scope."
+commands.deny = ["env_var_set"]

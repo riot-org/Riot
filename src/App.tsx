@@ -2407,7 +2407,9 @@ function Chat({
   // 不是危险操作。Bash / Write 这类权限询问仍弹窗 —— 必须看见原文才能签。
   const isModeAsk = (a: (typeof session.asks)[number]) =>
     a.detail.tool_name === SWITCH_MODE_TOOL;
-  const isChoiceAsk = (a: (typeof session.asks)[number]) => a.detail.preview.kind === "choice";
+  // 环境变量表单也走选择题这条内联路（见 Transcript 里按 kind 分卡）。
+  const isChoiceAsk = (a: (typeof session.asks)[number]) =>
+    a.detail.preview.kind === "choice" || a.detail.preview.kind === "env_vars";
   const modeAsk = session.asks.find(isModeAsk);
   const choiceAsk = session.asks.find(isChoiceAsk);
   const modalAsk = session.asks.find((a) => !isModeAsk(a) && !isChoiceAsk(a));

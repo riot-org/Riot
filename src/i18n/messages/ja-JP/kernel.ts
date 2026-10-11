@@ -97,6 +97,7 @@ export default {
   "kernel.config.unreadable": "ファイルを読み込めません。",
   "kernel.config.badJson": "有効な JSON ではありません。",
   "kernel.config.encode": "設定のシリアライズに失敗しました。",
+  "kernel.config.envName": "変数名「{name}」は使えません：英字・数字・アンダースコアのみ、数字始まりは不可。",
   "kernel.config.mcpImportShape": '形式が正しくありません。期待する形式：{"mcpServers": {"名前": {"command": …}}}',
   "kernel.config.mcpImportEmpty": "サーバーが 1 つも含まれていません。",
   "kernel.config.mcpImportUnnamed": '形式が正しくありません。各サーバーには名前が必要です：{"mcpServers": {"名前": {"command": …}}}',

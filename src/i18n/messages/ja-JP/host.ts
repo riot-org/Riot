@@ -50,6 +50,7 @@ export default {
   "host.dir.outsideProject": "このフォルダはプロジェクトの外にあります。",
   "host.dir.permissionDenied": "このフォルダを読み取る権限がありません。",
   "host.dir.readFailed": "フォルダを読み込めませんでした。",
+  "host.env.saveFailed": "環境変数を保存できませんでした。",
   "host.venv.invalid": "{path} は仮想環境ではないようです：{python} が見つかりません。venv のルートフォルダ（python -m venv で作成されたもの）を指定してください。",
   "host.term.spawnFailed": "ターミナルを起動できませんでした。",
   "host.term.closed": "ターミナル {id} はすでに閉じられています。",

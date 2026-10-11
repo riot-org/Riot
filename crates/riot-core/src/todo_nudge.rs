@@ -28,6 +28,18 @@ pub const NUDGE_AFTER_CALLS: usize = 8;
 /// 一遍；riot-tools 的 names.rs 里有测试盯着两边一致。
 pub const TODO_WRITE: &str = "TodoWrite";
 
+/// 子 agent 工具名（实现在 riot-kernel 的 subagent.rs，那边有测试盯着一致）。
+pub const TASK: &str = "Task";
+
+/// 这次调用是不是把活交给了后台：后台子 agent，或「转到后台」那种
+/// 分叉自己（`resume: "self"`，见 riot-kernel 的 nudge_start_multitasking）。
+/// 交出去之后清单上剩下的项归后台那份去做，前台这时收尾是对的。
+pub fn hands_off(name: &str, input: &serde_json::Value) -> bool {
+    name == TASK
+        && (input.get("run_in_background").and_then(|v| v.as_bool()) == Some(true)
+            || input.get("resume").and_then(|v| v.as_str()) == Some("self"))
+}
+
 /// 一批工具调用之后计数器该变成多少。
 ///
 /// 按调用顺序走：碰到 TodoWrite 归零，其余的各加一。这样"TodoWrite 后面
@@ -111,6 +123,42 @@ pub fn reminder(calls_since_todo: usize, messages: &[Message]) -> Option<String>
     Some(text)
 }
 
+/// 收尾时清单还没对完账的提醒正文；不需要提醒返回 `None`。
+///
+/// 这是 [`reminder`] 管不到的那个口子：它只在工具结果后面插，而模型
+/// 最后一条消息没有工具调用 —— 清单停在半路、面板一直挂着「进行中」，
+/// 用户看到的就是"活干完了，清单没完成"。最常见的来路是「转到后台」：
+/// 前台分叉出去之后清单留在前台的历史里，后台那份更新的是它自己的
+/// 清单；后台做完叫醒前台，前台写总结时不会想起回头勾这份旧清单。
+///
+/// 调用方负责两条边界（见主循环第 5 步）：本 run 已经把活交给了后台
+/// （[`hands_off`]）就不提 —— 剩下的项正由后台在做；每个 run 最多提
+/// 一次 —— 模型对完账仍有没做完的（真没做 / 用户叫停），那就是事实，
+/// 再催就是死循环。
+pub fn closing_reminder(messages: &[Message]) -> Option<String> {
+    let items = unfinished(messages)?;
+    let mut text = format!(
+        "You are about to finish, but your todo list still shows {} item(s) not completed:\n",
+        items.len()
+    );
+    for it in &items {
+        let mark = if it.in_progress {
+            "in_progress"
+        } else {
+            "pending"
+        };
+        text.push_str(&format!("- [{mark}] {}\n", it.content));
+    }
+    text.push_str(
+        "The user sees this list as unfinished. Reconcile it before you end: call TodoWrite \
+         with the complete list, marking everything that is actually done — by you or by a \
+         subagent that reported back — as completed. If something was not done, say so in your \
+         reply instead of leaving it silently open. Then finish your reply as you intended. \
+         This is an automated check, not a user message — do not mention it to the user.",
+    );
+    Some(text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,6 +189,35 @@ mod tests {
             usage: None,
             meta: MessageMeta::default(),
         }
+    }
+
+    #[test]
+    fn 收尾提醒只在清单没完成时给() {
+        let open = vec![todo_write(serde_json::json!([
+            { "content": "a", "status": "completed", "activeForm": "x" },
+            { "content": "b", "status": "in_progress", "activeForm": "x" },
+        ]))];
+        let text = closing_reminder(&open).expect("有未完成项该提醒");
+        assert!(text.contains("[in_progress] b"), "{text}");
+        assert!(!text.contains("] a"), "已完成的不该列出来：{text}");
+        let done = vec![todo_write(serde_json::json!([
+            { "content": "a", "status": "completed", "activeForm": "x" },
+        ]))];
+        assert!(closing_reminder(&done).is_none());
+        assert!(closing_reminder(&[other_tool("Read")]).is_none());
+    }
+
+    #[test]
+    fn 交给后台的认得出来() {
+        use serde_json::json;
+        assert!(hands_off(
+            TASK,
+            &json!({ "resume": "self", "prompt": "继续" })
+        ));
+        assert!(hands_off(TASK, &json!({ "run_in_background": true })));
+        // 前台同步的子 agent 做完才返回，活没交出去。
+        assert!(!hands_off(TASK, &json!({ "prompt": "查一下" })));
+        assert!(!hands_off("Bash", &json!({ "run_in_background": true })));
     }
 
     #[test]

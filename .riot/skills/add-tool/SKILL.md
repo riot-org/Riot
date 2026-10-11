@@ -83,8 +83,9 @@ ToolOutcome::failed(format!("{e:?}"))
 `[约束]` **追加在末尾，不要往中间插。** 那个顺序就是发给模型的顺序，而它
 进 prompt cache 的前缀 —— 往中间插会让所有活跃会话的缓存失效。
 
-宿主层的工具（需要 `AppConfig`、会话状态的，如 `Task`）在
-`src-tauri/src/session.rs` 每轮装配那一段加，不进 `builtin()`。
+内核层的工具（需要 `AppConfig`、会话状态的，如 `Task`、`Schedule`）在
+`crates/riot-kernel/src/session.rs` 每轮装配那一段（`builtin()` 之后的
+`tools.push`）加，不进 `builtin()`。
 
 ## 6. 测试
 

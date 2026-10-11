@@ -294,6 +294,38 @@ pub fn run_agent(
                 // INV-6：API 错误上跑 stop hooks 是"error → hook 注入 →
                 // 重试 → 又 error"死循环的入口，错误路径必须在到达这里
                 // 之前就 return。
+                // 收尾前对账待办清单：模型说完了、清单还挂着没做完的项（最常
+                // 见是「转到后台」之后，后台做完叫醒前台，前台写总结时忘了
+                // 回头勾）。界面上那份清单会一直停在半路。提醒一次再跑一轮；
+                // 本 run 把活交给了后台就不提 —— 剩下的项在后台手里。排在
+                // stop hooks 前面：清单对完账，用户的产出检查看到的才是终态。
+                if !state.todo_close_reminded
+                    && !state.handed_off
+                    && let Some(text) = todo_nudge::closing_reminder(&state.messages)
+                {
+                        state.todo_close_reminded = true;
+                        let nudge = Message::User {
+                            id: riot_protocol::id::MessageId::from_raw(deps.ids.next_id("msg")),
+                            content: vec![UserContent::Attachment(
+                                riot_protocol::message::Attachment::SystemReminder { text },
+                            )],
+                            meta: MessageMeta { synthetic: true, ..Default::default() },
+                        };
+                        state.messages.push(nudge.clone());
+                        yield AgentEvent::Message(nudge);
+                        // 同 stop hook 那条路：不走 advance_turn（不重置恢复
+                        // 标志位），轮数照常推进、受 max_turns 兜底。
+                        state.turn += 1;
+                        state.transition = Some(Transition::TodoReconcile);
+                        if state.turn >= state.max_turns {
+                            yield AgentEvent::Done {
+                                reason: TerminalReason::MaxTurns { limit: state.max_turns },
+                            };
+                            return;
+                        }
+                        continue;
+                }
+
                 invariants::check_hook_eligibility(state.messages.last(), true);
                 match deps.stop_gate.check(state.stop_hook_blocks).await {
                     StopDecision::Allow => {}
@@ -383,6 +415,9 @@ pub fn run_agent(
             // ── 6. 工具执行 ──────────────────────────────────────
             let calls = turn.tool_calls();
             state.messages.extend(turn.take_messages());
+            if calls.iter().any(|c| todo_nudge::hands_off(&c.name, &c.input)) {
+                state.handed_off = true;
+            }
             state.tool_calls_since_todo =
                 todo_nudge::advance(state.tool_calls_since_todo, calls.iter().map(|c| &c.name));
 

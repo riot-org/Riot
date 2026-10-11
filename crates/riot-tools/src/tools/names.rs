@@ -36,6 +36,7 @@ pub const SHOW_BROWSER: &str = "ShowBrowser";
 pub const CREATE_PLAN: &str = "CreatePlan";
 pub const SWITCH_MODE: &str = "SwitchMode";
 pub const TOOL_SEARCH: &str = "ToolSearch";
+pub const REQUEST_ENV: &str = "RequestEnv";
 
 // ── 浏览器 ────────────────────────────────────────────────
 //

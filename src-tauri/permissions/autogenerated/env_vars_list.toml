@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-env-vars-list"
+description = "Enables the env_vars_list command without any pre-configured scope."
+commands.allow = ["env_vars_list"]
+
+[[permission]]
+identifier = "deny-env-vars-list"
+description = "Denies the env_vars_list command without any pre-configured scope."
+commands.deny = ["env_vars_list"]

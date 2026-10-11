@@ -965,6 +965,25 @@ export function setConfig(config: AppConfig): Promise<ConfigStatus> {
   return invoke<ConfigStatus>("set_config", { config }, T_SLOW);
 }
 
+/** 设置 → 环境变量里的一行：名字和打码后的值。整值从不到前端来。 */
+export interface UserEnvEntry {
+  name: string;
+  masked: string;
+}
+
+/** 用户配的环境变量（名字 + 打码值）。 */
+export function envVarsList(): Promise<UserEnvEntry[]> {
+  return invoke<UserEnvEntry[]>("env_vars_list");
+}
+
+/**
+ * 写一个环境变量（空值删除），回新的清单。值直接进宿主的 auth.json、
+ * 注入之后的每条命令 —— 不经过模型，不进对话。
+ */
+export function envVarSet(name: string, value: string): Promise<UserEnvEntry[]> {
+  return invoke<UserEnvEntry[]>("env_var_set", { name, value });
+}
+
 /** 保存某个 provider 的 API key（宿主写进 0600 的 auth.json）。空字符串删除。 */
 export function setApiKey(providerId: string, key: string): Promise<ConfigStatus> {
   return invoke<ConfigStatus>("set_api_key", { providerId, key });

@@ -39,6 +39,7 @@ cargo test --workspace          # 不变量断言只在 debug 下 panic，不要
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt
 pnpm typecheck
+pnpm lint
 
 # 改了 riot-protocol 里的类型之后必须重新生成，CI 会检查是否同步
 pnpm gen
@@ -60,6 +61,20 @@ Linux（只给无界面的 `riot-server` 用）跑同一个 `build-browser.sh`�
 
 浏览器是可选能力：没打过包也能起主应用，只是 Browser 工具和面板不可用。
 
+## 无界面服务器版
+
+`riot-server` 和桌面版同在 `riot-host` 包里，不带 `desktop` 特性就不链接 Tauri / GTK：
+
+```bash
+pnpm build                       # 网页版前端，riot-server 从 dist/ 提供
+cargo build -p riot-kernel
+cargo run -p riot-host --no-default-features --bin riot-server
+```
+
+镜像用 `docker build -f deploy/server/Dockerfile -t riot-server .`；不用 Docker 的话 `scripts/package-server.sh` 打 tar 包。部署、登录令牌和沙箱见 [REMOTE_ACCESS.md](REMOTE_ACCESS.md) §9。
+
+## 浏览器 profile
+
 浏览器进程全应用只有一个，所有会话共用，profile（cookie、localStorage）在配置目录旁的 `browser-profile/`，跨会话、跨重启保留 —— 在一个会话里登录过的站点，别的会话直接是登录态。想回到干净状态就退出应用后删掉那个目录。每个会话仍然有自己的标签页，互不可见。
 
 ## 打包
@@ -75,13 +90,18 @@ pnpm tauri build
 
 产物在 `src-tauri/target/release/bundle/`（`.app` / `.dmg` / NSIS）。
 
+正式安装包和服务器镜像由 `.github/workflows/release.yml` 出：推 `Riot_<版本>` tag（或在 Actions 里手动跑 Release），先建一份 draft Release，macOS / Windows 安装包挂上去，Linux x86_64 / arm64 镜像推到 `ghcr.io/<owner>/riot-server:<版本>`，全部成功后才发布。
+
 ## 仓库分层
 
 ```
 crates/          内核、工具、权限、模型适配、协议
-src-tauri/       宿主：窗口、会话、终端、浏览器、权限弹窗
+src-tauri/       宿主：窗口、会话、终端、浏览器、权限弹窗；也出 riot-server
 src/             React 界面；只有 src/bridge/ 可以调用 Tauri
 schemas/         从 Rust 类型生成，勿手改
+deploy/          服务器镜像、systemd unit、SearXNG
+scripts/         浏览器 / 服务器打包、CI 辅助
+vendor/          file-viewer、srt-win（Windows 沙箱）
 docs/            架构、验证、开发
 ```
 
@@ -89,11 +109,14 @@ docs/            架构、验证、开发
 
 ## 发新版本
 
-设置 → 关于里的「检查更新」比的是 Riot 应用本身的版本。改这三处，保持一致：
+设置 → 关于里的「检查更新」比的是 Riot 应用本身的版本。改这几处，保持一致：
 
 - `package.json` 的 `version`
 - `Cargo.toml` 的 `[workspace.package].version`（各 crate 写 `version.workspace = true`，不用逐个改）
 - `src-tauri/tauri.conf.json` 的 `version`
+- `Cargo.lock` 和 `crates/riot-browser/Cargo.lock`：改完版本号跑 `cargo check --workspace` 和 `cargo update -p riot-protocol --manifest-path crates/riot-browser/Cargo.toml` 让它们跟上（后者锁着 `riot-protocol` 的版本）。发版构建带 `--locked`，锁文件没跟上会直接失败
+
+提交后推 `Riot_<版本>` tag 触发发版。
 
 宿主从 `tauri.conf.json` 读这份号：关于页显示、对照 GitHub 最新正式 Release，都是它。Release tag 写成 `0.1.1`、`v0.1.1` 或 `Riot_0.1.1` 都行。
 

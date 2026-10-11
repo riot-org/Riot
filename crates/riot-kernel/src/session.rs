@@ -4257,7 +4257,9 @@ struct ExecEnv<'a> {
 ///   所以后跑的排在前面。venv 在外的话插件的目录会盖在用户显式选的
 ///   venv 前面，一句 `python3 manage.py` 就拿到包里那份、找不到项目依赖。
 ///
-/// 结论：`插件 → venv → 沙箱 → base`，从外到里。
+/// 结论：`用户环境变量 → 插件 → venv → 沙箱 → base`，从外到里。用户环境
+/// 变量在最外层：每层都是"没设过才设"，外层先跑，所以用户在设置里配的
+/// 值赢过插件声明的同名默认值 —— 显式配置该是最终说了算的那份。
 fn process_chain(
     base: Arc<dyn riot_protocol::tool::ProcessRunner>,
     sandbox: Option<Arc<riot_runtime::ActiveSandbox>>,
@@ -4272,10 +4274,45 @@ fn process_chain(
         Some(v) => Arc::new(VenvRunner::new(v, proc)),
         None => proc,
     };
-    if plugins.env.is_empty() && plugins.path_dirs.is_empty() {
-        proc
-    } else {
-        Arc::new(PluginRunner::new(plugins, proc))
+    let proc: Arc<dyn riot_protocol::tool::ProcessRunner> =
+        if plugins.env.is_empty() && plugins.path_dirs.is_empty() {
+            proc
+        } else {
+            Arc::new(PluginRunner::new(plugins, proc))
+        };
+    Arc::new(UserEnvRunner::new(proc))
+}
+
+/// 给工具子进程注入「设置 → 环境变量」里的变量（API key、密码……）。
+///
+/// 每次起进程现读那张表（`riot_tools::user_env`），不在装配时抄一份：
+/// 跑轮中经 `RequestEnv` 表单填的值，模型的下一条命令就要用上。
+///
+/// 值只进子进程环境，不进上下文；子进程把它打印出来时由出口遮蔽兜住
+/// （见 riot-tools 的 scheduler::redact）。工具自己显式设的同名变量优先。
+pub(crate) struct UserEnvRunner {
+    inner: Arc<dyn riot_protocol::tool::ProcessRunner>,
+}
+
+impl UserEnvRunner {
+    pub(crate) fn new(inner: Arc<dyn riot_protocol::tool::ProcessRunner>) -> Self {
+        Self { inner }
+    }
+}
+
+#[async_trait::async_trait]
+impl riot_protocol::tool::ProcessRunner for UserEnvRunner {
+    async fn run(
+        &self,
+        mut spec: riot_protocol::tool::ProcessSpec,
+        cancel: CancellationToken,
+    ) -> std::io::Result<riot_protocol::tool::ProcessOutput> {
+        for (k, v) in riot_tools::user_env::snapshot() {
+            if !spec.env.iter().any(|(e, _)| *e == k) {
+                spec.env.push((k, v));
+            }
+        }
+        self.inner.run(spec, cancel).await
     }
 }
 
@@ -4827,6 +4864,47 @@ mod tests {
             )],
             path_dirs: vec![std::path::PathBuf::from("/plugins/doc-runtime/path")],
         }
+    }
+
+    /// 设置里的环境变量注入到最里层；工具显式设的同名变量不被盖掉；
+    /// 跑轮中改了表，下一次起进程就是新值（链条装配时不抄快照）。
+    #[tokio::test]
+    async fn 用户环境变量注入子进程_工具显式设的优先() {
+        let rec = Arc::new(RecordingRunner::default());
+        let chain = process_chain(
+            Arc::clone(&rec) as Arc<dyn riot_protocol::tool::ProcessRunner>,
+            None,
+            None,
+            &crate::plugins::Runtime::default(),
+        );
+        riot_tools::user_env::set(vec![
+            ("RIOT_TEST_ENV_A".to_owned(), "secret-a".to_owned()),
+            ("RIOT_TEST_ENV_B".to_owned(), "secret-b".to_owned()),
+        ]);
+        let mut spec = empty_spec();
+        spec.env
+            .push(("RIOT_TEST_ENV_B".to_owned(), "from-tool".to_owned()));
+        chain
+            .run(spec, CancellationToken::new())
+            .await
+            .expect("跑得起来");
+        let got = rec.0.lock().expect("录制锁").clone().expect("录到了").env;
+        let val = |k: &str| got.iter().find(|(e, _)| e == k).map(|(_, v)| v.clone());
+        assert_eq!(val("RIOT_TEST_ENV_A").as_deref(), Some("secret-a"));
+        assert_eq!(val("RIOT_TEST_ENV_B").as_deref(), Some("from-tool"));
+
+        // 同一条链（装配好之后）改表：下一次起进程就是新值。
+        riot_tools::user_env::set(vec![("RIOT_TEST_ENV_A".to_owned(), "rotated".to_owned())]);
+        chain
+            .run(empty_spec(), CancellationToken::new())
+            .await
+            .expect("跑得起来");
+        let got = rec.0.lock().expect("录制锁").clone().expect("录到了").env;
+        assert!(
+            got.iter()
+                .any(|(k, v)| k == "RIOT_TEST_ENV_A" && v == "rotated")
+        );
+        riot_tools::user_env::set(Vec::new());
     }
 
     /// `[约束]` 装配顺序：插件 → venv → 沙箱 → 真正起进程的那层。
@@ -6116,6 +6194,7 @@ mod tests {
             tokens: 0,
             started_at_ms: 0,
             finished_at_ms: None,
+            todo: None,
         }
     }
 

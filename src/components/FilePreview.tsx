@@ -165,6 +165,41 @@ export function imageMimeOf(path: string): string | undefined {
   return IMAGE_MIME[extOf(path)];
 }
 
+/**
+ * 能在聊天正文里直接播放的视频（`![](demo.mp4)`）。只收 WebView 自己
+ * 解得开的容器；mkv / avi 之类给了也放不出来，还是按文件链接走。
+ */
+const VIDEO_MIME: Record<string, string> = {
+  mp4: "video/mp4",
+  m4v: "video/mp4",
+  mov: "video/quicktime",
+  webm: "video/webm",
+  ogv: "video/ogg",
+};
+
+export function videoMimeOf(path: string): string | undefined {
+  return VIDEO_MIME[extOf(path)];
+}
+
+/**
+ * 能在聊天正文里直接播放的音频（`![](a.mp3)` 或 `[a.mp3](a.mp3)`）。
+ * 同样只收 WebView 自己解得开的格式。
+ */
+const AUDIO_MIME: Record<string, string> = {
+  mp3: "audio/mpeg",
+  m4a: "audio/mp4",
+  aac: "audio/aac",
+  wav: "audio/wav",
+  ogg: "audio/ogg",
+  oga: "audio/ogg",
+  opus: "audio/ogg",
+  flac: "audio/flac",
+};
+
+export function audioMimeOf(path: string): string | undefined {
+  return AUDIO_MIME[extOf(path)];
+}
+
 function extOf(path: string): string {
   const name = basename(path);
   const dot = name.lastIndexOf(".");

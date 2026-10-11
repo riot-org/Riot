@@ -595,6 +595,31 @@
             "allow_multiple"
           ],
           "type": "object"
+        },
+        {
+          "description": "模型要用户提供几个环境变量（`RequestEnv` 工具）：API key、密码这类\n不该贴进对话的值。界面渲染成对话里的表单。\n\n`[约束]` 值**不走这条通道回来**。表单把值直接存进设置（宿主的\n`env_var_set`，落 auth.json），回答里只有存好的名字\n（[`PermissionResponse::Allow`] 的 `choice`）—— 走通道的话，值会进\n工具输入、进 transcript、进模型上下文，这个功能就白做了。",
+          "properties": {
+            "kind": {
+              "const": "env_vars",
+              "type": "string"
+            },
+            "reason": {
+              "description": "模型给的理由原文（为什么要这些变量），不翻译。",
+              "type": "string"
+            },
+            "vars": {
+              "items": {
+                "$ref": "#/$defs/EnvVarAsk"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "reason",
+            "vars"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -900,6 +925,17 @@
         "title": {
           "description": "模型给的任务名（Task 工具的 `description`）。续接时可以换。",
           "type": "string"
+        },
+        "todo": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TodoProgress"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "它自己的待办清单进度，取自它最近一次 TodoWrite。没用清单是 None。\n\n「转到后台」之后清单跟着活走：前台那份不再更新、面板上也不再显示，\n进度改在后台任务那一行看。"
         },
         "tokens": {
           "format": "uint32",
@@ -1208,6 +1244,36 @@
           ]
         }
       },
+      "type": "object"
+    },
+    "EnvVarAsk": {
+      "description": "表单里的一个变量。",
+      "properties": {
+        "description": {
+          "default": "",
+          "description": "模型写的说明：这是什么、去哪里拿。原文，不翻译。",
+          "type": "string"
+        },
+        "link": {
+          "description": "获取这个值的页面（控制台的 API key 页）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "变量名，`MOSS_API_KEY` 这种。",
+          "type": "string"
+        },
+        "set": {
+          "default": false,
+          "description": "设置里已经有了。表单上显示「已配置」，留空就沿用。",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name"
+      ],
       "type": "object"
     },
     "FileChange": {
@@ -3568,6 +3634,34 @@
           "type": "object"
         },
         {
+          "description": "换掉用户环境变量的全量（设置里改了、对话里的表单填了）。\n\n每轮的 `TurnConfig.user_env` 已经带一份，这条是给**跑轮中**的变化：\n表单填完，模型的下一条命令就要用上，等不到下一轮。",
+          "properties": {
+            "method": {
+              "const": "env.set",
+              "type": "string"
+            },
+            "params": {
+              "properties": {
+                "vars": {
+                  "items": {
+                    "$ref": "#/$defs/UserEnvVar"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "vars"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
           "properties": {
             "method": {
               "const": "permission.respond",
@@ -4997,6 +5091,33 @@
         }
       ]
     },
+    "TodoProgress": {
+      "description": "子 agent 待办清单的进度：几项做完了、一共几项、正在做哪项。",
+      "properties": {
+        "current": {
+          "description": "正在做的那项（in_progress 的 activeForm，没有就用 content）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "done": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "done",
+        "total"
+      ],
+      "type": "object"
+    },
     "ToolInfo": {
       "properties": {
         "enabled": {
@@ -5196,6 +5317,11 @@
           "type": "string"
         },
         {
+          "const": "todo_reconcile",
+          "description": "收尾时待办清单还有没做完的项，提醒模型对账后继续。",
+          "type": "string"
+        },
+        {
           "const": "token_budget_nudge",
           "description": "接近预算，注入提醒后继续。",
           "type": "string"
@@ -5280,6 +5406,13 @@
             "mode": "default"
           },
           "description": "会话级思考策略。"
+        },
+        "user_env": {
+          "description": "用户在「设置 → 环境变量」里配的变量，注入工具子进程，不进上下文\n（见 riot-tools 的 `user_env`）。每轮带全量：内核重启过也能对上。",
+          "items": {
+            "$ref": "#/$defs/UserEnvVar"
+          },
+          "type": "array"
         },
         "vision": {
           "$ref": "#/$defs/VisionSetup"
@@ -5556,6 +5689,22 @@
           "title": "UserContentAttachment"
         }
       ]
+    },
+    "UserEnvVar": {
+      "description": "一个用户环境变量。",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "value"
+      ],
+      "type": "object"
     },
     "VisionSetup": {
       "description": "视觉能力配置。",

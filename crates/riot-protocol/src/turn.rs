@@ -214,6 +214,17 @@ pub struct TurnConfig {
     /// 插件的 MCP 服务器不在这里：连接是应用级的，走 `mcp.reconcile`。
     #[serde(default)]
     pub plugins: Vec<PluginRef>,
+    /// 用户在「设置 → 环境变量」里配的变量，注入工具子进程，不进上下文
+    /// （见 riot-tools 的 `user_env`）。每轮带全量：内核重启过也能对上。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub user_env: Vec<UserEnvVar>,
+}
+
+/// 一个用户环境变量。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct UserEnvVar {
+    pub name: String,
+    pub value: String,
 }
 
 /// 一个生效中的插件：id 加它的根目录。

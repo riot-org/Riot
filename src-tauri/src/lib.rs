@@ -970,6 +970,28 @@ async fn set_api_key(
     Ok(config::ConfigStatus::of(config))
 }
 
+/// 设置 → 环境变量：名字和打码后的值。整值不出宿主。
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn env_vars_list(state: State<'_, AppState>) -> HostResult<Vec<config::UserEnvEntry>> {
+    Ok(state.user_env_names().await)
+}
+
+/// 写一个用户环境变量（空值 = 删除），回新的清单。设置页和对话里的
+/// 表单（`RequestEnv`）都走这里 —— 值从前端直接进 auth.json，不经过
+/// 内核的工具通道，所以不会进 transcript 和模型上下文。
+///
+/// `[约束]` 同 `set_api_key`：`value` 不能出现在任何日志或错误消息里，
+/// 这个函数体内不允许有 tracing 调用。
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn env_var_set(
+    state: State<'_, AppState>,
+    name: String,
+    value: String,
+) -> HostResult<Vec<config::UserEnvEntry>> {
+    state.set_user_env(name.trim(), &value).await?;
+    Ok(state.user_env_names().await)
+}
+
 // ── 内置浏览器面板 ────────────────────────────────────
 //
 // `[约束]` 面板发起的操作**不过权限链**。
@@ -1856,6 +1878,8 @@ pub fn run() {
             notify,
             set_config,
             set_api_key,
+            env_vars_list,
+            env_var_set,
             mcp_status,
             mcp_restart,
             mcp_export_json,

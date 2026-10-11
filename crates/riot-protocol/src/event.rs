@@ -170,6 +170,8 @@ pub enum Transition {
     OutputLimitRecovery,
     /// stop hook 拦下了结束，注入内容后继续。
     StopHookBlocking,
+    /// 收尾时待办清单还有没做完的项，提醒模型对账后继续。
+    TodoReconcile,
     /// 接近预算，注入提醒后继续。
     TokenBudgetNudge,
 }
@@ -440,6 +442,11 @@ mod tests {
                     tokens: 10,
                     started_at_ms: 1,
                     finished_at_ms: None,
+                    todo: Some(crate::task::TodoProgress {
+                        done: 2,
+                        total: 5,
+                        current: Some("正在写文档".into()),
+                    }),
                 }),
             },
             AgentEvent::Done {

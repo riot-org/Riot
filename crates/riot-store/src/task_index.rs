@@ -180,6 +180,7 @@ mod tests {
             tokens: 1200,
             started_at_ms: 10,
             finished_at_ms: Some(20),
+            todo: None,
         }
     }
 

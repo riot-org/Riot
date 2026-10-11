@@ -39,6 +39,11 @@ pub struct AgentState {
     /// 就往工具结果后面塞一条提醒（见 [`crate::todo_nudge`]），提醒后归零。
     /// 只在 run 内计：新一句用户话开的 run 从零起，上一轮欠的账不带过来。
     pub tool_calls_since_todo: usize,
+    /// 本 run 把活交给过后台（后台子 agent / 分叉自己）。收尾时清单没
+    /// 做完是正常的 —— 剩下的项在后台那份手里，不提醒对账。
+    pub handed_off: bool,
+    /// 本 run 已经提醒过一次「收尾前对账清单」。每个 run 最多一次。
+    pub todo_close_reminded: bool,
 
     /// 上一轮为何继续。仅用于测试与观测，不参与决策。
     pub transition: Option<Transition>,
@@ -60,6 +65,8 @@ impl AgentState {
             stop_hook_blocks: 0,
             thinking: ThinkingPolicy::Default,
             tool_calls_since_todo: 0,
+            handed_off: false,
+            todo_close_reminded: false,
             transition: None,
         }
     }

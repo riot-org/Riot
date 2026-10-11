@@ -43,7 +43,7 @@
 - **不做 CLI 产品**。内核是独立进程,但它的对外接口是 JSON-RPC,不是给人用的命令行。保留一个 `--stdio` 调试入口即可。
 - **不做 Team / 常驻 Coordinator 进程**。多 agent 的运行时原语到"后台子 agent + 完成通知 + 续接 + 自我分叉"为止;"主 agent 只协调"的多任务模式是这些原语之上的**提示词层**开关(见 §7.6),不是另一个进程或角色。
 - **不做云端执行**。所有 agent 跑在本地。远程访问(`docs/REMOTE_ACCESS.md`)不是云端执行:它只是让主人从浏览器里操作**自己这台机器上**正在跑的 Riot。
-- **不追求 Linux 首发**。macOS 优先,Windows 次之,Linux 看 WebView 情况再说。
+- **不做 Linux 桌面版**。桌面端 macOS 优先,Windows 次之。Linux 只出无界面的 `riot-server`(Docker 镜像,从浏览器用,见 `docs/REMOTE_ACCESS.md` §9),不碰 WebView。
 
 ### 1.3 这份设计对实现者的核心要求
 
@@ -160,13 +160,13 @@ Riot/
 │   ├── riot-store/            # JSONL transcript 持久化
 │   ├── riot-mcp/              # MCP 客户端
 │   ├── riot-runtime/          # 文件系统 / 进程 / 网络的真实实现
-│   ├── riot-kernel/           # 内核二进制入口(阶段 B 启用)
+│   ├── riot-kernel/           # 内核二进制:会话装配、配置、插件、子 agent
 │   └── riot-browser/          # CEF 离屏浏览器（独立 workspace）
-├── src-tauri/                    # Tauri 宿主
+├── src-tauri/                    # Tauri 宿主;不带 desktop 特性时编出无界面的 riot-server
 ├── src/                          # React UI
-├── docs/
-│   ├── ARCHITECTURE.md
-│   └── VERIFICATION.md
+├── deploy/                       # riot-server 镜像与 systemd unit、SearXNG
+├── vendor/                       # file-viewer、srt-win(Windows 沙箱)
+├── docs/                         # 本文、VERIFICATION、REMOTE_ACCESS、DEVELOPMENT……
 └── crates/riot-core/tests/golden/  # 黄金回放用例
 ```
 
@@ -479,7 +479,7 @@ let v = do_something().await?;
 
 `[约束]` 防死循环护栏,三条都要实现:
 
-1. `hasAttemptedReactiveCompact` 这类恢复标志位,在 stop-hook 重试路径上**不重置**;
+1. `attempted_reactive_compact` 这类恢复标志位,在 stop-hook 重试路径上**不重置**;
 2. **API 错误事件上绝不跑 stop hooks**(否则 error → hook 注入更多 token → 重试 → error 的死循环。Claude Code 的注释记录这个 bug 烧掉过几千次 API 调用);
 3. 自动压缩连续失败 3 次熔断。
 
@@ -776,16 +776,16 @@ Write 仍要求先 Read：全量覆盖会盖掉没看到的内容。`Partial` �
 
 ### 6.7 结果体积的多层防线
 
-| 层         | 机制                                                           | 参数            |
-| ---------- | -------------------------------------------------------------- | --------------- |
-| 工具自限   | Read 超行数/字节上限直接 `Failed`,逼模型缩小范围               | 2000 行 / 256KB |
-| 单结果落盘 | 超 `max_result_size_chars` → 写文件,模型收到路径 + 前 2KB 预览 | 50k 字符        |
-| 单消息聚合 | 并行 N 个工具结果合计超限 → 按 tool_use_id 稳定替换            | 200k 字符       |
-| 历史清理   | 旧轮次结果被 microcompact 清成占位符                           | 见 §10          |
+| 层         | 机制                                                                    | 参数                      |
+| ---------- | ----------------------------------------------------------------------- | ------------------------- |
+| 工具自限   | Read 超行数/字节上限截断并说明怎么翻页;Bash / Grep 截断输出            | 2000 行 / 256KiB;30k 字符 |
+| 单结果落盘 | 超阈值的文本结果写进工件目录,模型收到路径 + 头尾各 2KiB 预览(`Spilled`) | 64KiB                     |
+| 单消息聚合 | 并行 N 个工具结果合计超限 → 替换。**未实现**,见 §10.3                    | —                         |
+| 历史清理   | 旧轮次结果清成占位符                                                    | 见 §10.3                  |
 
-`[约束]` Read 工具的 `max_result_size_chars` 必须是 `ResultBudget::Unlimited`。否则会产生"Read → 结果落盘成文件 → 模型又去 Read 那个文件"的循环。
+`[约束]` Read 豁免落盘(`scheduler.rs` 的 `SPILL_EXEMPT`)。否则会产生"Read → 结果落盘成文件 → 模型又去 Read 那个文件"的循环。`Tool::result_budget` / `ResultBudget` 是早期按工具配预算的设计,调度器现在不读它,落盘阈值是统一的。
 
-`[约束]` 空结果必须替换成 `(<ToolName> completed with no output)`。部分模型见到空 tool_result 会误判任务结束。
+`[约束]` 空结果必须替换成占位文本。部分模型见到空 tool_result 会误判任务结束。现在只有 OpenAI 兼容这一路做了(`openai/text.rs` 换成 `(completed with no output)`)。
 
 ### 6.7.1 出口凭证遮蔽
 
@@ -951,7 +951,9 @@ Bash 工具失败 → 取消同批次所有兄弟。Read / Grep 等失败 → **
 
 LLM 还在输出后续内容时,先到达的 `tool_use` 已经开始执行。收益明显但复杂度高(乱序缓冲、级联取消、降级时的孤儿结果清理)。
 
-`[约束]` 第一版**不实现**。但 `execute_tools` 的签名要接受一个 `Stream<Item = ToolUse>` 而不是 `Vec<ToolUse>`,这样以后接流式不用改调用方。
+`[约束]` 第一版**不实现**。
+
+`[现状]` 原设计要求执行入口接 `Stream<Item = ToolUse>`,好让以后接流式不改调用方。实际入口是 `ToolRunner::run_batch(Vec<ToolCall>, …) -> BatchStream`(`riot-protocol/src/runner.rs`):输入是一整批,输出才是流。要做流式执行时这个签名得改。
 
 ### 7.6 子 agent:同步、后台、续接、分叉 ⭐
 
@@ -1064,6 +1066,8 @@ pub enum AbortSource {
 ```
 
 `CancellationToken` 本身不带 reason,所以要在旁边放一个 `Arc<OnceLock<CancelReason>>`,取消时先写 reason 再 `cancel()`。
+
+`[现状]` 实现没有 `CancelReason` 这一层,原因直接是 `TerminalReason::Aborted { by: AbortSource }`(`riot-protocol/src/event.rs`)。主循环目前只产出 `AbortSource::User`;其余几个变体已经在协议里,前端也认,但还没有代码路径发出。
 
 ### 8.3 中断后必须补齐 tool_result
 
@@ -1779,7 +1783,7 @@ tokio::select! {
 
 - `riot-kernel` 二进制承载会话运行时(`SessionManager` + 全部会话装配),stdin/stdout 上跑换行分隔的 JSON-RPC,stderr 走日志。
 - 宿主 `kernel/supervisor.rs` 管进程(Job Object / 进程组、四步关闭序列),`kernel/client.rs` 管类型(`RpcRequest` 进、`RpcResponse` 出)和事件分发(每会话 Coalescer 合帧后进前端 Channel)。
-- 权限往返已跨进程:内核发 `PermissionAsked` 事件 → 前端弹窗 → `permission.respond` RPC 回内核的待答表。
+- 权限往返已跨进程:内核发 `PermissionRequest` 事件 → 前端弹窗 → `permission.respond` RPC 回内核的待答表。
 - 每轮配置(模型端点含明文 key、联网/视觉目标、limits、会话设置)由宿主打包成 `TurnConfig` 随 `turn.submit` 传入 —— 内核不读 config.json / auth.json。
 
 - 终端/浏览器工具走**反向 RPC**(`protocol::hostcall`):内核往 stdout 写带 id+method 的请求,宿主执行(PTY / Chromium 都登记在宿主)后把应答写回内核 stdin。两个方向的 id 空间独立,靠"有无 method 字段"区分请求与应答。
@@ -1808,7 +1812,7 @@ src/
 │   └── Settings、ToolCard、权限弹窗……
 ├── hooks/            # 会话状态(useSession 等,本地 state,没有用状态库)
 ├── lib/              # 纯工具(promptText:@引用/斜杠命令的解析,两侧共用)
-└── App.tsx           # 装配根:布局状态 + Chat 会话装配(~1100 行)
+└── App.tsx           # 装配根:布局状态 + Chat 会话装配(~2600 行)
 ```
 
 `[约束]` `@` 引用和斜杠命令的**解析规则只有 `lib/promptText.ts` 一份**:

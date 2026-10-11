@@ -94,7 +94,7 @@ token 流每秒上百条，parse 一遍只为重新序列化是纯浪费。
 ## 4. 连接生命周期
 
 **宿主侧**（`remote/conn.rs`）：一条连接 = 一个观看者。鉴权 → 建出口队列 → 转发全局事件
-（`listen_any`）→ 读循环（每条命令 `tokio::spawn`，浏览器跳转合法地要等几十秒，不能堵
+（订 `AppState` 的广播总线；落后太多丢了消息时补发 `HostEvent::resync()`，让前端整表重拉）→ 读循环（每条命令 `tokio::spawn`，浏览器跳转合法地要等几十秒，不能堵
 停止键）→ 收尾（`detach_viewer`、退订事件、关写任务）。
 
 `[约束]` 服务停止（关开关、换端口 / 绑定）必须把已建立的连接一起断掉。axum 的 graceful
@@ -284,7 +284,7 @@ Docker 镜像用 tini 当 PID 1：agent 命令留下的孤儿进程最后都归 
 `riot-server` 自己当 PID 1 的话不回收它们，僵尸会一直堆。
 
 **部署。** 发版出的是 Docker 镜像（`.github/workflows/release.yml`）：
-`ghcr.io/caiwuu/riot-server:<版本>`，x86_64 / arm64 合在一个多架构标签里，
+`ghcr.io/riot-org/riot-server:<版本>`，x86_64 / arm64 合在一个多架构标签里，
 `docker run` 的参数见 `deploy/server/Dockerfile` 开头。不用 Docker 的话
 `scripts/package-server.sh` 打 tar 包（布局即默认查找布局），
 `deploy/server/riot-server.service` 是 systemd unit，`deploy/server/Dockerfile`

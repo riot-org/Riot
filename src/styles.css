@@ -3217,9 +3217,16 @@ html[data-host='web'] body {
   flex-shrink: 0;
 }
 
-/* 展开区里的完整命令：和普通输出区分开，等宽、可选中。 */
-.tool-cmd {
-  color: var(--text);
+/* 展开区里的完整命令：用强调色和下面的输出区分开，前面挂一个淡色的
+   「$」提示符（伪元素，复制命令时不会带上）。 */
+.tool-body.tool-cmd {
+  color: var(--accent-text);
+}
+
+.tool-body.tool-cmd::before {
+  content: "$ ";
+  color: var(--text-faint);
+  user-select: none;
 }
 
 .tool-name {
@@ -3278,28 +3285,159 @@ html[data-host='web'] body {
   word-break: break-word;
 }
 
-/* 工具结果里的图（截图、读图）。整页截图是一张极端长图:图按容器宽
-   等比显示（用 contain 限高的话宽度会被压成一条窄带），容器限高、
-   纵向滚 —— 不限高会把整个对话冲走。点图开查看器。 */
-.tool-shot-wrap {
-  display: block;
-  width: 100%;
-  max-height: 420px;
-  overflow-y: auto;
+/* 普通工具调用（照 Claude）：收着时就是一行字，不套框 —— 一轮十几次
+   调用，每次一个框，满屏都是线。摘要不再撑满整行，「+N −M」和展开
+   箭头紧跟在文件名后面，不用横穿整行去找。展开的内容自己带框，挂在
+   摘要行下面缩进一级。子 agent 和计划卡是入口卡，保留自己的框。 */
+.tool.tool-plain {
   border: none;
-  border-top: 1px solid var(--border);
-  background: var(--bg-side);
-  padding: 10px 12px;
-  box-sizing: border-box;
-  cursor: zoom-in;
+  border-radius: 0;
+  overflow: visible;
 }
 
-.tool-shot {
+.tool-plain .tool-head {
+  padding: 3px 6px;
+  border-radius: 6px;
+}
+
+.tool-plain button.tool-head:hover {
+  background: var(--bg-hover);
+}
+
+.tool-plain .tool-summary {
+  flex: 0 1 auto;
+}
+
+.tool-plain .tool-detail {
+  margin: 4px 0 2px 22px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: clip;
+}
+
+/* 展开区第一行：完整路径（摘要行只放了文件名）。可选中，方便复制。 */
+.tool-path {
+  padding: 8px 12px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-dim);
+  word-break: break-all;
+  user-select: text;
+}
+
+.tool-plain .tool-detail > :first-child {
+  border-top: none;
+}
+
+.tool-plain .tool-head-row > .tool-thumb {
+  margin-right: 0;
+}
+
+/* 工具结果里的图（截图、读图）：摘要行右侧一枚缩略图（照 Claude），
+   悬停放大预览、点击开查看器。整图铺进对话流的话，连读几张图就把
+   回答冲出屏幕。缩略图和摘要行并排，因为它自己是按钮、不能嵌进摘要
+   行的 button 里。 */
+.tool-head-row,
+.fold-head-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.tool-head-row > .tool-head,
+.fold-head-row > .fold-head {
+  flex: 1;
+  min-width: 0;
+}
+
+.tool-head-row > .tool-thumb {
+  margin-right: 8px;
+}
+
+.group-thumbs {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.group-thumbs-more {
+  font-size: 12px;
+  color: var(--text-faint);
+  margin-right: 2px;
+}
+
+/* 横版小卡：截图大多是宽图，cover 裁中间，认得出是哪张就够。 */
+.tool-thumb {
+  flex: none;
+  display: block;
+  width: 44px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--bg-side);
+  cursor: zoom-in;
+  transition: border-color var(--dur-1) var(--ease-out);
+}
+
+.tool-thumb:hover {
+  border-color: var(--text-faint);
+}
+
+.tool-thumb img {
   display: block;
   width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* 悬停预览：fixed 定位在缩略图旁（位置由 ToolThumb 算），不吃鼠标 ——
+   鼠标划过它不该被当成离开了缩略图。 */
+.thumb-preview {
+  position: fixed;
+  z-index: var(--z-ctx);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--bg-side);
+  box-shadow: 0 8px 32px var(--shadow-color-strong);
+  pointer-events: none;
+  animation: thumb-preview-in var(--dur-1) var(--ease-out);
+}
+
+.thumb-preview img {
+  display: block;
+  max-width: 100%;
+  width: auto;
   height: auto;
-  border-radius: 4px;
-  cursor: zoom-in;
+  object-fit: contain;
+}
+
+.thumb-preview-caption {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes thumb-preview-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thumb-preview {
+    animation: none;
+  }
 }
 
 /* 图片查看器:全屏遮罩。长图纵向滚动看，Esc / 点空白 / 右上角 ✕ 关。 */
@@ -3819,6 +3957,31 @@ html[data-host='web'] body {
 
 .task-row-running .task-title {
   color: var(--text);
+}
+
+/* 子 agent 自己的清单进度：「3/5 正在写文档」。数字等宽，跳一项不晃。 */
+.task-todo {
+  flex: none;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 35%;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.task-todo-count {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+}
+
+.task-todo-current {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 活动直播：一行，超长截尾。 */
@@ -6556,7 +6719,9 @@ button.ta-resize-grip:hover:not(:disabled),
 
 .plan-card-head {
   display: flex;
-  align-items: center;
+  /* baseline 而不是 center：标题（模型给的理由、问题原文）长了会折行，
+     居中的话徽标漂到两行中间；按首行基线对齐，单行时看着也一样。 */
+  align-items: baseline;
   gap: 8px;
   margin: 0 2px 10px;
 }
@@ -6565,6 +6730,9 @@ button.ta-resize-grip:hover:not(:disabled),
    和这个混法只差 2 级）：比 --accent-soft 饱和、比 --accent-text 收敛，
    在 5% 的淡蓝底上当 11px 小标刚好。 */
 .plan-card-badge {
+  /* 标题再长也不许挤它：被压窄的话「环境变量」会折成两行塞在胶囊里。 */
+  flex: none;
+  white-space: nowrap;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.5px;
@@ -6575,8 +6743,10 @@ button.ta-resize-grip:hover:not(:disabled),
 }
 
 .plan-card-title {
+  min-width: 0;
   font-size: 12px;
   font-weight: 600;
+  line-height: 1.6;
   color: var(--text);
 }
 
@@ -6689,6 +6859,132 @@ button.ta-resize-grip:hover:not(:disabled),
   min-height: 34px;
   flex-direction: row;
   align-items: center;
+}
+
+/* 设置 → 环境变量：打码后的值和名字输入框用等宽字，变量名本来就是代码。 */
+.env-masked {
+  font-family: var(--mono);
+  letter-spacing: 0.5px;
+}
+
+.set-row-ctl .env-name-input {
+  font-family: var(--mono);
+}
+
+/* ── 环境变量表单（RequestEnv） ───────────────────────────
+   选择题卡的壳，里面一个变量一组：变量名（等宽）+ 状态 + 获取链接，
+   一行说明，一个密码框。输入框照 .plan-feedback 的底和描边，和卡里
+   别的输入长一个样。 */
+.env-card-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0 2px 10px;
+}
+
+.env-card-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.env-card-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.env-card-name {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.env-card-set {
+  font-size: 11px;
+  color: var(--ok);
+}
+
+.env-card-link {
+  margin-left: auto;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 11px;
+  color: var(--accent-soft);
+  cursor: pointer;
+}
+
+.env-card-link:hover:not(:disabled) {
+  background: none;
+  text-decoration: underline;
+}
+
+.env-card-desc {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.env-card-input {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.env-card-input input {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 7px 10px;
+  outline: none;
+}
+
+.env-card-input input:focus {
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
+.env-card-input input::placeholder {
+  font-family: inherit;
+  color: var(--text-faint);
+}
+
+.env-card-eye {
+  flex: none;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  font-size: 11px;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.env-card-eye:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-dim);
+}
+
+.env-card-note {
+  margin: 0 2px 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+
+.env-card-error {
+  margin: -4px 2px 10px;
+  font-size: 12px;
+  color: var(--danger);
 }
 
 /* ── 计划卡（对话流里 CreatePlan 的卡，照 Cursor） ──────────
@@ -6931,8 +7227,10 @@ button.ta-resize-grip:hover:not(:disabled),
   user-select: none;
 }
 
-.todo-panel-head:hover {
+.todo-panel-head:hover:not(:disabled) {
   color: var(--text-dim);
+  /* 同 changes-bar-head：卡片里不再套一块灰底。 */
+  background: transparent;
 }
 
 /* 关闭按钮平时淡着，扫到面板上才亮 —— 它是逃生口，不是常用操作。 */
@@ -6948,12 +7246,14 @@ button.ta-resize-grip:hover:not(:disabled),
 }
 
 .todo-panel:hover .todo-panel-close,
+.changes-bar:hover .todo-panel-close,
 .todo-panel-close:focus-visible {
   color: var(--text-faint);
 }
 
-.todo-panel-close:hover {
+.todo-panel-close:hover:not(:disabled) {
   color: var(--text-dim);
+  background: transparent;
 }
 
 .todo-panel-title {
@@ -7022,8 +7322,11 @@ button.ta-resize-grip:hover:not(:disabled),
   user-select: none;
 }
 
-.changes-bar-head:hover {
+.changes-bar-head:hover:not(:disabled) {
   color: var(--text-dim);
+  /* 压住全局 button:hover 的底色：条本身已经是一块卡片，里面再亮一块
+     灰底，像框里套了个框。悬停只提亮字。 */
+  background: transparent;
 }
 
 .changes-bar-title {
@@ -9114,6 +9417,105 @@ button.field-slider-state:hover {
   height: auto;
 }
 
+/* 正文里的视频：原生播放器，宽度跟正文走、限高，和图片一个框。
+   外面包一层是为了让开播前的封面盖层和播放器同大小。 */
+.md-video-wrap {
+  position: relative;
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0.55em 0;
+}
+
+.md-video {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 480px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-side);
+}
+
+/* 正文里的音频：一行文件名，下面一条原生播放条。和图片 / 视频一个框。 */
+.md-audio {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(100%, 420px);
+  margin: 0.55em 0;
+  padding: 8px 10px 10px;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-side);
+}
+
+.md-audio-name {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.md-audio-player,
+.md-audio-pending {
+  display: block;
+  width: 100%;
+  height: 32px;
+}
+
+/* 开播前的封面：盖满播放器，中间一枚播放键。点一下撤掉、开播。 */
+.md-video-cover {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-side);
+  cursor: pointer;
+}
+
+.md-video-cover:hover:not(:disabled) {
+  background: var(--bg-side);
+}
+
+.md-video-cover img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.md-video-play {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  padding-left: 3px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  transition: transform var(--dur-1) var(--ease-out), background var(--dur-1) var(--ease-out);
+}
+
+.md-video-cover:hover .md-video-play {
+  transform: scale(1.06);
+  background: rgba(0, 0, 0, 0.7);
+}
+
 /* 图还在读：先用文件名占位，读回来无缝换成图。 */
 .md-img-pending {
   color: var(--text-dim);
@@ -9138,14 +9540,26 @@ button.field-slider-state:hover {
   padding: 12px 14px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: var(--bg-side);
+  /* 点阵画布：节点是浮在上面的卡片，一层很淡的网点让「画布」成立 */
+  background-color: var(--bg-side);
+  background-image: radial-gradient(var(--border) 1px, transparent 1px);
+  background-size: 16px 16px;
+  background-position: 8px 8px;
   overflow-x: auto;
+}
+
+/* 兜底：万一量出来的框还是比字小，宁可字溢出框边，也不能被裁掉看不见 */
+.md-mermaid foreignObject,
+.mermaid-viewer-body foreignObject {
+  overflow: visible;
 }
 
 .md-mermaid svg {
   max-width: 100%;
   height: auto;
   display: block;
+  /* 窄图别贴着左边，居中放 */
+  margin: 0 auto;
 }
 
 /* 代码块：语言标签 + 复制按钮的容器 */
@@ -9501,7 +9915,7 @@ button.field-slider-state:hover {
   .wait-note-text,
   .tool-running .tool-name,
   .tool-running .task-card-title,
-  .task-row-running .task-title,
+  .task-row-running .task-title-text,
   .subagent-head-running .subagent-head-title,
   .todo-item.in_progress .todo-text {
     background-image: linear-gradient(
@@ -9527,7 +9941,7 @@ button.field-slider-state:hover {
   .wait-note-text,
   .tool-running .tool-name,
   .tool-running .task-card-title,
-  .task-row-running .task-title,
+  .task-row-running .task-title-text,
   .subagent-head-running .subagent-head-title,
   .todo-item.in_progress .todo-text {
     animation: none;
@@ -10488,8 +10902,11 @@ button.field-slider-state:hover {
 }
 
 /* 全屏 mermaid 查看器（遮罩复用 .shot-viewer） */
+/* 外层 .shot-viewer 是 flex 居中 + overflow:auto：图比窗口高时，居中会把
+   顶部推到滚动区外面，滚不上去。auto margin 在放得下时照样居中，放不下
+   时退成 0，从顶上开始排。 */
 .mermaid-viewer-body {
-  min-height: 100%;
+  margin: auto;
   display: flex;
   align-items: center;
   justify-content: center;

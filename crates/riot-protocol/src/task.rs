@@ -78,6 +78,55 @@ pub struct BackgroundTaskView {
     pub started_at_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_at_ms: Option<u64>,
+    /// 它自己的待办清单进度，取自它最近一次 TodoWrite。没用清单是 None。
+    ///
+    /// 「转到后台」之后清单跟着活走：前台那份不再更新、面板上也不再显示，
+    /// 进度改在后台任务那一行看。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub todo: Option<TodoProgress>,
+}
+
+/// 子 agent 待办清单的进度：几项做完了、一共几项、正在做哪项。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TodoProgress {
+    pub done: u32,
+    pub total: u32,
+    /// 正在做的那项（in_progress 的 activeForm，没有就用 content）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current: Option<String>,
+}
+
+impl TodoProgress {
+    /// 从一次 TodoWrite 的输入算进度。输入不是一份清单（解析不出、
+    /// 空表）返回 None —— 流式写参数时会有半截输入。
+    pub fn from_todo_input(input: &serde_json::Value) -> Option<Self> {
+        let todos = input.get("todos")?.as_array()?;
+        if todos.is_empty() {
+            return None;
+        }
+        fn status(t: &serde_json::Value) -> Option<&str> {
+            t.get("status").and_then(|s| s.as_str())
+        }
+        let done = todos
+            .iter()
+            .filter(|t| status(t) == Some("completed"))
+            .count();
+        let current = todos
+            .iter()
+            .find(|t| status(t) == Some("in_progress"))
+            .and_then(|t| {
+                ["activeForm", "content"]
+                    .iter()
+                    .find_map(|k| t.get(*k).and_then(|v| v.as_str()))
+                    .filter(|s| !s.trim().is_empty())
+                    .map(str::to_owned)
+            });
+        Some(Self {
+            done: u32::try_from(done).unwrap_or(u32::MAX),
+            total: u32::try_from(todos.len()).unwrap_or(u32::MAX),
+            current,
+        })
+    }
 }
 
 /// 打在完成通知消息上的标记（`MessageMeta::task_notice`）。
@@ -90,4 +139,46 @@ pub struct TaskNotice {
     pub agent_id: AgentId,
     pub title: String,
     pub status: BackgroundTaskStatus,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn 从_todo_write_输入算进度() {
+        let p = TodoProgress::from_todo_input(&json!({ "todos": [
+            { "content": "修 bug", "status": "completed", "activeForm": "正在修 bug" },
+            { "content": "写文档", "status": "in_progress", "activeForm": "正在写文档" },
+            { "content": "发版", "status": "pending", "activeForm": "正在发版" },
+        ]}))
+        .expect("是一份清单");
+        assert_eq!(
+            p,
+            TodoProgress {
+                done: 1,
+                total: 3,
+                current: Some("正在写文档".into())
+            }
+        );
+        // 没有 activeForm 就用 content；没有进行中的项就没有 current。
+        let p = TodoProgress::from_todo_input(&json!({ "todos": [
+            { "content": "写文档", "status": "in_progress" },
+        ]}))
+        .unwrap();
+        assert_eq!(p.current.as_deref(), Some("写文档"));
+        let p = TodoProgress::from_todo_input(&json!({ "todos": [
+            { "content": "a", "status": "completed" },
+        ]}))
+        .unwrap();
+        assert_eq!((p.done, p.total, p.current), (1, 1, None));
+    }
+
+    #[test]
+    fn 半截输入和空清单不算() {
+        assert!(TodoProgress::from_todo_input(&json!({})).is_none());
+        assert!(TodoProgress::from_todo_input(&json!({ "todos": [] })).is_none());
+        assert!(TodoProgress::from_todo_input(&json!({ "todos": "[{" })).is_none());
+    }
 }

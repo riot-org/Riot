@@ -67,7 +67,12 @@ export type AgentEvent =
  * 「转了 30 秒是因为在压缩上下文」，而不是以为卡住了。
  */
 export type Transition =
-  "next_turn" | "reactive_compact_retry" | "output_limit_recovery" | "stop_hook_blocking" | "token_budget_nudge";
+  | "next_turn"
+  | "reactive_compact_retry"
+  | "output_limit_recovery"
+  | "stop_hook_blocking"
+  | "todo_reconcile"
+  | "token_budget_nudge";
 /**
  * 流式增量。高频（每秒可能上百条），仅用于打字机效果。
  *
@@ -384,6 +389,14 @@ export type AskPreview =
       kind: "choice";
       options: AskChoiceOption[];
       question: string;
+    }
+  | {
+      kind: "env_vars";
+      /**
+       * 模型给的理由原文（为什么要这些变量），不翻译。
+       */
+      reason: string;
+      vars: EnvVarAsk[];
     };
 /**
  * 决策理由。UI 的解释、日志、遥测共用同一份数据。
@@ -864,6 +877,12 @@ export type RpcRequest =
       method: "digest.configure";
       params: {
         enabled: boolean;
+      };
+    }
+  | {
+      method: "env.set";
+      params: {
+        vars: UserEnvVar[];
       };
     }
   | {
@@ -1369,6 +1388,27 @@ export interface AskChoiceOption {
   label: string;
 }
 /**
+ * 表单里的一个变量。
+ */
+export interface EnvVarAsk {
+  /**
+   * 模型写的说明：这是什么、去哪里拿。原文，不翻译。
+   */
+  description?: string;
+  /**
+   * 获取这个值的页面（控制台的 API key 页）。
+   */
+  link?: string | null;
+  /**
+   * 变量名，`MOSS_API_KEY` 这种。
+   */
+  name: string;
+  /**
+   * 设置里已经有了。表单上显示「已配置」，留空就沿用。
+   */
+  set?: boolean;
+}
+/**
  * 一个子 agent 在界面上的样子（同步的、后台的都有一份）。
  *
  * 随 [`crate::event::AgentEvent::BackgroundTask`] 每次变化推一份全量；
@@ -1414,12 +1454,30 @@ export interface BackgroundTaskView {
    * 模型给的任务名（Task 工具的 `description`）。续接时可以换。
    */
   title: string;
+  /**
+   * 它自己的待办清单进度，取自它最近一次 TodoWrite。没用清单是 None。
+   *
+   * 「转到后台」之后清单跟着活走：前台那份不再更新、面板上也不再显示，
+   * 进度改在后台任务那一行看。
+   */
+  todo?: TodoProgress | null;
   tokens: number;
   /**
    * 把它开出来的那次 Task 调用。卡片靠它认领自己的子 agent。
    */
   tool_use_id?: string;
   tool_uses: number;
+}
+/**
+ * 子 agent 待办清单的进度：几项做完了、一共几项、正在做哪项。
+ */
+export interface TodoProgress {
+  /**
+   * 正在做的那项（in_progress 的 activeForm，没有就用 content）。
+   */
+  current?: string | null;
+  done: number;
+  total: number;
 }
 /**
  * 给人看的错误：一句 [`UiText`]，外加一段可选的技术细节。
@@ -1510,6 +1568,11 @@ export interface TurnConfig {
    * 会话级思考策略。
    */
   thinking?: ThinkingPolicy;
+  /**
+   * 用户在「设置 → 环境变量」里配的变量，注入工具子进程，不进上下文
+   * （见 riot-tools 的 `user_env`）。每轮带全量：内核重启过也能对上。
+   */
+  user_env?: UserEnvVar[];
   vision: VisionSetup;
   web: WebSetup;
 }
@@ -1612,6 +1675,13 @@ export interface PermissionRule {
   pattern?: string | null;
   source: RuleSource;
   tool: string;
+}
+/**
+ * 一个用户环境变量。
+ */
+export interface UserEnvVar {
+  name: string;
+  value: string;
 }
 /**
  * 视觉能力配置。

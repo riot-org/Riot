@@ -147,6 +147,8 @@ fn initial_state(prompt: &str) -> AgentState {
         stop_hook_blocks: 0,
         thinking: riot_protocol::ThinkingPolicy::Default,
         tool_calls_since_todo: 0,
+        handed_off: false,
+        todo_close_reminded: false,
         transition: None,
     }
 }

@@ -1760,7 +1760,64 @@ impl AppState {
             thinking,
             multitask,
             plugins: config.plugin_refs(&self.0.config_path),
+            user_env: self.user_env_vars().await,
         })
+    }
+
+    /// 用户环境变量所在的密钥文件：和 config.json 同目录（生产里就是
+    /// `config::auth_path()`）。从 `config_path` 推，测试才指得到临时目录、
+    /// 不会读写用户真实的 auth.json。
+    fn auth_path(&self) -> PathBuf {
+        self.0.config_path.with_file_name("auth.json")
+    }
+
+    /// 全部用户环境变量（名字 + 值）。只给内核注入用，**不要**交给前端 ——
+    /// 设置页拿的是 [`Self::user_env_names`]。
+    async fn user_env_vars(&self) -> Vec<riot_protocol::UserEnvVar> {
+        let path = self.auth_path();
+        tokio::task::spawn_blocking(move || crate::config::load_user_env_at(&path))
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(name, value)| riot_protocol::UserEnvVar { name, value })
+            .collect()
+    }
+
+    /// 设置页显示用：名字 + 打码后的值。整值不出宿主。
+    pub async fn user_env_names(&self) -> Vec<crate::config::UserEnvEntry> {
+        self.user_env_vars()
+            .await
+            .into_iter()
+            .map(|v| crate::config::UserEnvEntry {
+                masked: crate::config::mask_env_value(&v.value),
+                name: v.name,
+            })
+            .collect()
+    }
+
+    /// 写一个用户环境变量（空值 = 删除），并立刻推给内核 —— 对话里的表单
+    /// 填完，模型的下一条命令就要用上。
+    ///
+    /// `[约束]` 值不能出现在任何日志或错误消息里，这个函数体内不许有带
+    /// `value` 的 tracing。
+    pub async fn set_user_env(&self, name: &str, value: &str) -> HostResult<()> {
+        let path = self.auth_path();
+        let (name_owned, value_owned) = (name.to_owned(), value.to_owned());
+        tokio::task::spawn_blocking(move || {
+            crate::config::save_user_env_at(&path, &name_owned, &value_owned)
+        })
+        .await
+        .map_err(|e| ui_error!("host.env.saveFailed"; e))??;
+        self.push_user_env().await;
+        Ok(())
+    }
+
+    /// 把用户环境变量的全量推给内核。启动时、改了之后调用。
+    pub async fn push_user_env(&self) {
+        let vars = self.user_env_vars().await;
+        if let Err(e) = self.kernel_call(RpcRequest::EnvSet { vars }).await {
+            tracing::warn!(error = %e, "用户环境变量没送到内核");
+        }
     }
 
     /// 上下文编辑：替换一条历史消息的文本段（以及可选的图片）。空闲时才能做，内核会拒绝并发。
@@ -2636,6 +2693,8 @@ impl AppState {
         {
             tracing::warn!(error = %e, "历史会话回忆开关没送到内核");
         }
+        // 环境变量同一个节拍：内核重启后表是空的，等不到下一轮再补。
+        self.push_user_env().await;
     }
 
     /// 终端面板的句柄。Tauri 那边 `manage` 的和会话用的必须是同一份 ——

@@ -334,6 +334,8 @@ pub async fn dispatch(
         "get_config" => ok(crate::get_config(st).await),
         "set_config" => ok(crate::set_config(st, remote, a.take("config")?).await),
         "set_api_key" => ok(crate::set_api_key(st, a.take("providerId")?, a.take("key")?).await),
+        "env_vars_list" => ok(crate::env_vars_list(st).await),
+        "env_var_set" => ok(crate::env_var_set(st, a.take("name")?, a.take("value")?).await),
         "app_version" => val(host.version.clone()),
         // 桌面窗口的外观和远端用户无关（见模块说明）。网页那头的 transport
         // 本来就不会发这条，这里兜住的是手写的调用。形状和桌面那条

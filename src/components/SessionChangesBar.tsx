@@ -30,6 +30,13 @@ export function SessionChangesBar({
   const { t, tn } = useT();
   const [changes, setChanges] = useState<FileChange[] | null>(null);
   const [open, setOpen] = useState(false);
+  /**
+   * 手动关掉时记下的是**那一刻的改动规模**，不是一个布尔：之后又改了
+   * 文件（规模变了）条自己回来 —— 用户关掉的是"这些我看过了"，不是
+   * 永久不要这个条。换会话清掉。
+   */
+  const [dismissedAt, setDismissedAt] = useState<string | null>(null);
+  useEffect(() => setDismissedAt(null), [sessionId]);
 
   useEffect(() => {
     if (paused) return;
@@ -55,6 +62,8 @@ export function SessionChangesBar({
     (acc, c) => ({ added: acc.added + c.added, removed: acc.removed + c.removed }),
     { added: 0, removed: 0 },
   );
+  const signature = `${changes.length}:${total.added}:${total.removed}`;
+  if (signature === dismissedAt) return null;
 
   return (
     <div className="changes-bar">
@@ -78,6 +87,18 @@ export function SessionChangesBar({
           <span className="changes-bar-stat">
             <span className="add">+{total.added}</span> <span className="del">−{total.removed}</span>
           </span>
+        </button>
+        <button
+          type="button"
+          className="todo-panel-close"
+          onClick={() => {
+            setOpen(false);
+            setDismissedAt(signature);
+          }}
+          title={t("transcript.changesBar.closeTitle")}
+          aria-label={t("transcript.changesBar.close")}
+        >
+          ✕
         </button>
       </div>
     </div>

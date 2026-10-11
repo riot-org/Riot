@@ -452,6 +452,10 @@ async fn dispatch(request: RpcRequest, manager: &manager::SessionManager) -> Rpc
             manager.digest_configure(enabled).await;
             RpcResponse::Ok
         }
+        Req::EnvSet { vars } => {
+            set_user_env(vars);
+            RpcResponse::Ok
+        }
         Req::McpStatus => RpcResponse::McpStatuses {
             servers: manager.mcp_statuses().await,
         },
@@ -470,6 +474,14 @@ async fn dispatch(request: RpcRequest, manager: &manager::SessionManager) -> Rpc
             error: RpcError::internal(ui_error!("kernel.rpc.unimplemented", method = method)),
         },
     }
+}
+
+/// 换掉用户环境变量的全量（`env.set`、每轮的 `TurnConfig.user_env` 都走这里）。
+///
+/// 一张进程级的表（`riot_tools::user_env`）：工具子进程的注入（见 session 的
+/// `UserEnvRunner`）和出口遮蔽读的是同一份。
+pub(crate) fn set_user_env(vars: Vec<riot_protocol::UserEnvVar>) {
+    riot_tools::user_env::set(vars.into_iter().map(|v| (v.name, v.value)).collect());
 }
 
 #[cfg(test)]

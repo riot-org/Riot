@@ -366,6 +366,7 @@ impl SessionManager {
         // ModeChanged 事件回流宿主,下一轮再传回来。
         session.set_mode(config.mode).await;
         session.set_python_venv(config.python_venv.clone()).await;
+        crate::set_user_env(config.user_env.clone());
         session
             .set_system_prompt(config.system_prompt_extra.clone())
             .await;

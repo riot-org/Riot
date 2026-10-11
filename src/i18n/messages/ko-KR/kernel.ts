@@ -97,6 +97,7 @@ export default {
   "kernel.config.unreadable": "파일을 읽을 수 없습니다.",
   "kernel.config.badJson": "올바른 JSON이 아닙니다.",
   "kernel.config.encode": "설정을 직렬화할 수 없습니다.",
+  "kernel.config.envName": "변수 이름 “{name}”을(를) 사용할 수 없습니다. 영문자·숫자·밑줄만, 숫자로 시작할 수 없습니다.",
   "kernel.config.mcpImportShape": '구조가 올바르지 않습니다. 예상 형식: {"mcpServers": {"이름": {"command": …}}}',
   "kernel.config.mcpImportEmpty": "서버가 하나도 없습니다.",
   "kernel.config.mcpImportUnnamed": '구조가 올바르지 않습니다. 각 서버에는 이름이 있어야 합니다: {"mcpServers": {"이름": {"command": …}}}',

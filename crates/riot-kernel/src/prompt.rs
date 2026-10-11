@@ -530,7 +530,8 @@ Markdown image whose target is the file path, relative to the working directory 
 
 ![登录页截图](screenshots/login.png)
 
-The UI renders the file inline and the user can click to zoom. Do NOT Read the image first — \
+The UI renders the file inline and the user can click to zoom; a video or audio file \
+(.mp4/.mov/.webm/.mp3/.wav/.m4a) written the same way plays inline. Do NOT Read the image first — \
 that sends the picture to you and costs thousands of tokens for nothing when the user only \
 wants to look at it. Read an image only when YOU need its content (debug a screenshot, \
 reproduce a layout). A remote http(s) image written this way is NOT loaded — it becomes a \

@@ -18,6 +18,7 @@ import {
   PlugIcon,
   ProviderIcon,
   RemoteIcon,
+  KeyIcon,
   ShieldIcon,
   SkillIcon,
   SlidersIcon,
@@ -31,6 +32,7 @@ import { HooksPane } from "./settings/HooksPane";
 import { McpPane } from "./settings/McpPane";
 import { PluginsPane } from "./settings/PluginsPane";
 import { PermissionPane } from "./settings/PermissionPane";
+import { EnvPane } from "./settings/EnvPane";
 import { PromptsPane } from "./settings/PromptsPane";
 import { ProviderPane } from "./settings/ProviderPane";
 import { RemotePane } from "./settings/RemotePane";
@@ -58,6 +60,7 @@ type Tab =
   | "web"
   | "prompts"
   | "permission"
+  | "env"
   | "mcp"
   | "plugins"
   | "skills"
@@ -92,7 +95,10 @@ const NAV: { group: MessageKey; tabs: TabDef[] }[] = [
   },
   {
     group: "settings.group.run",
-    tabs: [{ id: "permission", icon: ShieldIcon }],
+    tabs: [
+      { id: "permission", icon: ShieldIcon },
+      { id: "env", icon: KeyIcon },
+    ],
   },
   {
     group: "settings.group.ext",
@@ -267,6 +273,7 @@ export function Settings({
                   onSaved={flashSaved}
                 />
               ) : null}
+              {tab === "env" ? <EnvPane askConfirm={setConfirm} onSaved={flashSaved} /> : null}
               {tab === "mcp" ? (
                 <McpPane
                   status={status}

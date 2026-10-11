@@ -971,6 +971,9 @@ impl TaskTool {
             )),
             None => Arc::new(SystemProcessRunner::default()),
         };
+        // 用户环境变量照样注入：分叉出去接着干的活，和前台一样要用 key。
+        let proc: Arc<dyn riot_protocol::tool::ProcessRunner> =
+            Arc::new(crate::session::UserEnvRunner::new(proc));
         let scheduler = Scheduler::new(
             registry,
             prompt_ctx,
@@ -1031,7 +1034,8 @@ impl TaskTool {
 #[async_trait]
 impl Tool for TaskTool {
     fn name(&self) -> &str {
-        "Task"
+        // 主循环靠这个名字认出「活交给了后台」（收尾时不催对账清单）。
+        riot_core::todo_nudge::TASK
     }
 
     fn input_schema(&self) -> schemars::Schema {
@@ -1262,6 +1266,7 @@ impl Tool for TaskTool {
             tokens: 0,
             started_at_ms: now,
             finished_at_ms: None,
+            todo: None,
         };
         // 后台任务有自己的令牌：父这一轮结束、被停止，都不该把它带走 ——
         // "把重活移出前台"的意思就是前台的生死和它无关。会话关闭时由

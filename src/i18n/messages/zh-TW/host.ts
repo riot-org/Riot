@@ -50,6 +50,7 @@ export default {
   "host.dir.outsideProject": "這個目錄在專案之外。",
   "host.dir.permissionDenied": "沒有權限讀取這個目錄。",
   "host.dir.readFailed": "讀取目錄失敗。",
+  "host.env.saveFailed": "環境變數沒存上。",
   "host.venv.invalid": "{path} 不像一個虛擬環境：找不到 {python}。應該填 venv 的根目錄（python -m venv 建立出來的那個）。",
   "host.term.spawnFailed": "終端機啟動不了。",
   "host.term.closed": "終端機 {id} 已經關閉了。",

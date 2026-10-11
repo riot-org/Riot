@@ -51,7 +51,7 @@ pub use message::{
     UserContent,
 };
 pub use permission::{
-    AskPreview, DecisionReason, PermissionAsk, PermissionContext, PermissionMode,
+    AskPreview, DecisionReason, EnvVarAsk, PermissionAsk, PermissionContext, PermissionMode,
     PermissionResponse, PermissionResult, PermissionRule, PermissionUpdate, RuleDecision,
     RuleSource, SafetyKind, UpdateScope,
 };
@@ -73,8 +73,8 @@ pub use tool::{
 };
 pub use turn::{
     ApiProtocol, EndpointSampling, ImageInput, ModelEndpoint, Nudge, OpenaiApi, PluginRef,
-    QueuedSummary, SandboxKind, ScheduledWake, TurnConfig, TurnInput, TurnLimits, VisionSetup,
-    WebSetup,
+    QueuedSummary, SandboxKind, ScheduledWake, TurnConfig, TurnInput, TurnLimits, UserEnvVar,
+    VisionSetup, WebSetup,
 };
 pub use vision::{DescribeRequest, NoVision, VisionAccess, VisionError};
 pub use web::{

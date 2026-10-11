@@ -11,6 +11,7 @@ pub mod redact;
 pub mod registry;
 pub mod scheduler;
 pub mod tools;
+pub mod user_env;
 
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;

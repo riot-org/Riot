@@ -18,7 +18,7 @@ import { openSession, sessionIdFromHref } from "../lib/sessionLink";
 import { AGENT_LINK_SCHEME, openSubagent } from "../lib/subagentLink";
 import { basename, joinRoot, looksAbsPath } from "../pathDisplay";
 import { type Theme, getTheme, subscribeTheme } from "../theme";
-import { imageMimeOf, openFilePreview } from "./FilePreview";
+import { audioMimeOf, imageMimeOf, openFilePreview, videoMimeOf } from "./FilePreview";
 import { MermaidBlock } from "./Mermaid";
 import { ShotViewer } from "./ToolCard";
 
@@ -363,9 +363,12 @@ export const LazyMarkdown = memo(function LazyMarkdown({
 function MdLink({
   href,
   children,
+  plain = false,
 }: {
   href?: string | undefined;
   children?: React.ReactNode;
+  /** 只要链接本身：音频读不到时的退路用它，免得又绕回播放器。 */
+  plain?: boolean;
 }) {
   const { t } = useT();
   const root = useContext(ProjectRootContext);
@@ -374,6 +377,15 @@ function MdLink({
   const target = resolveMdLink(href, label, root);
 
   if (!target) return <>{children}</>;
+
+  // 指向本地音频的链接就地给播放器（模型说「你听一下：[a.mp3](a.mp3)」时，
+  // 用户要的是听，不是被拉去外部播放器）。图片语法那条路见 MdImage。
+  if (!plain && target.kind === "file") {
+    const audio = audioMimeOf(target.value);
+    if (audio) {
+      return <LocalAudio key={target.value} path={target.value} mime={audio} alt={label} />;
+    }
+  }
 
   const onClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
     e.preventDefault();
@@ -557,6 +569,16 @@ function MdImage({
       </span>
     );
   }
+  // 音频同理：一条带文件名的播放条。
+  const audio = audioMimeOf(target.value);
+  if (audio) {
+    return <LocalAudio key={target.value} path={target.value} mime={audio} alt={label} />;
+  }
+  // 视频同一种写法，就地给播放器（照 Claude：做完的视频直接在对话里看）。
+  const video = videoMimeOf(target.value);
+  if (video) {
+    return <LocalVideo key={target.value} path={target.value} mime={video} alt={label} />;
+  }
   // 不是界面认得的图片类型（模型把 pdf / docx 写成了图片引用）就按
   // 文件链接给，点开走预览，好过一张永远加载不出来的图。
   const mime = imageMimeOf(target.value);
@@ -640,6 +662,263 @@ function LocalImage({
       {viewer ? <ShotViewer src={src} alt={name} onClose={() => setViewer(false)} /> : null}
     </>
   );
+}
+
+/**
+ * 磁盘上的一段视频：读进来交给原生播放器。
+ *
+ * 和图片一样走 readFileBytes → blob：网页版（远程访问）里也是同一条路，
+ * 不依赖桌面才有的 asset 协议。代价是整段读进内存，受宿主的预览上限
+ * （32 MB）约束 —— 超了就退成文件链接，点开交给系统播放器。演示片、
+ * 录屏这类短视频一般在这个量级以内。
+ */
+function LocalVideo({ path, mime, alt }: { path: string; mime: string; alt: string }) {
+  const { t } = useT();
+  const [src, setSrc] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  // undefined = 还在挑封面；null = 挑不出来，用播放器默认的第一帧。
+  const [poster, setPoster] = useState<Poster | null | undefined>(undefined);
+  /** 点过播放了：封面层撤掉，此后就是原生播放器。 */
+  const [started, setStarted] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const name = alt || basename(path);
+
+  useEffect(() => {
+    let stale = false;
+    let url: string | null = null;
+    readFileBytes(path).then(
+      (buf) => {
+        if (stale) return;
+        url = URL.createObjectURL(new Blob([buf], { type: mime }));
+        setSrc(url);
+        void posterOf(url).then((p) => {
+          if (!stale) setPoster(p ?? null);
+        });
+      },
+      () => {
+        if (!stale) setFailed(true);
+      },
+    );
+    return () => {
+      stale = true;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [path, mime]);
+
+  if (failed) {
+    return (
+      <span className="md-img-broken">
+        <MdLink href={toFileHref(path)}>{name}</MdLink>
+        <span className="md-link-err" role="status">
+          {t("transcript.md.videoUnavailable")}
+        </span>
+      </span>
+    );
+  }
+  // 封面挑好之前不挂播放器，否则先闪一下黑色的第一帧。
+  if (!src || poster === undefined) {
+    return (
+      <span className="md-img-pending" title={path}>
+        {name}
+      </span>
+    );
+  }
+  // 封面不用 video 的 poster 属性，而是自己盖一层图：WebKit 带着 poster
+  // 时会推迟建视频图层，拖进度条（没点播放）会把 poster 撤掉却画不出
+  // 那一帧 —— 暂停时整块空着。盖层只管「开播之前」，点一下就撤，之后
+  // 是原生播放器的原样行为：暂停停在当前帧。
+  //
+  // preload=metadata：只解出时长和首帧，不点播放不解整段。
+  const cover = poster && !started ? poster : null;
+  return (
+    <span className="md-video-wrap">
+      <video
+        ref={videoRef}
+        className="md-video"
+        src={src}
+        controls
+        preload="metadata"
+        title={path}
+        // 宽高给出比例：元数据到之前播放器按 300×150 占位，盖层会先
+        // 缩成一小块再撑开。
+        {...(poster ? { width: poster.w, height: poster.h } : {})}
+        // 用键盘、画中画之类绕过盖层开播的，盖层也跟着撤。
+        onPlay={() => setStarted(true)}
+        onPause={(e) => rebuildVideoLayer(e.currentTarget)}
+        onSeeked={(e) => {
+          if (e.currentTarget.paused) rebuildVideoLayer(e.currentTarget);
+        }}
+      >
+        {name}
+      </video>
+      {cover ? (
+        <button
+          type="button"
+          className="md-video-cover"
+          aria-label={t("transcript.md.playVideo", { name })}
+          title={path}
+          // 在点击里直接 play()：用户手势还在，有声播放不会被拦。
+          onClick={() => {
+            setStarted(true);
+            void videoRef.current?.play().catch(() => {});
+          }}
+        >
+          <img src={cover.src} alt="" draggable={false} />
+          <span className="md-video-play" aria-hidden>
+            <svg viewBox="0 0 24 24" width="22" height="22">
+              <path d="M8 5.5v13l10.5-6.5z" fill="currentColor" />
+            </svg>
+          </span>
+        </button>
+      ) : null}
+    </span>
+  );
+}
+
+/**
+ * 让 WebKit 重建视频的合成图层，把暂停时那一帧画出来。
+ *
+ * 桌面版（WKWebView）里暂停或暂停中拖进度条，播放器会整块变黑；滚出
+ * 视野再滚回来就好了 —— 那一下渲染对象和图层被拆掉重建（对话里的轮
+ * 是 content-visibility: auto）。这里照做一遍：先把外层高度钉住（不然
+ * 拆掉那一帧对话会塌一下、跟着跳），视频 display:none 一帧再放回来。
+ * 播放状态和进度都在元素上，不受影响。
+ */
+function rebuildVideoLayer(v: HTMLVideoElement) {
+  const wrap = v.parentElement;
+  if (!wrap) return;
+  const h = wrap.getBoundingClientRect().height;
+  wrap.style.height = `${h}px`;
+  v.style.display = "none";
+  requestAnimationFrame(() => {
+    v.style.display = "";
+    requestAnimationFrame(() => {
+      wrap.style.height = "";
+    });
+  });
+}
+
+/**
+ * 磁盘上的一段音频：文件名 + 原生播放条。
+ *
+ * 读法和视频一样（readFileBytes → blob，网页版也通），受同一个 32 MB 预览
+ * 上限；读不到退回文件链接（`plain`，不再绕回这里），点开交给系统播放器。
+ */
+function LocalAudio({ path, mime, alt }: { path: string; mime: string; alt: string }) {
+  const { t } = useT();
+  const [src, setSrc] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const name = alt || basename(path);
+
+  useEffect(() => {
+    let stale = false;
+    let url: string | null = null;
+    readFileBytes(path).then(
+      (buf) => {
+        if (stale) return;
+        url = URL.createObjectURL(new Blob([buf], { type: mime }));
+        setSrc(url);
+      },
+      () => {
+        if (!stale) setFailed(true);
+      },
+    );
+    return () => {
+      stale = true;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [path, mime]);
+
+  if (failed) {
+    return (
+      <span className="md-img-broken">
+        <MdLink href={toFileHref(path)} plain>
+          {name}
+        </MdLink>
+        <span className="md-link-err" role="status">
+          {t("transcript.md.audioUnavailable")}
+        </span>
+      </span>
+    );
+  }
+  return (
+    <span className="md-audio" title={path}>
+      <span className="md-audio-name">{name}</span>
+      {src ? (
+        // preload=metadata：先只解出时长，点了播放再读整段。
+        <audio className="md-audio-player" src={src} controls preload="metadata">
+          {name}
+        </audio>
+      ) : (
+        <span className="md-audio-pending" />
+      )}
+    </span>
+  );
+}
+
+/** 挑出来的封面：图和视频的原始尺寸（给播放器定比例）。 */
+type Poster = { src: string; w: number; h: number };
+
+/**
+ * 给视频挑一帧当封面。
+ *
+ * 不设封面时播放器显示第一帧，而片子大多是黑场淡入 —— 一整块黑，
+ * 看不出是什么。依次试几个时间点，取第一张不是黑场的；都偏暗就用
+ * 最后一张。在一个离屏的 video 上 seek 再画到 canvas，不碰页面上那个。
+ * 解不开、跨不过去就返回 undefined，播放器照常用第一帧。
+ */
+async function posterOf(src: string): Promise<Poster | undefined> {
+  const v = document.createElement("video");
+  v.muted = true;
+  v.preload = "auto";
+  v.src = src;
+  const once = (ev: string) =>
+    new Promise<boolean>((resolve) => {
+      const ok = () => resolve(true);
+      v.addEventListener(ev, ok, { once: true });
+      v.addEventListener("error", () => resolve(false), { once: true });
+      window.setTimeout(() => resolve(false), 5000);
+    });
+  try {
+    if (!(await once("loadeddata"))) return undefined;
+    const d = Number.isFinite(v.duration) ? v.duration : 0;
+    const w = v.videoWidth;
+    const h = v.videoHeight;
+    if (!w || !h) return undefined;
+    // 封面按显示尺寸画就够，原尺寸 1080p 转 JPEG 白占内存。
+    const scale = Math.min(1, 960 / w);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(w * scale);
+    canvas.height = Math.round(h * scale);
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return undefined;
+    let last: string | undefined;
+    for (const t of [Math.min(1, d * 0.1), Math.min(3, d * 0.2), d * 0.5]) {
+      v.currentTime = t;
+      if (!(await once("seeked"))) break;
+      ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+      last = canvas.toDataURL("image/jpeg", 0.85);
+      if (brightness(ctx, canvas.width, canvas.height) > 0.08) return { src: last, w, h };
+    }
+    return last ? { src: last, w, h } : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    v.removeAttribute("src");
+    v.load();
+  }
+}
+
+/** 画面平均亮度（0–1），隔点取样。判黑场用，不求精确。 */
+function brightness(ctx: CanvasRenderingContext2D, w: number, h: number): number {
+  const data = ctx.getImageData(0, 0, w, h).data;
+  let sum = 0;
+  let n = 0;
+  for (let i = 0; i < data.length; i += 4 * 97) {
+    sum += 0.2126 * data[i]! + 0.7152 * data[i + 1]! + 0.0722 * data[i + 2]!;
+    n++;
+  }
+  return n ? sum / n / 255 : 0;
 }
 
 /** 代码块：语言标签（或代码引用的路径）+ 复制按钮。 */

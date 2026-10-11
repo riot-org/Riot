@@ -265,24 +265,23 @@ const PlainToolCard = memo(function PlainToolCard({
   const [userToggle, setUserToggle] = useState<boolean | null>(null);
   const cardRef = useRef<HTMLDivElement>(null);
   const [near, setNear] = useState(eager);
-  // 图片结果（截图、读图）默认展开：截图的意义就是给人看，藏在"展开"
-  // 后面的话用户不知道图已经在这里了，会转头让模型"把图贴出来"。
-  // Edit / Write 也默认展开：用户要看的就是改了什么、写了什么。Delete 同理，
-  // 一个文件没了不该藏在折叠后面。
+  // 图片结果（截图、读图）不靠展开看：摘要行右侧常驻一张缩略图，悬停
+  // 放大、点击开查看器（照 Claude）。早先整张图默认铺开，连读几张图
+  // 就把回答冲出屏幕，主次全乱；缩略图既告诉用户"图在这"，又不占地方。
+  // Edit / Write 也默认收着（照 Claude）：摘要行带「+N −M」，改了多少
+  // 一眼可见；diff 和写入内容点开再看。早先默认铺开，一轮改十个文件
+  // 就是十大块 diff，把回答本身冲走。Delete 仍然展开：一个文件没了
+  // 不该藏在折叠后面，而它展开也只有一句话。
   // 文本结果维持默认折叠 —— 一次 cargo build 的输出会把对话冲走。
   //
   // TodoWrite 刻意**不**默认展开：进度由输入框上方的常驻面板就地更新，
   // 对话流里的每次调用只是历史快照 —— 都展开的话，一个十步任务会在
   // 对话里铺十张几乎相同的清单。摘要行说清"几之几、正在干什么"，
   // 点开看的是"那一刻清单长什么样"。
-  const open =
-    userToggle ??
-    (Boolean(tool.resultImage || tool.resultImagePath) ||
-      tool.name === "Edit" ||
-      tool.name === "Write" ||
-      tool.name === "Delete");
+  const open = userToggle ?? tool.name === "Delete";
   const detail = hasDetail(tool);
   const summary = summarize(tool);
+  const stat = tool.status === "error" ? null : diffStat(tool);
 
   useEffect(() => {
     if (near) return;
@@ -317,31 +316,41 @@ const PlainToolCard = memo(function PlainToolCard({
       <span className="tool-name">{tool.name}</span>
       {/* 失败不能只靠 12px 图标变红 —— 扫视时根本发现不了 */}
       {tool.status === "error" ? <span className="tool-fail">{t("common.failed")}</span> : null}
-      <span className="tool-summary" title={summary}>
+      <span className="tool-summary" title={filePathOf(tool) || summary}>
         {summary}
       </span>
+      {stat ? (
+        <span className="change-stat">
+          <span className="add">+{stat.added}</span>
+          {stat.removed > 0 ? <span className="del"> −{stat.removed}</span> : null}
+        </span>
+      ) : null}
     </>
   );
 
   return (
-    <div ref={cardRef} className={`tool tool-${tool.status}`}>
-      {detail ? (
-        <button
-          className="tool-head"
-          onClick={() => {
-            setNear(true);
-            setUserToggle(!open);
-          }}
-          type="button"
-          aria-expanded={open}
-        >
-          {head}
-          <Chevron open={open} />
-        </button>
-      ) : (
-        // 没有详情就别渲染成按钮 —— 可点但点了毫无反应，比不可点更糟
-        <div className="tool-head">{head}</div>
-      )}
+    <div ref={cardRef} className={`tool tool-${tool.status} tool-plain`}>
+      {/* 缩略图是自己的按钮，不能嵌在摘要行的 button 里，所以并排放。 */}
+      <div className="tool-head-row">
+        {detail ? (
+          <button
+            className="tool-head"
+            onClick={() => {
+              setNear(true);
+              setUserToggle(!open);
+            }}
+            type="button"
+            aria-expanded={open}
+          >
+            {head}
+            <Chevron open={open} />
+          </button>
+        ) : (
+          // 没有详情就别渲染成按钮 —— 可点但点了毫无反应，比不可点更糟
+          <div className="tool-head">{head}</div>
+        )}
+        {hasImage(tool) ? <ToolThumb tool={tool} /> : null}
+      </div>
 
       {detail ? (
         <SmoothFold open={open && near}>
@@ -409,8 +418,12 @@ export function summarize(tool: Tool): string {
     case "Write":
     case "Edit":
     case "Delete":
-    case "PreviewFile":
-      return short(str("path") || str("file_path"));
+    case "PreviewFile": {
+      // 摘要行只放文件名（照 Claude）：一长串目录前缀挤在行里没人读，
+      // 文件名才是认得出的那部分。完整路径在悬停提示和展开区第一行。
+      const path = filePathOf(tool);
+      return path.split(/[\\/]/).pop() || path;
+    }
     case "Grep":
       return str("path")
         ? t("transcript.tool.grepIn", { pattern: str("pattern"), path: short(str("path")) })
@@ -515,15 +528,60 @@ export function summarize(tool: Tool): string {
   }
 }
 
+/**
+ * Edit / Write 的增删行数，给摘要行的「+N −M」。
+ *
+ * Edit 去掉新旧文本首尾相同的行再数 —— 模型为了定位常带上下文行，
+ * 原样数的话改一行会报成「+5 −5」。中间不做逐行对齐：要精确的看
+ * Git 改动面板，这里只求量级对。Write 只知道写了多少行，覆盖掉的
+ * 旧内容不在输入里，所以只有 +N。
+ */
+export function diffStat(tool: Tool): { added: number; removed: number } | null {
+  const i = tool.input as Record<string, unknown>;
+  const str = (k: string) => (typeof i?.[k] === "string" ? (i[k] as string) : "");
+  if (tool.name === "Write") {
+    const content = str("content");
+    if (!content) return null;
+    return { added: content.replace(/\n$/, "").split("\n").length, removed: 0 };
+  }
+  if (tool.name !== "Edit") return null;
+  const oldS = str("old_string");
+  const newS = str("new_string");
+  if (!oldS && !newS) return null;
+  const a = oldS ? oldS.split("\n") : [];
+  const b = newS ? newS.split("\n") : [];
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head++;
+  let tail = 0;
+  while (
+    tail < a.length - head &&
+    tail < b.length - head &&
+    a[a.length - 1 - tail] === b[b.length - 1 - tail]
+  ) {
+    tail++;
+  }
+  return { added: b.length - head - tail, removed: a.length - head - tail };
+}
+
 /** 超长才截，截了要看得出来 —— 没有省略号的硬截像话说了一半。 */
 function clip(s: string, max: number): string {
   return s.length <= max ? s : `${s.slice(0, max - 1)}…`;
 }
 
 /** 有没有值得展开的内容。只读字段，不建 React 树。 */
+/** 文件类工具操作的那个路径；别的工具返回空串。 */
+const FILE_TOOLS = new Set(["Read", "Write", "Edit", "Delete", "PreviewFile"]);
+function filePathOf(tool: Tool): string {
+  if (!FILE_TOOLS.has(tool.name)) return "";
+  const i = tool.input as Record<string, unknown>;
+  const v = i?.path ?? i?.file_path;
+  return typeof v === "string" ? v : "";
+}
+
 function hasDetail(tool: Tool): boolean {
+  // 摘要行只有文件名，展开至少还能看到完整路径。
+  if (filePathOf(tool)) return true;
   if (tool.name === "TodoWrite") return todosOf(tool).length > 0;
-  if (tool.resultImage || tool.resultImagePath) return true;
   if (tool.output.length > 0) return true;
   if (tool.status !== "running" && tool.result) return true;
   const i = tool.input as Record<string, unknown>;
@@ -563,6 +621,15 @@ function renderDetail(tool: Tool): React.ReactNode {
   }
 
   const parts: React.ReactNode[] = [];
+
+  const path = filePathOf(tool);
+  if (path) {
+    parts.push(
+      <div key="path" className="tool-path">
+        {path}
+      </div>,
+    );
+  }
 
   // 长命令的摘要行被截断，全文在这里 —— 审计的核心信息不能在界面上无处可看。
   if (tool.name === "Bash") {
@@ -616,22 +683,15 @@ function renderDetail(tool: Tool): React.ReactNode {
     }
   }
 
-  // 结果里的图（截图、读图）贴出来 —— 这就是用户点开想看的东西
-  if (tool.resultImage || tool.resultImagePath) {
-    parts.push(
-      <ShotImage
-        key="img"
-        alt={t("transcript.tool.resultImageOf", { tool: tool.name })}
-        {...(tool.resultImagePath !== undefined ? { path: tool.resultImagePath } : {})}
-        {...(tool.resultImage !== undefined ? { fallback: tool.resultImage } : {})}
-      />,
-    );
-  }
+  // 结果里的图不在这里：它在摘要行右侧的缩略图上（见 ToolThumb）。
 
   // 运行中显示实时输出；结束后最终结果更权威（实时行只是进度侧影）
   const live = tool.output.length > 0 ? tool.output.join("\n") : "";
   const result = tool.status === "running" ? live : tool.result || live;
-  if (result) {
+  // Edit / Write 成功时的结果只是一句「已修改 xx（替换了 1 处）」——
+  // 上面的 diff / 内容已经说明了一切，再复述一遍是噪音。失败时的原因要留着。
+  const echo = (tool.name === "Edit" || tool.name === "Write") && tool.status === "ok";
+  if (result && !echo) {
     parts.push(
       <pre key="r" className="tool-body">
         {result}
@@ -642,60 +702,162 @@ function renderDetail(tool: Tool): React.ReactNode {
   return parts.length ? parts : null;
 }
 
-/**
- * 工具结果里的图。
- *
- * 消息里只带压缩图（给模型的那份，看布局够、看文字糊），原图在磁盘上 ——
- * 先显示压缩图占住位置，按路径把原图读回来后无缝换上。原图读不回来
- * （被清理、超上限）就一直用压缩图，不报错:图能看就行。
- *
- * 整页截图是极端长图，卡片里按容器宽显示、限高纵向滚；点击开查看器
- * 看大图。
- */
-function ShotImage({
-  path,
-  fallback,
-  // 每张结果图都叫"工具结果图片"的话，读屏用户分不清哪张是哪次调用的
-  alt: altProp,
-}: {
-  path?: string;
-  fallback?: string;
-  alt?: string;
-}) {
-  const { t } = useT();
-  const alt = altProp ?? t("transcript.tool.resultImage");
-  const [src, setSrc] = useState<string | undefined>(fallback);
-  const [viewer, setViewer] = useState(false);
+/** 工具结果带不带图（截图、读图）。 */
+export function hasImage(tool: Tool): boolean {
+  return Boolean(tool.resultImage || tool.resultImagePath);
+}
 
+/**
+ * 原图按路径读回来的缓存。
+ *
+ * 消息里只带压缩图（给模型的那份，看布局够、看文字糊），原图在磁盘上。
+ * 悬停预览和查看器要原图；同一张图在单卡和组头各有一张缩略图，悬停
+ * 来回扫也不该反复读盘。原图是整张 base64，留太多白占内存，只留最近的。
+ */
+const originals = new Map<string, Promise<string | null>>();
+const ORIGINALS_MAX = 24;
+
+function loadOriginal(path: string): Promise<string | null> {
+  const hit = originals.get(path);
+  if (hit) {
+    originals.delete(path);
+    originals.set(path, hit);
+    return hit;
+  }
+  const p = readImage(path)
+    .then((img) => `data:${img.mediaType};base64,${img.data}`)
+    // 原图没了（被清理、超上限）就用压缩图，不报错：图能看就行。
+    .catch(() => null);
+  originals.set(path, p);
+  if (originals.size > ORIGINALS_MAX) {
+    const oldest = originals.keys().next();
+    if (!oldest.done) originals.delete(oldest.value);
+  }
+  return p;
+}
+
+/** 先给压缩图；`wantOriginal` 时按路径换成原图。都没有返回 undefined。 */
+function useImageSrc(
+  path: string | undefined,
+  fallback: string | undefined,
+  wantOriginal: boolean,
+): string | undefined {
+  const [original, setOriginal] = useState<string | null>(null);
   useEffect(() => {
-    if (!path) return;
+    if (!wantOriginal || !path) return;
     let alive = true;
-    readImage(path)
-      .then((img) => {
-        if (alive) setSrc(`data:${img.mediaType};base64,${img.data}`);
-      })
-      .catch(() => {
-        // 原图没了就用压缩图，什么都没有才隐藏。
-      });
+    void loadOriginal(path).then((src) => {
+      if (alive && src) setOriginal(src);
+    });
     return () => {
       alive = false;
     };
-  }, [path]);
+  }, [path, wantOriginal]);
+  return original ?? fallback;
+}
 
-  if (!src) return null;
+/** 悬停多久才弹预览：鼠标只是路过一排缩略图时不该闪一串大图。 */
+const PREVIEW_DELAY_MS = 120;
+
+/**
+ * 工具结果图的缩略图（照 Claude）：摘要行右侧一枚小图，悬停放大预览，
+ * 点击开查看器看原图。单卡和过程组的组头共用。
+ *
+ * 缩略图本身用消息里的压缩图（够认出是哪张），没有压缩图才读原图；
+ * 预览和查看器要看清文字，用到时再按路径读原图。
+ */
+export function ToolThumb({ tool }: { tool: Tool }) {
+  const { t } = useT();
+  const ref = useRef<HTMLButtonElement>(null);
+  const [hover, setHover] = useState(false);
+  const [viewer, setViewer] = useState(false);
+  const timer = useRef<number | undefined>(undefined);
+  const path = tool.resultImagePath;
+  const fallback = tool.resultImage;
+  const thumb = useImageSrc(path, fallback, !fallback);
+  const full = useImageSrc(path, fallback, hover || viewer);
+  const alt = t("transcript.tool.resultImageOf", { tool: tool.name });
+  const caption = path ? (path.split(/[\\/]/).pop() ?? tool.name) : tool.name;
+
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  // 预览是 fixed 定位在缩略图旁边的；对话一滚它就悬空了，收掉。
+  useEffect(() => {
+    if (!hover) return;
+    const hide = () => setHover(false);
+    window.addEventListener("scroll", hide, true);
+    return () => window.removeEventListener("scroll", hide, true);
+  }, [hover]);
+
+  if (!thumb) return null;
+  const leave = () => {
+    window.clearTimeout(timer.current);
+    setHover(false);
+  };
   return (
     <>
-      {/* button 包一层：键盘可达 + 读屏知道可点开大图，不再是"只能鼠标点" */}
       <button
+        ref={ref}
         type="button"
-        className="tool-shot-wrap"
-        onClick={() => setViewer(true)}
+        className="tool-thumb"
+        onMouseEnter={() => {
+          window.clearTimeout(timer.current);
+          timer.current = window.setTimeout(() => setHover(true), PREVIEW_DELAY_MS);
+        }}
+        onMouseLeave={leave}
+        // 同 fold-head：点击不拿焦点，WKWebView 会把 focused button 滚进视野。
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => {
+          leave();
+          setViewer(true);
+        }}
         aria-label={t("transcript.image.zoomNamed", { name: alt })}
       >
-        <img className="tool-shot" src={src} alt={alt} />
+        <img src={thumb} alt="" draggable={false} />
       </button>
-      {viewer ? <ShotViewer src={src} alt={alt} onClose={() => setViewer(false)} /> : null}
+      {hover && full && ref.current ? (
+        <ThumbPreview anchor={ref.current} src={full} caption={caption} alt={alt} />
+      ) : null}
+      {viewer && full ? <ShotViewer src={full} alt={alt} onClose={() => setViewer(false)} /> : null}
     </>
+  );
+}
+
+/** 预览框的最大尺寸。图按比例缩进来，下方一行文件名。 */
+const PREVIEW_W = 480;
+const PREVIEW_H = 360;
+
+/**
+ * 悬停放大的预览：贴着缩略图右对齐，下面放得下就往下弹，否则往上。
+ * portal 到 body —— 卡片在带 overflow 的滚动容器里，fixed 浮层留在原地
+ * 会被裁掉。不吃鼠标：鼠标移上去不该让它以为离开了缩略图。
+ */
+function ThumbPreview({
+  anchor,
+  src,
+  caption,
+  alt,
+}: {
+  anchor: HTMLElement;
+  src: string;
+  caption: string;
+  alt: string;
+}) {
+  const r = anchor.getBoundingClientRect();
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const room = PREVIEW_H + 48;
+  const below = vh - r.bottom >= room || r.top < room;
+  const style: React.CSSProperties = {
+    right: Math.max(12, vw - r.right),
+    maxWidth: Math.min(PREVIEW_W, vw - 24),
+    ...(below ? { top: r.bottom + 6 } : { bottom: vh - r.top + 6 }),
+  };
+  return createPortal(
+    <div className="thumb-preview" style={style} aria-hidden>
+      <img src={src} alt={alt} style={{ maxHeight: PREVIEW_H }} />
+      <div className="thumb-preview-caption">{caption}</div>
+    </div>,
+    document.body,
   );
 }
 

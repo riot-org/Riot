@@ -198,6 +198,13 @@ pub enum RpcRequest {
     #[serde(rename = "digest.configure")]
     DigestConfigure { enabled: bool },
 
+    /// 换掉用户环境变量的全量（设置里改了、对话里的表单填了）。
+    ///
+    /// 每轮的 `TurnConfig.user_env` 已经带一份，这条是给**跑轮中**的变化：
+    /// 表单填完，模型的下一条命令就要用上，等不到下一轮。
+    #[serde(rename = "env.set")]
+    EnvSet { vars: Vec<crate::turn::UserEnvVar> },
+
     #[serde(rename = "permission.respond")]
     PermissionRespond {
         request_id: RequestId,

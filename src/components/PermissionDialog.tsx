@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 
-import { type PermissionAsk, type PermissionMode, type PermissionResponse, renderUiText } from "../bridge";
+import {
+  envVarSet,
+  openInBrowser,
+  type PermissionAsk,
+  type PermissionMode,
+  type PermissionResponse,
+  renderUiText,
+} from "../bridge";
 import { useImeGuard } from "../hooks/useImeGuard";
 import { useT } from "../i18n";
 import { Markdown } from "./Markdown";
@@ -246,6 +253,145 @@ export function AskChoiceCard({
 }
 
 /**
+ * 模型要几个环境变量（RequestEnv 工具）：API key、密码这类不该进对话的值。
+ * 长在对话流里，和选择题卡同一个壳。
+ *
+ * `[约束]` 值**不走** `onAnswer`。每个填了的变量先经 `envVarSet` 直接存进
+ * 设置（宿主写 auth.json，内核随即拿到、注入命令），回答里只带存好的
+ * 名字 —— 走 ask 通道的话值会进工具输入，进而进 transcript 和模型上下文。
+ *
+ * 已经配过的变量显示「已配置」，留空就沿用；填了就覆盖。
+ */
+export function EnvVarsCard({
+  ask,
+  onAnswer,
+}: {
+  ask: PermissionAsk;
+  onAnswer: (r: PermissionResponse) => void;
+}) {
+  const { t } = useT();
+  const form = ask.preview.kind === "env_vars" ? ask.preview : null;
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [shown, setShown] = useState<Record<string, boolean>>({});
+  const [saving, setSaving] = useState(false);
+  const [answered, setAnswered] = useState(false);
+  const [error, setError] = useState("");
+
+  if (!form) return null;
+
+  // 能提交：每个还没配过的变量都填了。已配过的可以留空沿用。
+  const ready = form.vars.every((v) => v.set || (values[v.name] ?? "").trim() !== "");
+
+  const submit = async () => {
+    if (answered || saving || !ready) return;
+    setSaving(true);
+    setError("");
+    try {
+      for (const v of form.vars) {
+        const value = (values[v.name] ?? "").trim();
+        if (value) await envVarSet(v.name, value);
+      }
+    } catch (e) {
+      setError(String(e));
+      setSaving(false);
+      return;
+    }
+    setAnswered(true);
+    setSaving(false);
+    // 值在宿主那边了，这里不再留着。
+    setValues({});
+    onAnswer({ decision: "allow", choice: form.vars.map((v) => v.name) });
+  };
+
+  const skip = () => {
+    if (answered || saving) return;
+    setAnswered(true);
+    setValues({});
+    onAnswer({ decision: "deny" });
+  };
+
+  const busy = answered || saving;
+
+  return (
+    <div className="plan-card ask-card env-card" role="region" aria-label={t("transcript.env.ariaLabel")}>
+      <div className="plan-card-head">
+        <span className="plan-card-badge">{t("transcript.env.badge")}</span>
+        <span className="plan-card-title">{form.reason}</span>
+      </div>
+
+      <div className="env-card-fields">
+        {form.vars.map((v, i) => (
+          <label className="env-card-field" key={v.name}>
+            <span className="env-card-label">
+              <code className="env-card-name">{v.name}</code>
+              {v.set ? <span className="env-card-set">{t("transcript.env.alreadySet")}</span> : null}
+              {v.link ? (
+                <button
+                  type="button"
+                  className="env-card-link"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    void openInBrowser(v.link!);
+                  }}
+                >
+                  {t("transcript.env.getIt")}
+                </button>
+              ) : null}
+            </span>
+            {v.description ? <span className="env-card-desc">{v.description}</span> : null}
+            <span className="env-card-input">
+              <input
+                type={shown[v.name] ? "text" : "password"}
+                value={values[v.name] ?? ""}
+                onChange={(e) => setValues((s) => ({ ...s, [v.name]: e.target.value }))}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void submit();
+                  }
+                }}
+                placeholder={v.set ? t("transcript.env.keepPlaceholder") : t("transcript.env.placeholder")}
+                autoComplete="off"
+                spellCheck={false}
+                disabled={busy}
+                // 第一个空着的框拿焦点：卡片冒出来就能直接粘贴。
+                autoFocus={i === form.vars.findIndex((x) => !x.set)}
+              />
+              <button
+                type="button"
+                className="env-card-eye"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setShown((s) => ({ ...s, [v.name]: !s[v.name] }));
+                }}
+                aria-label={shown[v.name] ? t("transcript.env.hide") : t("transcript.env.show")}
+                title={shown[v.name] ? t("transcript.env.hide") : t("transcript.env.show")}
+                disabled={busy}
+              >
+                {shown[v.name] ? t("transcript.env.hide") : t("transcript.env.show")}
+              </button>
+            </span>
+          </label>
+        ))}
+      </div>
+
+      <p className="env-card-note">{t("transcript.env.note")}</p>
+      {error ? <p className="env-card-error">{error}</p> : null}
+
+      <div className="plan-card-actions">
+        <button className="btn-deny" disabled={busy} onClick={skip}>
+          {t("transcript.ask.skip")}
+        </button>
+        <span className="plan-card-spacer" />
+        <button className="btn-allow" disabled={busy || !ready} onClick={() => void submit()}>
+          {saving ? t("transcript.env.saving") : t("transcript.env.save")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
  * 模型建议换工作方式（SwitchMode 工具）。长在对话流里，不弹窗（Cursor 同款）。
  *
  * 两个方向：agent → plan（"这活改动面大，先定方案"）和 plan → agent
@@ -418,8 +564,9 @@ function Preview({ preview }: { preview: PermissionAsk["preview"] }) {
         </div>
       );
 
-    // choice 由 AskChoiceCard 渲染，权限弹窗走不到这里。
+    // choice / env_vars 由对话里的内联卡渲染，权限弹窗走不到这里。
     case "choice":
+    case "env_vars":
       return null;
 
     case "plain":

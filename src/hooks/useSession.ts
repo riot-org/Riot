@@ -1379,14 +1379,42 @@ export function useSession(
    * 成功后再拉一次快照整份对齐（空心消息整条消失、多段文本合并成一段，
    * 这些边界自己在前端模拟一遍，等于把内核逻辑抄一份）。
    */
+  /**
+   * 气泡在宿主那边根本不存在：宿主空闲，活历史和压缩归档里都找不到
+   * —— 撤回事件丢了留下的幽灵（见 phantomBubbles）。对它做什么都没有
+   * 内核那一半可做，界面按撤回收场：气泡撤掉；`giveBack` 给了就把那份
+   * 内容交还输入框。返回 false = 不是幽灵，照常走。
+   */
+  const settlePhantom = useCallback(
+    (item: TextItem, hist: HistorySnap, giveBack: UserItem | null): boolean => {
+      if (item.kind !== "user" || hist.busy) return false;
+      // 在压缩归档里 = 真的被压进了摘要，那条报错是对的。
+      if (locateMessage(hist.archived, item)) return false;
+      const empty = hist.messages.length === 0 && hist.archived.length === 0;
+      setState((s) => ({
+        ...s,
+        items: s.items.filter((it) => it.id !== item.id),
+        withdrawn: giveBack ? (s.withdrawn ?? withdrawnOf(giveBack, item.id, empty)) : s.withdrawn,
+      }));
+      return true;
+    },
+    [setState],
+  );
+
   const mutateHistory = useCallback(
-    async (item: TextItem, op: (messageId: string) => Promise<void>): Promise<boolean> => {
+    async (
+      item: TextItem,
+      op: (messageId: string) => Promise<void>,
+      /** 幽灵气泡交还输入框的内容；null = 直接扔（删除）。 */
+      phantomGiveBack: UserItem | null,
+    ): Promise<boolean> => {
       if (busyRef.current) return false;
       try {
         const hist = await getHistory(sessionId);
         if (hist.busy) return false;
         const messageId = locateMessage(hist.messages, item);
         if (!messageId) {
+          if (settlePhantom(item, hist, phantomGiveBack)) return true;
           throw new Error(t("transcript.session.messageGone"));
         }
         await op(messageId);
@@ -1398,7 +1426,7 @@ export function useSession(
         return false;
       }
     },
-    [sessionId, setState],
+    [sessionId, setState, settlePhantom],
   );
 
   /**
@@ -1408,7 +1436,18 @@ export function useSession(
    */
   const editEntry = useCallback(
     (item: TextItem, text: string, images?: ImageInput[]) =>
-      mutateHistory(item, (messageId) => editMessageBridge(sessionId, messageId, text, images)),
+      mutateHistory(
+        item,
+        (messageId) => editMessageBridge(sessionId, messageId, text, images),
+        // 幽灵气泡：改好的那份回输入框，用户自己决定要不要发。
+        item.kind === "user"
+          ? {
+              ...item,
+              text,
+              images: (images ?? []).map((i) => `data:${i.mediaType};base64,${i.data}`),
+            }
+          : null,
+      ),
     [sessionId, mutateHistory],
   );
 
@@ -1429,6 +1468,9 @@ export function useSession(
         if (hist.busy) return false;
         const found = locateMessage(hist.messages, item);
         if (!found) {
+          // 幽灵气泡：没有"从它重来"可言 —— 它从没进过历史。改好的话
+          // 就是一句新话，撤掉气泡、照常发出去。
+          if (settlePhantom(item, hist, null)) return send(text, images ?? []);
           throw new Error(t("transcript.session.messageGone"));
         }
         messageId = found;
@@ -1477,7 +1519,7 @@ export function useSession(
         return false;
       }
     },
-    [sessionId, mutateQueued, setState],
+    [sessionId, mutateQueued, setState, settlePhantom, send],
   );
 
   /**
@@ -1493,6 +1535,8 @@ export function useSession(
         if (hist.busy) return false;
         const found = locateMessage(hist.messages, item);
         if (!found) {
+          // 幽灵气泡：回退到它发出时 = 它从没被回答过，原文回输入框。
+          if (settlePhantom(item, hist, item.kind === "user" ? item : null)) return true;
           throw new Error(t("transcript.session.messageGone"));
         }
         messageId = found;
@@ -1535,7 +1579,7 @@ export function useSession(
         return false;
       }
     },
-    [sessionId, setState],
+    [sessionId, setState, settlePhantom],
   );
 
   /** 把最近一次 Restore 撤回去。对话只能靠快照接回。 */
@@ -1565,7 +1609,7 @@ export function useSession(
   /** 上下文删除：按轮成对删（这条气泡所属的提问连同全部回应）。 */
   const deleteEntry = useCallback(
     (item: TextItem) =>
-      mutateHistory(item, (messageId) => deleteMessageBridge(sessionId, messageId)),
+      mutateHistory(item, (messageId) => deleteMessageBridge(sessionId, messageId), null),
     [sessionId, mutateHistory],
   );
 
@@ -1749,10 +1793,16 @@ function applyHistorySnap(s: SessionState, hist: HistorySnap): SessionState {
             // 一轮，前台空闲时它可能正等着人答。快照为准。
             asks: reconcileAsks(s.asks, hist.pendingAsks),
             // 历史为空但上一轮失败了（第一句就没发出去）：红卡从快照来。
-            items: [
-              ...finalizeIdleItems(dropErrors(s.items), t("transcript.session.unfinished")),
-              ...lastErrorItem(hist),
-            ],
+            // 撤回事件丢了的那条第一句话也在这里收掉（见 phantomBubbles）。
+            ...(() => {
+              const kept = dropPhantoms(
+                s,
+                finalizeIdleItems(dropErrors(s.items), t("transcript.session.unfinished")),
+                phantomBubbles(s.items, []),
+                true,
+              );
+              return { ...kept, items: [...kept.items, ...lastErrorItem(hist)] };
+            })(),
           }
         : {
             asks: reconcileAsks(s.asks, hist.pendingAsks),
@@ -1769,10 +1819,14 @@ function applyHistorySnap(s: SessionState, hist: HistorySnap): SessionState {
   }
 
   const fromHist = historyToItems(messages, archived, busy);
+  // 空闲时历史里没有、也不会再来的乐观气泡先摘出来（见 phantomBubbles），
+  // 别让下面的合并把它当成"还没进历史"保下来。
+  const phantoms = busy ? [] : phantomBubbles(s.items, fromHist);
+  const current = phantoms.length ? dropPhantoms(s, s.items, phantoms, false).items : s.items;
   // 错误卡以快照为准：历史里没有它（失败不进历史），本地画着的那张要么
   // 就是快照里这条，要么是宿主已经开了新一轮之后过时的旧卡。
   const items = [
-    ...mergeLiveTools(mergeOptimisticUser(fromHist, s.items), s.items),
+    ...mergeLiveTools(mergeOptimisticUser(fromHist, current), current),
     ...lastErrorItem(hist),
   ];
   const tokens = sumUsage([...archived, ...messages]);
@@ -1812,6 +1866,7 @@ function applyHistorySnap(s: SessionState, hist: HistorySnap): SessionState {
     thinking: "",
     streamingPlan: null,
     asks: reconcileAsks(s.asks, hist.pendingAsks),
+    withdrawn: dropPhantoms(s, items, phantoms, false).withdrawn,
   };
 }
 
@@ -2474,19 +2529,78 @@ function applyWithdrawn(s: SessionState, id: string, sessionEmpty: boolean): Ses
 
   const items = [...s.items];
   items.splice(at, 1);
+  return { ...s, items, withdrawn: withdrawnOf(bubble, id, sessionEmpty) };
+}
+
+type UserItem = Extract<Item, { kind: "user" }>;
+
+/** 把一条用户气泡交还输入框的那份内容。 */
+function withdrawnOf(bubble: UserItem, id: string, sessionEmpty: boolean): WithdrawnPrompt {
   return {
-    ...s,
-    items,
-    withdrawn: {
-      id,
-      text: bubble.text,
-      images: (bubble.images ?? []).flatMap((u) => {
-        const img = imageFromDataUrl(u);
-        return img ? [img] : [];
-      }),
-      refs: bubble.files ?? [],
-      sessionEmpty,
-    },
+    id,
+    text: bubble.text,
+    images: (bubble.images ?? []).flatMap((u) => {
+      const img = imageFromDataUrl(u);
+      return img ? [img] : [];
+    }),
+    refs: bubble.files ?? [],
+    sessionEmpty,
+  };
+}
+
+/**
+ * 乐观气泡发出去超过这么久、宿主空闲、历史里却没有它 —— 它不会再来了。
+ * 和看门狗的发送宽限同一个数：宽限之内的快照可能拍在内核收到之前。
+ */
+const PHANTOM_AFTER_MS = SEND_GRACE_MS;
+
+/**
+ * 宿主空闲时历史里没有、也不会再有的那条提问气泡。
+ *
+ * 来路是丢了 `prompt_withdrawn`：按了停止、模型一个字没给出，内核把提问
+ * 撤了，可撤回事件落进了一条正在换的 / 已经死掉的通道（长时间空闲后
+ * 第一句话最容易撞上）。气泡留在界面上，对它删除、编辑、回退都报
+ * "不在上下文里"。气泡此时多半已经换成了内核的 id（轮首回声），还是
+ * 乐观的 `local-*` 则另有一层：快照对账会按"还没进历史"把它保下来。
+ *
+ * 只认**最后一条**提问、且它后面没有任何回答：撤回只会发生在那里。
+ * 放宽了的话，另一个观看者删掉的一轮会被这里当成撤回，把原文塞进
+ * 这边的输入框。乐观气泡还在发送宽限内的不算 —— 快照可能拍在内核
+ * 收到它之前。
+ */
+function phantomBubbles(items: Item[], fromHist: Item[], now = Date.now()): UserItem[] {
+  let at = -1;
+  for (let i = items.length - 1; i >= 0; i--) {
+    const k = items[i]?.kind;
+    if (k === "user") {
+      at = i;
+      break;
+    }
+    if (k === "assistant" || k === "thinking" || k === "tool") return [];
+  }
+  const it = items[at];
+  if (!it || it.kind !== "user") return [];
+  if (it.id.startsWith("local-") && now - (it.at ?? 0) < PHANTOM_AFTER_MS) return [];
+  if (fromHist.some((h) => h.kind === "user" && (h.id === it.id || h.text === it.text))) return [];
+  return [it];
+}
+
+/**
+ * 撤掉幽灵气泡，并像撤回那样把最后一条交还输入框 —— 撤回事件本该做的
+ * 事。输入框已经有一份待收的撤回时不覆盖。
+ */
+function dropPhantoms(
+  s: SessionState,
+  items: Item[],
+  phantoms: UserItem[],
+  sessionEmpty: boolean,
+): Pick<SessionState, "items" | "withdrawn"> {
+  const last = phantoms[phantoms.length - 1];
+  if (!last) return { items, withdrawn: s.withdrawn };
+  const gone = new Set(phantoms.map((p) => p.id));
+  return {
+    items: items.filter((it) => !gone.has(it.id)),
+    withdrawn: s.withdrawn ?? withdrawnOf(last, last.id, sessionEmpty),
   };
 }
 

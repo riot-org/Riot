@@ -731,13 +731,24 @@ fn split_outcome(outcome: ToolOutcome) -> (ToolResultContent, Vec<Message>) {
     (redact_content(content), side)
 }
 
+/// 两层遮蔽合在一起：按特征认的凭证（[`crate::redact`]），再把用户在
+/// 设置里配的环境变量值按原文换掉（[`crate::user_env::mask`]）—— 后者
+/// 认得出任何格式的密码，前者认得出没配进设置的 key。
+fn redact(text: &str) -> Option<String> {
+    let first = crate::redact::redact_secrets(text);
+    match crate::user_env::mask(first.as_deref().unwrap_or(text)) {
+        Some(masked) => Some(masked),
+        None => first,
+    }
+}
+
 /// 凭证遮蔽（见 [`crate::redact`]）收口在这里：Ok / Failed 的文本都过，
 /// Read / Bash / WebFetch / MCP 一视同仁 —— 散到各工具里的话，新接的
 /// 那个不会有任何报错，只是悄悄漏。UiPayload 不经过这里，界面照常显示
 /// 原文（那是用户自己的文件，对他遮蔽毫无意义）。
 fn redact_content(content: ToolResultContent) -> ToolResultContent {
     match content {
-        ToolResultContent::Text { text } => match crate::redact::redact_secrets(&text) {
+        ToolResultContent::Text { text } => match redact(&text) {
             Some(redacted) => ToolResultContent::Text { text: redacted },
             None => ToolResultContent::Text { text },
         },
@@ -746,7 +757,7 @@ fn redact_content(content: ToolResultContent) -> ToolResultContent {
             preview,
             total_bytes,
         } => {
-            let preview = crate::redact::redact_secrets(&preview).unwrap_or(preview);
+            let preview = redact(&preview).unwrap_or(preview);
             ToolResultContent::Spilled {
                 path,
                 preview,
@@ -761,7 +772,7 @@ fn redact_content(content: ToolResultContent) -> ToolResultContent {
             path,
             text,
         } => {
-            let text = crate::redact::redact_secrets(&text).unwrap_or(text);
+            let text = redact(&text).unwrap_or(text);
             ToolResultContent::DescribedImage {
                 media_type,
                 data,
@@ -775,7 +786,7 @@ fn redact_content(content: ToolResultContent) -> ToolResultContent {
             path,
             text,
         } => {
-            let text = crate::redact::redact_secrets(&text).unwrap_or(text);
+            let text = redact(&text).unwrap_or(text);
             ToolResultContent::MarkedImage {
                 media_type,
                 data,

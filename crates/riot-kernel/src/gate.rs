@@ -523,6 +523,12 @@ impl HostGate {
                                  用普通回复把这个决定和各选项的取舍讲清楚，然后停下来等他说。",
                                 timeout.as_secs()
                             )
+                        } else if tool.name() == riot_tools::tools::names::REQUEST_ENV {
+                            format!(
+                                "等了 {} 秒没有人填写表单。不要立刻再要一次 —— 用普通回复说明缺哪些\
+                                 变量、去哪里拿，告诉用户可以在设置 → 环境变量里配好，然后停下来等他。",
+                                timeout.as_secs()
+                            )
                         } else {
                             format!(
                                 "等待授权超过 {} 秒，本次操作未执行。如果仍然需要，请重新提出。",
@@ -548,6 +554,15 @@ impl HostGate {
                     // 切模式被拒不是"换个做法再试"：用户就是不想换。措辞
                     // 对照 Cursor（"Do not attempt to switch modes again"）——
                     // 不说这句的话，模型下一步多半是再建议一次。
+                    // 跳过表单不是"换个做法"：用户这次不想填。最要紧的是别让
+                    // 模型转头在对话里要 —— 那正是这张表单要防的。
+                    _ if tool.name() == riot_tools::tools::names::REQUEST_ENV => {
+                        "The user skipped the form and did not provide these variables. Do not \
+                         ask for them in the chat. Skip the steps that need them, finish what you \
+                         can, and say in your reply which variables are missing; the user can add \
+                         them later in Settings → Environment Variables."
+                            .to_owned()
+                    }
                     _ if tool.name() == riot_tools::tools::names::SWITCH_MODE => {
                         "The user declined the mode switch. Do not suggest switching again in \
                          this conversation; stay in the current mode and carry out the request \
@@ -726,6 +741,16 @@ pub(crate) async fn preview_of(
                 allow_multiple,
             },
         ),
+        // 要环境变量：渲染成对话里的表单。值由表单直接存进设置，不经过
+        // 这条通道（见 AskPreview::EnvVars）。参数不成形同上，退回描述。
+        name if name == riot_tools::tools::names::REQUEST_ENV => {
+            riot_tools::tools::env::preview_parts(input).map_or_else(
+                || AskPreview::Plain {
+                    text: tool.describe(input),
+                },
+                |(reason, vars)| AskPreview::EnvVars { reason, vars },
+            )
+        }
         // 切模式的卡片显示模型给的**理由原文**（"改动面大，先定方案"）——
         // 用户按它决定切不切。原文是模型写的，走 Raw（不查词典）；没给理由
         // 时退回工具描述那句（validate_input 本该把空理由拦在前面）。
