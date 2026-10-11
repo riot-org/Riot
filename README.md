@@ -5,6 +5,8 @@
 
 **Codex 的开源替代。** Rust 内核，本地执行。
 
+中文 · [English](README.en.md)
+
 [下载](https://github.com/riot-org/Riot/releases/latest) ·
 [功能](#功能) ·
 [服务器部署](#linux-服务器部署) ·
