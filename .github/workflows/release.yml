@@ -228,6 +228,15 @@ jobs:
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # `[约束]` 前端产物在 0.1.8 涨了一截：CodeMirror 的 language-data 给
+          # 每种语言一个 chunk，JS chunk 从 133 个变成 250 个，vite build 在
+          # rendering chunks 阶段要 ~2.4GB 堆（本机实测峰值 RSS 2.35GB）。
+          # macos runner 只有 7GB 内存，Node 按可用内存算出的默认 old-space
+          # 上限约 2GB —— 0.1.8 的 macOS 打包就是这么死的（exit 134，
+          # FATAL ERROR: Reached heap limit）。给 4GB 留一档余量。
+          # Windows runner 16GB，默认上限本就够，写在这里只是让两个平台一致。
+          # beforeBuildCommand 里的 `pnpm build` 继承这个变量。
+          NODE_OPTIONS: --max-old-space-size=4096
         with:
           # 只上传，不再各自建 Release。
           releaseId: ${{ needs.create-release.outputs.release_id }}
