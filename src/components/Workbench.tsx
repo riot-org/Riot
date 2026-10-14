@@ -14,8 +14,16 @@
 
 import type { PanelState } from "../bridge";
 import { type MessageKey, useT } from "../i18n";
+import { useUnsaved } from "../lib/unsavedEdits";
 import { basename } from "../pathDisplay";
-import { BrowserIcon, DiffIcon, FileDocIcon, FolderIcon, PlanModeIcon } from "./icons";
+import {
+  BrowserIcon,
+  DiffIcon,
+  FileDocIcon,
+  FolderIcon,
+  ForkIcon,
+  PlanModeIcon,
+} from "./icons";
 
 /** 工作台标签。browser / changes / files 每会话至多一个，preview 每文件一个。
  *  browser 在标签栏上展开成一组页面标签，但在状态里始终是一项 ——
@@ -157,6 +165,7 @@ export function WorkbenchTabs({
                 )
               }
               title={label}
+              {...(t.kind === "preview" ? { path: t.path } : {})}
               tooltip={
                 t.kind === "preview"
                   ? t.path
@@ -240,6 +249,7 @@ function StripTab({
   icon,
   title,
   tooltip,
+  path,
   onSelect,
   onClose,
 }: {
@@ -247,17 +257,24 @@ function StripTab({
   icon: React.ReactNode;
   title: string;
   tooltip: string;
+  /** 预览标签的文件。给了就订阅它"改了没存"，关闭键的位置画圆点。 */
+  path?: string;
   onSelect: () => void;
   onClose: () => void;
 }) {
   const { t } = useT();
+  const unsaved = useUnsaved(path ?? null);
   const close = (e: React.SyntheticEvent) => {
     // 不冒泡给外层的"切到这个标签" —— 否则关掉的同时又切了过去。
     e.stopPropagation();
     onClose();
   };
   return (
-    <button className={active ? "wb-tab active" : "wb-tab"} onClick={onSelect} title={tooltip}>
+    <button
+      className={["wb-tab", active ? "active" : "", unsaved ? "unsaved" : ""].filter(Boolean).join(" ")}
+      onClick={onSelect}
+      title={tooltip}
+    >
       <span className="wb-tab-icon">{icon}</span>
       <span className="wb-tab-title">{title}</span>
       {/* 关闭做成 span 而不是嵌套 button：button 套 button 是非法
@@ -275,6 +292,9 @@ function StripTab({
           }
         }}
       >
+        {/* 没存的文件在关闭键的位置画一个圆点（编辑器的老规矩），悬停
+            才换回 ×（见 styles.css 的 .wb-tab.unsaved）。 */}
+        {unsaved ? <span className="wb-tab-dot" aria-label={t("app.workbench.unsaved")} /> : null}
         <CloseIcon />
       </span>
     </button>
@@ -298,23 +318,6 @@ function PlusIcon() {
   return (
     <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden>
       <path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-/** 子 agent 标签的分叉记号。 */
-function ForkIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden>
-      <circle cx="4" cy="3.5" r="1.7" stroke="currentColor" strokeWidth="1.3" />
-      <circle cx="12" cy="3.5" r="1.7" stroke="currentColor" strokeWidth="1.3" />
-      <circle cx="8" cy="12.5" r="1.7" stroke="currentColor" strokeWidth="1.3" />
-      <path
-        d="M4 5.2v1.3c0 1.2.8 2 2 2h4c1.2 0 2-.8 2-2V5.2M8 8.5v2.3"
-        stroke="currentColor"
-        strokeWidth="1.3"
-        strokeLinecap="round"
-      />
     </svg>
   );
 }

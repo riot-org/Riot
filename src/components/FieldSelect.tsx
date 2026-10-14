@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { createPortal } from "react-dom";
 
 import { Chevron } from "./Chevron";
+import { MenuPickCheck } from "./icons";
 
 export interface FieldOption {
   value: string;
@@ -163,15 +164,18 @@ export function FieldSelect({
                   type="button"
                   role="option"
                   aria-selected={o.value === value}
-                  className={o.value === value ? "menu-item active" : "menu-item"}
+                  className={o.value === value ? "menu-item menu-pick active" : "menu-item menu-pick"}
                   onClick={() => {
                     onChange(o.value);
                     setOpen(false);
                     btnRef.current?.focus();
                   }}
                 >
-                  {o.label}
-                  {o.hint ? <span className="menu-hint">{o.hint}</span> : null}
+                  <span className="menu-pick-body">
+                    {o.label}
+                    {o.hint ? <span className="menu-hint">{o.hint}</span> : null}
+                  </span>
+                  <MenuPickCheck active={o.value === value} />
                 </button>
               ))}
             </div>,

@@ -16,9 +16,13 @@ import { useTimedFlag } from "../hooks/useTimedFlag";
 import { t, useT } from "../i18n";
 import { openSession, sessionIdFromHref } from "../lib/sessionLink";
 import { AGENT_LINK_SCHEME, openSubagent } from "../lib/subagentLink";
+import { splitMarkdownBlocks } from "../lib/mdBlocks";
 import { basename, joinRoot, looksAbsPath } from "../pathDisplay";
 import { type Theme, getTheme, subscribeTheme } from "../theme";
 import { audioMimeOf, imageMimeOf, openFilePreview, videoMimeOf } from "./FilePreview";
+import { ForkIcon } from "./icons";
+import { AudioPlayer } from "./AudioPlayer";
+import { FullscreenGlyph, MediaBar, VolumeGlyph, useMediaPlayback, useVideoFullscreen } from "./MediaControls";
 import { MermaidBlock } from "./Mermaid";
 import { ShotViewer } from "./ToolCard";
 
@@ -258,28 +262,49 @@ export const Markdown = memo(function Markdown({
    *
    * `[约束]` 只给正在流的那一条开。历史消息也开的话，切会话、懒水合
    * 落地、⌘F 全量水合都会让整屏重播一遍淡入。
+   *
+   * 正在流的正文还按顶层块切开渲染（见 lib/mdBlocks）：说完的块 memo
+   * 住，每帧只 parse 尾巴那一块。
    */
   animated?: boolean;
 }) {
   return (
     <div className="md" {...(animated ? { "data-md-animated": "" } : {})}>
-      <ReactMarkdown
-        remarkPlugins={
-          breaks
-            ? [remarkGfm, remarkCjkAutolinks, remarkCodeRefs, remarkSoftBreaks]
-            : [remarkGfm, remarkCjkAutolinks, remarkCodeRefs]
-        }
-        rehypePlugins={[[rehypeHighlight, { ignoreMissing: true, detect: false }]]}
-        urlTransform={keepFileUrls}
-        components={{
-          pre: CodeBlock,
-          a: MdLink,
-          img: MdImage,
-        }}
-      >
-        {text}
-      </ReactMarkdown>
+      {animated ? (
+        // key 用下标：块只会在末尾长出来，前面的块下标不变、实例不换，
+        // DOM 原地复用，淡入不会重播。
+        splitMarkdownBlocks(text).map((block, i) => (
+          <MdChunk key={i} text={block} breaks={breaks} />
+        ))
+      ) : (
+        <MdChunk text={text} breaks={breaks} />
+      )}
     </div>
+  );
+});
+
+const REMARK_PLUGINS = [remarkGfm, remarkCjkAutolinks, remarkCodeRefs];
+const REMARK_PLUGINS_BREAKS = [...REMARK_PLUGINS, remarkSoftBreaks];
+const REHYPE_PLUGINS: NonNullable<Parameters<typeof ReactMarkdown>[0]["rehypePlugins"]> = [
+  [rehypeHighlight, { ignoreMissing: true, detect: false }],
+];
+const MD_COMPONENTS = { pre: CodeBlock, a: MdLink, img: MdImage };
+
+/**
+ * 一段 Markdown 的解析结果，不带外层容器。react-markdown 渲染出来的是
+ * 片段，所以切成几块之后各块的顶层元素仍然直接挂在 `.md` 下 ——
+ * `.md > *` 的那些样式（首尾外边距、淡入）不受切分影响。
+ */
+const MdChunk = memo(function MdChunk({ text, breaks }: { text: string; breaks: boolean }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={breaks ? REMARK_PLUGINS_BREAKS : REMARK_PLUGINS}
+      rehypePlugins={REHYPE_PLUGINS}
+      urlTransform={keepFileUrls}
+      components={MD_COMPONENTS}
+    >
+      {text}
+    </ReactMarkdown>
   );
 });
 
@@ -303,11 +328,15 @@ function keepFileUrls(url: string): string {
   return defaultUrlTransform(url);
 }
 
+/** 让一块懒加载正文现在就解析（见 LazyMarkdown 和 Transcript 的空闲预解析）。 */
+export const HYDRATE_EVENT = "riot:hydrate";
+
 /**
  * 视口外的正文先按纯文本占位，进视野再 parse。
  *
  * 切到长会话时上百条一起走 ReactMarkdown + highlight 会把主线程卡死，
  * 表现为白屏。贴底的那几条（`eager`）立刻渲染，用户看到的就是最新对话。
+ * 对话流空闲时也会派 HYDRATE_EVENT 过来，把视口附近的提前解析掉。
  */
 export const LazyMarkdown = memo(function LazyMarkdown({
   text,
@@ -338,10 +367,20 @@ export const LazyMarkdown = memo(function LazyMarkdown({
       { root: root instanceof Element ? root : null, rootMargin: "1200px 0px" },
     );
     io.observe(el);
-    return () => io.disconnect();
+    const hydrate = () => {
+      io.disconnect();
+      startTransition(() => setOn(true));
+    };
+    el.addEventListener(HYDRATE_EVENT, hydrate);
+    return () => {
+      io.disconnect();
+      el.removeEventListener(HYDRATE_EVENT, hydrate);
+    };
   }, [on]);
 
-  if (on) return <Markdown text={text} />;
+  // eager 当场就画真身，不等 effect 把 on 翻过来再多提交一轮 —— 查找要在
+  // 同一次（flushSync 的）提交里拿到解析后的文本节点。
+  if (on || eager) return <Markdown text={text} />;
   return (
     <div ref={ref} className="md md-lazy">
       {text}
@@ -418,7 +457,7 @@ function MdLink({
       >
         {chip ? (
           <span className="md-agent-icon" aria-hidden>
-            {target.kind === "agent" ? "⑂" : "↶"}
+            {target.kind === "agent" ? <ForkIcon /> : "↶"}
           </span>
         ) : null}
         {children}
@@ -592,6 +631,88 @@ function MdImage({
   );
 }
 
+/**
+ * 刚读进来的本地媒体 blob，按「路径 + 类型」短暂共享。
+ *
+ * 正在流的那条回答落定时，整条从流式区换成历史行 —— 两个不同的 React
+ * 实例。不共享的话，图片 / 视频在那一刻重新读盘：先闪回文件名占位、
+ * 高度塌下去，再撑回原图，对话流跟着跳一下。
+ *
+ * `[约束]` 只在读完后的很短一段时间里共享，过期就重读。模型常常改完
+ * 同一个 `chart.png` 再贴一次，按路径长期缓存会给它看旧图。换实例只差
+ * 一次提交，几秒足够盖住。
+ */
+const BLOB_FRESH_MS = 3_000;
+const freshBlobs = new Map<string, { url: string; at: number }>();
+/** blob URL 的持有数。归零后延迟回收：换实例时旧的先卸、新的后挂。 */
+const blobRefs = new Map<string, { n: number; timer: number }>();
+/** 视频封面按 blob URL 记：同一份字节挑一次就够。随 blob 回收一起清。 */
+const posterCache = new Map<string, Poster | null>();
+
+function freshBlob(key: string): string | null {
+  const hit = freshBlobs.get(key);
+  return hit && Date.now() - hit.at < BLOB_FRESH_MS ? hit.url : null;
+}
+
+function retainBlob(url: string) {
+  const r = blobRefs.get(url);
+  if (r) {
+    window.clearTimeout(r.timer);
+    r.n++;
+  } else {
+    blobRefs.set(url, { n: 1, timer: 0 });
+  }
+}
+
+function releaseBlob(url: string) {
+  const r = blobRefs.get(url);
+  if (!r || --r.n > 0) return;
+  window.clearTimeout(r.timer);
+  r.timer = window.setTimeout(() => {
+    if (r.n > 0) return;
+    blobRefs.delete(url);
+    posterCache.delete(url);
+    for (const [k, v] of freshBlobs) if (v.url === url) freshBlobs.delete(k);
+    URL.revokeObjectURL(url);
+  }, BLOB_FRESH_MS);
+}
+
+/** 本地文件 → blob URL。读不到时 `failed`。 */
+function useFileBlob(path: string, mime: string): { src: string | null; failed: boolean } {
+  const key = `${mime}\u0000${path}`;
+  const [src, setSrc] = useState<string | null>(() => freshBlob(key));
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    const hit = freshBlob(key);
+    if (hit) {
+      retainBlob(hit);
+      setSrc(hit);
+      return () => releaseBlob(hit);
+    }
+    let stale = false;
+    let url: string | null = null;
+    readFileBytes(path).then(
+      (buf) => {
+        if (stale) return;
+        url = URL.createObjectURL(new Blob([buf], { type: mime }));
+        freshBlobs.set(key, { url, at: Date.now() });
+        retainBlob(url);
+        setSrc(url);
+      },
+      () => {
+        if (!stale) setFailed(true);
+      },
+    );
+    return () => {
+      stale = true;
+      if (url) releaseBlob(url);
+    };
+  }, [key, path, mime]);
+
+  return { src, failed };
+}
+
 /** 磁盘上的一张图：读进来贴出，点击全屏放大（和工具卡片里的截图同一个查看器）。 */
 function LocalImage({
   path,
@@ -605,29 +726,9 @@ function LocalImage({
   title?: string | undefined;
 }) {
   const { t } = useT();
-  const [src, setSrc] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
+  const { src, failed } = useFileBlob(path, mime);
   const [viewer, setViewer] = useState(false);
   const name = alt || basename(path);
-
-  useEffect(() => {
-    let stale = false;
-    let url: string | null = null;
-    readFileBytes(path).then(
-      (buf) => {
-        if (stale) return;
-        url = URL.createObjectURL(new Blob([buf], { type: mime }));
-        setSrc(url);
-      },
-      () => {
-        if (!stale) setFailed(true);
-      },
-    );
-    return () => {
-      stale = true;
-      if (url) URL.revokeObjectURL(url);
-    };
-  }, [path, mime]);
 
   if (failed) {
     // 读不到（围栏外、超上限、已删除）：留一个能点的文件链接 —— 点开走
@@ -674,36 +775,30 @@ function LocalImage({
  */
 function LocalVideo({ path, mime, alt }: { path: string; mime: string; alt: string }) {
   const { t } = useT();
-  const [src, setSrc] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
+  const { src, failed } = useFileBlob(path, mime);
   // undefined = 还在挑封面；null = 挑不出来，用播放器默认的第一帧。
-  const [poster, setPoster] = useState<Poster | null | undefined>(undefined);
-  /** 点过播放了：封面层撤掉，此后就是原生播放器。 */
+  // 同一份 blob 挑过的封面直接拿（见 posterCache）。
+  const [poster, setPoster] = useState<Poster | null | undefined>(() =>
+    src ? posterCache.get(src) : undefined,
+  );
+  /** 点过播放了：封面层撤掉，换成播放器自己的控件。 */
   const [started, setStarted] = useState(false);
-  const videoRef = useRef<HTMLVideoElement>(null);
   const name = alt || basename(path);
 
   useEffect(() => {
+    if (!src || posterCache.has(src)) {
+      if (src) setPoster(posterCache.get(src));
+      return;
+    }
     let stale = false;
-    let url: string | null = null;
-    readFileBytes(path).then(
-      (buf) => {
-        if (stale) return;
-        url = URL.createObjectURL(new Blob([buf], { type: mime }));
-        setSrc(url);
-        void posterOf(url).then((p) => {
-          if (!stale) setPoster(p ?? null);
-        });
-      },
-      () => {
-        if (!stale) setFailed(true);
-      },
-    );
+    void posterOf(src).then((p) => {
+      posterCache.set(src, p ?? null);
+      if (!stale) setPoster(p ?? null);
+    });
     return () => {
       stale = true;
-      if (url) URL.revokeObjectURL(url);
     };
-  }, [path, mime]);
+  }, [src]);
 
   if (failed) {
     return (
@@ -723,79 +818,200 @@ function LocalVideo({ path, mime, alt }: { path: string; mime: string; alt: stri
       </span>
     );
   }
-  // 封面不用 video 的 poster 属性，而是自己盖一层图：WebKit 带着 poster
-  // 时会推迟建视频图层，拖进度条（没点播放）会把 poster 撤掉却画不出
-  // 那一帧 —— 暂停时整块空着。盖层只管「开播之前」，点一下就撤，之后
-  // 是原生播放器的原样行为：暂停停在当前帧。
-  //
-  // preload=metadata：只解出时长和首帧，不点播放不解整段。
+  return (
+    <VideoPlayer
+      src={src}
+      path={path}
+      name={name}
+      poster={poster}
+      started={started}
+      onStart={() => setStarted(true)}
+    />
+  );
+}
+
+/**
+ * 视频播放器。控件自己画（为什么不用原生 controls 见 MediaControls）：
+ * 叠在画面底部，暂停时常显，播放时指针移上来才出现；点画面切换播放。
+ *
+ * 封面不用 video 的 poster 属性，而是自己盖一层图：WebKit 带着 poster
+ * 时会推迟建视频图层，拖进度条（没点播放）会把 poster 撤掉却画不出那一帧
+ * —— 暂停时整块空着。盖层只管「开播之前」，点一下就撤。
+ */
+function VideoPlayer({
+  src,
+  path,
+  name,
+  poster,
+  started,
+  onStart,
+}: {
+  src: string;
+  path: string;
+  name: string;
+  poster: Poster | null;
+  started: boolean;
+  onStart: () => void;
+}) {
+  const { t } = useT();
+  /** 在对话流里占位的外层。全屏时它留在原地、钉住高度（见 useVideoFullscreen）。 */
+  const wrapRef = useRef<HTMLSpanElement>(null);
+  /** 真正进全屏的那一层：画面 + 控件。 */
+  const stageRef = useRef<HTMLSpanElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const media = useMediaPlayback(videoRef, src);
+  /**
+   * 暂停那一帧的截图（data URL）。null = 没暂停过 / 正在放。
+   *
+   * WKWebView 里暂停着的视频，合成图层一旦被丢掉就不再重画：切走会话再
+   * 切回（整个对话面板走 content-visibility）、暂停中拖进度条，画面都会
+   * 整块变黑。早先的办法是把视频 display:none 一帧逼它重建图层，但切换
+   * 会话那条路上没人去触发，而且重建本身也闪一下。截一张图盖上去是普通
+   * 图片，任何时候都画得出来；开播就撤掉。
+   */
+  const [still, setStill] = useState<string | null>(null);
+  const { fullscreen, filled, toggle: toggleFullscreen } = useVideoFullscreen(wrapRef, stageRef, videoRef);
+
   const cover = poster && !started ? poster : null;
   return (
-    <span className="md-video-wrap">
-      <video
-        ref={videoRef}
-        className="md-video"
-        src={src}
-        controls
-        preload="metadata"
-        title={path}
-        // 宽高给出比例：元数据到之前播放器按 300×150 占位，盖层会先
-        // 缩成一小块再撑开。
-        {...(poster ? { width: poster.w, height: poster.h } : {})}
-        // 用键盘、画中画之类绕过盖层开播的，盖层也跟着撤。
-        onPlay={() => setStarted(true)}
-        onPause={(e) => rebuildVideoLayer(e.currentTarget)}
-        onSeeked={(e) => {
-          if (e.currentTarget.paused) rebuildVideoLayer(e.currentTarget);
-        }}
-      >
-        {name}
-      </video>
-      {cover ? (
-        <button
-          type="button"
-          className="md-video-cover"
-          aria-label={t("transcript.md.playVideo", { name })}
+    <span
+      ref={wrapRef}
+      className="md-video-wrap"
+      // 显示宽度给外框（它的百分比相对正文列，解析得出来），视频铺满外框、
+      // 按比例算高。宽度挂在视频上的话外框是 fit-content，两边互相依赖，
+      // 元数据到之前按默认的 300px 算，先窄后宽地跳一下。
+      {...(poster ? { style: videoBoxStyle(poster) } : {})}
+      {...(media.playing ? { "data-playing": "" } : {})}
+    >
+      <span ref={stageRef} className={filled ? "md-video-stage is-filled" : "md-video-stage"}>
+        <video
+          ref={videoRef}
+          className="md-video"
+          src={src}
+          preload="metadata"
+          playsInline
           title={path}
-          // 在点击里直接 play()：用户手势还在，有声播放不会被拦。
-          onClick={() => {
-            setStarted(true);
-            void videoRef.current?.play().catch(() => {});
+          // 一开始就按封面的比例和最终显示尺寸占位：元数据到之前播放器按
+          // 300×150 占位，盖层会先缩成一小块再撑开。
+          //
+          // `[约束]` 用样式（aspect-ratio + 算好的宽度）而不是 width/height
+          // 属性。属性会成为视频的固有尺寸（1920×1080 这种），WebKit 进出
+          // 全屏时按它重建视频图层，画面和外框错开一截、看着像重新加载了
+          // 一下 —— 没挑出封面（黑场、不写属性）的视频就没这个问题。
+          {...(poster ? { style: { width: "100%", height: "auto", aspectRatio: `${poster.w} / ${poster.h}` } } : {})}
+          {...media.handlers}
+          onClick={media.toggle}
+          onPlay={(e) => {
+            media.handlers.onPlay(e);
+            // 用键盘、画中画之类绕过盖层开播的，盖层也跟着撤。
+            onStart();
+          }}
+          onPause={(e) => {
+            media.handlers.onPause(e);
+            setStill(stillFrame(e.currentTarget));
+          }}
+          onSeeked={(e) => {
+            if (e.currentTarget.paused) setStill(stillFrame(e.currentTarget));
           }}
         >
-          <img src={cover.src} alt="" draggable={false} />
-          <span className="md-video-play" aria-hidden>
-            <svg viewBox="0 0 24 24" width="22" height="22">
-              <path d="M8 5.5v13l10.5-6.5z" fill="currentColor" />
-            </svg>
+          {name}
+        </video>
+        {/* 暂停画面：截下来的当前帧盖在视频上，开播就撤（见 stillFrame）。 */}
+        {still && !media.playing ? (
+          <img className="md-video-still" src={still} alt="" draggable={false} />
+        ) : null}
+        {cover ? (
+          <button
+            type="button"
+            className="md-video-cover"
+            aria-label={t("transcript.md.playVideo", { name })}
+            title={path}
+            // 在点击里直接 play()：用户手势还在，有声播放不会被拦。
+            onClick={() => {
+              onStart();
+              void videoRef.current?.play().catch(() => {});
+            }}
+          >
+            <img src={cover.src} alt="" draggable={false} />
+            <span className="md-video-play" aria-hidden>
+              <svg viewBox="0 0 24 24" width="22" height="22">
+                <path d="M8 5.5v13l10.5-6.5z" fill="currentColor" />
+              </svg>
+            </span>
+          </button>
+        ) : (
+          <span className="md-video-controls">
+            <MediaBar
+              media={media}
+              enabled
+              label={name}
+              extra={
+                <>
+                  <button
+                    type="button"
+                    className="media-btn"
+                    onClick={() => {
+                      if (videoRef.current) videoRef.current.muted = !videoRef.current.muted;
+                    }}
+                    aria-label={media.muted ? t("transcript.md.videoUnmute") : t("transcript.md.videoMute")}
+                    title={media.muted ? t("transcript.md.videoUnmute") : t("transcript.md.videoMute")}
+                  >
+                    <VolumeGlyph muted={media.muted} />
+                  </button>
+                  <button
+                    type="button"
+                    className="media-btn"
+                    onClick={toggleFullscreen}
+                    aria-label={
+                      fullscreen ? t("transcript.md.videoExitFullscreen") : t("transcript.md.videoFullscreen")
+                    }
+                    title={fullscreen ? t("transcript.md.videoExitFullscreen") : t("transcript.md.videoFullscreen")}
+                  >
+                    <FullscreenGlyph exit={fullscreen} />
+                  </button>
+                </>
+              }
+            />
           </span>
-        </button>
-      ) : null}
+        )}
+      </span>
     </span>
   );
 }
 
 /**
- * 让 WebKit 重建视频的合成图层，把暂停时那一帧画出来。
- *
- * 桌面版（WKWebView）里暂停或暂停中拖进度条，播放器会整块变黑；滚出
- * 视野再滚回来就好了 —— 那一下渲染对象和图层被拆掉重建（对话里的轮
- * 是 content-visibility: auto）。这里照做一遍：先把外层高度钉住（不然
- * 拆掉那一帧对话会塌一下、跟着跳），视频 display:none 一帧再放回来。
- * 播放状态和进度都在元素上，不受影响。
+ * 截下视频此刻的画面（暂停时盖在视频上，见 VideoPlayer 的 still）。按显示
+ * 需要缩到最宽 1280，JPEG —— 原尺寸 1080p 的 PNG 白占内存。解不出画面
+ * （还没解出首帧）返回 null，那就不盖。
  */
-function rebuildVideoLayer(v: HTMLVideoElement) {
-  const wrap = v.parentElement;
-  if (!wrap) return;
-  const h = wrap.getBoundingClientRect().height;
-  wrap.style.height = `${h}px`;
-  v.style.display = "none";
-  requestAnimationFrame(() => {
-    v.style.display = "";
-    requestAnimationFrame(() => {
-      wrap.style.height = "";
-    });
-  });
+function stillFrame(v: HTMLVideoElement): string | null {
+  const w = v.videoWidth;
+  const h = v.videoHeight;
+  if (!w || !h) return null;
+  const scale = Math.min(1, 1280 / w);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(w * scale);
+  canvas.height = Math.round(h * scale);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  try {
+    ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/jpeg", 0.85);
+  } catch {
+    return null;
+  }
+}
+
+/** 视频最高这么高（和 styles.css 的 .md-video 一致）。 */
+const VIDEO_MAX_H = 480;
+
+/**
+ * 按封面量出的原始尺寸给播放器定显示框：比例照原片，宽度不超过原片、
+ * 不超过 VIDEO_MAX_H 对应的宽度、不超过容器。
+ */
+function videoBoxStyle(p: Poster): React.CSSProperties {
+  const w = Math.min(p.w, (VIDEO_MAX_H * p.w) / p.h);
+  return { width: `min(100%, ${Math.round(w)}px)` };
 }
 
 /**
@@ -806,28 +1022,8 @@ function rebuildVideoLayer(v: HTMLVideoElement) {
  */
 function LocalAudio({ path, mime, alt }: { path: string; mime: string; alt: string }) {
   const { t } = useT();
-  const [src, setSrc] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
+  const { src, failed } = useFileBlob(path, mime);
   const name = alt || basename(path);
-
-  useEffect(() => {
-    let stale = false;
-    let url: string | null = null;
-    readFileBytes(path).then(
-      (buf) => {
-        if (stale) return;
-        url = URL.createObjectURL(new Blob([buf], { type: mime }));
-        setSrc(url);
-      },
-      () => {
-        if (!stale) setFailed(true);
-      },
-    );
-    return () => {
-      stale = true;
-      if (url) URL.revokeObjectURL(url);
-    };
-  }, [path, mime]);
 
   if (failed) {
     return (
@@ -841,17 +1037,12 @@ function LocalAudio({ path, mime, alt }: { path: string; mime: string; alt: stri
       </span>
     );
   }
+  // 播放条自己画（见 AudioPlayer）：原生 <audio controls> 在 WebKit 里切换
+  // 会话时会当场重排。文件还没读进来时画同尺寸的禁用态，不跳。
   return (
     <span className="md-audio" title={path}>
       <span className="md-audio-name">{name}</span>
-      {src ? (
-        // preload=metadata：先只解出时长，点了播放再读整段。
-        <audio className="md-audio-player" src={src} controls preload="metadata">
-          {name}
-        </audio>
-      ) : (
-        <span className="md-audio-pending" />
-      )}
+      <AudioPlayer src={src} label={name} />
     </span>
   );
 }

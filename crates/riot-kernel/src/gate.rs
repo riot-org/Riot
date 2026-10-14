@@ -448,10 +448,17 @@ impl HostGate {
         // 默认才 60 秒，到点按拒绝处理的话，模型会在没人点头的情况下直接
         // 把一个大改动做下去，而这正是它建议先规划的原因。上限一小时兜底
         //（人真的走了不能让轮次永远挂着）。
-        let timeout = if tool.name() == riot_tools::tools::names::SWITCH_MODE {
-            Duration::from_secs(3600)
+        //
+        // 提问（AskUserQuestion）不设超时，和 Claude Code 一样一直等到用户
+        // 回答或中断：超时按拒绝是为了"等不到人就别做"这条安全默认，而提问
+        // 本身什么都不做，多等没有任何风险；到点作废只会把选项卡换成一段
+        // 文字，白丢交互。中断（cancel）照样能随时结束它。
+        let timeout = if tool.name() == "AskUserQuestion" {
+            None
+        } else if tool.name() == riot_tools::tools::names::SWITCH_MODE {
+            Some(Duration::from_secs(3600))
         } else {
-            self.ask_timeout
+            Some(self.ask_timeout)
         };
 
         // 这里等的是**用户**，用真实时钟而不是注入的 Clock。黄金回放里
@@ -491,7 +498,12 @@ impl HostGate {
 
             RaceOutcome::Pending => {
                 let waited = tokio::select! {
-                    r = tokio::time::timeout(timeout, &mut rx) => r,
+                    r = async {
+                        match timeout {
+                            Some(d) => tokio::time::timeout(d, &mut rx).await,
+                            None => Ok((&mut rx).await),
+                        }
+                    } => r,
                     _ = cancel.cancelled() => {
                         self.pending.forget(&request_id).await;
                         self.resolved(&request_id, DecisionReason::UserChoice { remembered: false });
@@ -514,25 +526,18 @@ impl HostGate {
                         // `[约束]` 超时按拒绝处理。见 crate::session 里
                         // ASK_TIMEOUT_RANGE 的注释。
                         //
-                        // 提问的超时不能劝模型"重新提出"：没人在场时重新提问的
-                        // 结局还是超时，一来一回就成了每分钟一轮的提问循环。和
-                        // 工具自己的空选择失败同一个口径 —— 讲清取舍，停下来等人。
-                        let message = if tool.name() == "AskUserQuestion" {
-                            format!(
-                                "等了 {} 秒没有人回答。不要立刻重新提问，也不要自己替用户挑一个 —— \
-                                 用普通回复把这个决定和各选项的取舍讲清楚，然后停下来等他说。",
-                                timeout.as_secs()
-                            )
-                        } else if tool.name() == riot_tools::tools::names::REQUEST_ENV {
+                        // 走到这里 timeout 必然是 Some（None 不会超时）。
+                        let secs = timeout.map_or(0, |d| d.as_secs());
+                        let message = if tool.name() == riot_tools::tools::names::REQUEST_ENV {
                             format!(
                                 "等了 {} 秒没有人填写表单。不要立刻再要一次 —— 用普通回复说明缺哪些\
                                  变量、去哪里拿，告诉用户可以在设置 → 环境变量里配好，然后停下来等他。",
-                                timeout.as_secs()
+                                secs
                             )
                         } else {
                             format!(
                                 "等待授权超过 {} 秒，本次操作未执行。如果仍然需要，请重新提出。",
-                                timeout.as_secs()
+                                secs
                             )
                         };
                         return GateOutcome::Deny { message };

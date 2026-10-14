@@ -271,7 +271,7 @@ export default {
   "settings.permission.clamp.max": "최대값 {value}(으)로 조정되었습니다",
   "settings.permission.clamp.min": "최소값 {value}(으)로 조정되었습니다",
   "settings.permission.timeout": "승인 대기 시간",
-  "settings.permission.timeout.desc": "확인 창에 응답이 없을 때 얼마나 기다렸다가 포기할지 정합니다. 시간이 초과되면 거부로 처리합니다. 범위 {min}–{max}초.",
+  "settings.permission.timeout.desc": "확인 창에 응답이 없을 때 얼마나 기다렸다가 포기할지 정합니다. 시간이 초과되면 거부로 처리합니다. 범위 {min}–{max}초. 모델의 질문은 예외로, 답할 때까지 계속 기다립니다.",
   "settings.permission.timeout.aria": "승인 대기 시간 (초)",
   "settings.permission.unit.seconds": "초",
   "settings.permission.turns": "턴당 최대 단계 수",

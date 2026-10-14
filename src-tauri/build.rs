@@ -77,6 +77,7 @@ const COMMANDS: &[&str] = &[
     "term_busy",
     "read_image",
     "read_file_bytes",
+    "write_file_text",
     "clipboard_paths",
     "mcp_status",
     "mcp_restart",

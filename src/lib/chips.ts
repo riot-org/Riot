@@ -15,6 +15,7 @@
 //! —— 它们只认 `data-chip`，不认具体是哪一种。
 
 import { iconFor } from "../components/FileIcon";
+import { t, tn } from "../i18n";
 import { basename, isDirRef } from "../pathDisplay";
 import type { Seg } from "./promptText";
 
@@ -24,7 +25,7 @@ export type ChipSeg = Extract<Seg, { kind: ChipKind }>;
 
 /** 认得的种类，运行时那一份。`Record<ChipKind, true>` 少一个成员编译不过 ——
  *  回读 DOM 要按名字查，而这张表漏一项的表现是那种块被**静默丢掉**。 */
-const CHIP_KINDS: Record<ChipKind, true> = { ref: true, cmd: true, elem: true };
+const CHIP_KINDS: Record<ChipKind, true> = { ref: true, cmd: true, elem: true, paste: true };
 
 function isChipKind(s: string | undefined): s is ChipKind {
   return s != null && s in CHIP_KINDS;
@@ -58,8 +59,13 @@ export function chipLabel(seg: ChipSeg): string {
       return `/${seg.value}`;
     case "elem":
       return truncate(seg.label.trim() || seg.value);
+    case "paste":
+      return tn("composer.paste.chip", seg.value.split("\n").length);
   }
 }
+
+/** 粘贴块悬停时预览的长度。 */
+const PASTE_PREVIEW = 600;
 
 /** 悬停给的全量信息 —— 块上那行是截断过的，点中的到底是哪个得能看清。 */
 export function chipTitle(seg: ChipSeg): string {
@@ -70,6 +76,10 @@ export function chipTitle(seg: ChipSeg): string {
       return `/${seg.value}`;
     case "elem":
       return `${seg.label}\n${seg.value}`;
+    case "paste": {
+      const head = seg.value.length > PASTE_PREVIEW ? `${seg.value.slice(0, PASTE_PREVIEW)}…` : seg.value;
+      return `${head}\n\n${t("composer.paste.expand")}`;
+    }
   }
 }
 
@@ -126,6 +136,7 @@ function chipExtra(seg: ChipSeg): string | null {
       // 认不认目录看路径是不是以 `/` 结尾，约定见 `isDirRef`。
       return isDirRef(seg.value) ? "dir" : null;
     case "cmd":
+    case "paste":
       return null;
     case "elem":
       return seg.label;
@@ -153,6 +164,7 @@ export function chipSegFromEl(el: HTMLElement): ChipSeg | null {
   switch (kind) {
     case "ref":
     case "cmd":
+    case "paste":
       return { kind, value };
     case "elem":
       return { kind, value, label: el.dataset["extra"] ?? value };

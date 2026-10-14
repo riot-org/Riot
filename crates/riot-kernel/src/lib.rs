@@ -46,6 +46,7 @@ pub mod models;
 pub mod plan;
 pub mod plugins;
 pub mod prompt;
+pub mod reload_config;
 pub mod session;
 pub mod skills;
 pub mod slash;

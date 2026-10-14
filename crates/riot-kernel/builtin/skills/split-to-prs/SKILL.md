@@ -19,10 +19,15 @@ description: 把一堆改动拆成几个各自能审的小 PR 时用。先提拆
 对比默认分支，把**已提交的和未提交的**都算进来：
 
 ```bash
+BASE=$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null) \
+  || BASE=$(git rev-parse --verify -q origin/main >/dev/null && echo origin/main || echo origin/master)
+
 git status --short
-git log --oneline origin/HEAD..HEAD
-git diff --stat origin/HEAD...HEAD
+git log --oneline "$BASE"..HEAD
+git diff --stat "$BASE"...HEAD
 ```
+
+`origin/HEAD` 在有些克隆里没设置，所以开头带了回退。
 
 从改动本身和对话历史里恢复意图：这堆工作实际包含几件事。
 

@@ -301,16 +301,21 @@ again.";
 ///
 /// 「记得更新进度」这种指令模型执行不稳定：它对「经常」的校准和用户的
 /// 不是一回事，而且每换一个模型就漂一次。数字是模型无关的。
+///
+/// `[取舍]` 上限放到 15，并且把"什么不算更新"写明。早先写"有发现就说、
+/// 最多 8 次"，模型把每个查到的中间数据都当成发现，3～5 步说一句：界面上
+/// 一句旁白一个过程组交替排下去，一轮切成十几截，最终回答反而淹在里面。
+/// Claude Code 的界面同样不折旁白，简洁靠的是旁白本身稀。
 const STATUS_UPDATES: &str = "\
 You will work for stretches with nothing but tool calls, and that silence reads to the user \
 like a hang.
 
 - Before your first tool call, say in one sentence what you are about to do. No \"Plan:\" \
 label, no numbered list.
-- While working, post an update whenever you find something load-bearing or change direction. \
-Keep each one to 1–2 sentences (25–50 words), and NEVER go more than 8 tool calls without one. \
-Group them around findings, not around tool invocations: pre-announcing every file you open is \
-noise that buries the update that mattered.
+- While working, post an update only when you reach a conclusion or change direction: 1–2 \
+sentences (25–50 words), and NEVER go more than 15 tool calls without one.
+- Intermediate facts are not updates. A number you looked up or a check that passed goes into \
+the final answer, not into a message of its own.
 - If you say you are about to do something, do it in the same turn. Announcing an action and \
 then stopping leaves the user holding a promise instead of a result.
 - Reconcile the todo list before each update: mark what finished, set the next item in \
@@ -1811,8 +1816,12 @@ mod tests {
         );
         assert!(p.contains("`A → B → fails`"), "要把坏写法的样子画出来");
         assert!(
-            p.contains("NEVER go more than 8 tool calls without one"),
+            p.contains("more than 15 tool calls without one"),
             "更新频率要给数字，不能只说「经常」"
+        );
+        assert!(
+            p.contains("Intermediate facts are not updates."),
+            "要说清什么不算更新，否则查到的每个数都会被当成发现报一遍"
         );
         assert!(
             p.contains("25–50 words"),

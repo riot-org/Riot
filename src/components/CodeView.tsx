@@ -1,210 +1,381 @@
-//! 代码 / 纯文本预览。
+//! 代码 / 纯文本预览，也是编辑器：打开就能改，⌘S 存回磁盘。
 //!
-//! 不走 @file-viewer 的 text 管线：它是一套浅色皮，不跟 Riot 的主题走，
-//! 代码高亮的配色也和聊天里的代码块不一致。聊天代码块用的是 highlight.js +
-//! github 系主题（深色 github-dark-dimmed、浅色 github，Markdown.tsx 按当前
-//! 主题维护那个全局 `<style>`），这里用同一套 —— 颜色、字体和对话里看到的
-//! 代码完全一致。
+//! 编辑器本体是 CodeMirror 6（lib/codeEditor，动态 import —— 只有真的
+//! 打开代码文件才加载）。这里管编辑器之外的事：字节怎么解码、什么情况
+//! 只读、保存、和磁盘上的改动（多半是 agent 写的）怎么对齐。
 //!
-//! highlight.js 全量包不小，动态 import：只有真的打开代码文件才加载。
+//! 早先是 highlight.js 整篇高亮再一次贴进 DOM：250KB 的文件近三万个 span，
+//! 抽屉开合时排版绘制压在动画中段，整个抽屉顿住。CodeMirror 只渲染视口
+//! 附近的行，语法也是按需分片解析，见 lib/codeEditor 的头注释。
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
+import { isHostError, readFileBytes, writeFileText } from "../bridge";
 import { useT } from "../i18n";
+import type { EditorHandle } from "../lib/codeEditor";
+import { sha256Hex } from "../lib/sha256";
+import { markUnsaved } from "../lib/unsavedEdits";
 
 /**
- * 扩展名 → highlight.js 语言名。认不出的按纯文本渲染 —— 不好看，
- * 但不会坏。清单和 Markdown.tsx 的 EXT_LANG 同源，这里为"文件预览"
- * 场景补了更多后缀。
+ * 进代码视图的扩展名（另有一路：名单外但嗅探像文本的，见 FilePreview）。
+ * 语法由编辑器按文件名挑（language-data），这里只决定"走不走代码视图"。
  */
-const EXT_LANG: Record<string, string> = {
-  ts: "typescript",
-  tsx: "typescript",
-  js: "javascript",
-  jsx: "javascript",
-  mjs: "javascript",
-  cjs: "javascript",
-  json: "json",
-  jsonc: "json",
-  json5: "json",
-  py: "python",
-  rs: "rust",
-  go: "go",
-  java: "java",
-  c: "c",
-  h: "c",
-  cpp: "cpp",
-  cc: "cpp",
-  hpp: "cpp",
-  cs: "csharp",
-  php: "php",
-  rb: "ruby",
-  swift: "swift",
-  kt: "kotlin",
-  sql: "sql",
-  sh: "bash",
-  bash: "bash",
-  zsh: "bash",
-  yaml: "yaml",
-  yml: "yaml",
-  toml: "ini",
-  ini: "ini",
-  xml: "xml",
-  html: "xml",
-  htm: "xml",
-  vue: "xml",
-  svelte: "xml",
-  css: "css",
-  scss: "scss",
-  less: "less",
-  diff: "diff",
-  patch: "diff",
-};
-
-/** 能进代码预览的扩展名：有高亮映射的 + 纯文本两种。 */
-export const CODE_EXTS = new Set([...Object.keys(EXT_LANG), "txt", "log"]);
+export const CODE_EXTS = new Set([
+  "ts", "tsx", "js", "jsx", "mjs", "cjs", "json", "jsonc", "json5",
+  "py", "rs", "go", "java", "c", "h", "cpp", "cc", "hpp", "cs", "php", "rb",
+  "swift", "kt", "sql", "sh", "bash", "zsh", "yaml", "yml", "toml", "ini",
+  "xml", "html", "htm", "vue", "svelte", "css", "scss", "less", "diff", "patch",
+  "txt", "log",
+]);
 
 /**
- * 没有扩展名、但文件名本身说明了语言的那些（小写比对）。文件树里这类
- * 文件是常客；按扩展名认不出来就只能当纯文本，白白少了高亮。
+ * 超过这个字节数只显示前段，并且只读 —— 截断的内容存回去等于把文件砍掉
+ * 后半截。编辑器本身扛得住更大的文件（只渲染视口），卡的是一次过 IPC
+ * 和解码的那份内存。
  */
-const NAME_LANG: Record<string, string> = {
-  makefile: "makefile",
-  gnumakefile: "makefile",
-  dockerfile: "dockerfile",
-  containerfile: "dockerfile",
-  "cmakelists.txt": "cmake",
-  ".bashrc": "bash",
-  ".zshrc": "bash",
-  ".profile": "bash",
-  ".bash_profile": "bash",
-  ".env": "ini",
-  ".gitconfig": "ini",
-  ".npmrc": "ini",
-  ".editorconfig": "ini",
-};
+const RENDER_MAX = 4 * 1024 * 1024;
 
-/** 选高亮语言：先看文件名，再看扩展名。都认不出返回 undefined（纯文本）。 */
-function langFor(ext: string, name: string | undefined): string | undefined {
-  if (name) {
-    const byName = NAME_LANG[name.toLowerCase()];
-    if (byName) return byName;
-    // `.env.local`、`.env.production` 这类：按前缀归到 .env。
-    if (/^\.env(\.|$)/i.test(name)) return "ini";
-  }
-  return EXT_LANG[ext];
-}
-
-/** 超过这个字节数不做高亮 —— hljs 对大文件是秒级卡顿。 */
-const HIGHLIGHT_MAX = 512 * 1024;
-/** 超过这个字节数截断显示。几 MB 的文本一次性进 DOM 会把渲染卡死。 */
-const RENDER_MAX = 2 * 1024 * 1024;
-
-/**
- * 行号栏的内容：`1\n2\n…`。一个文本节点而不是每行一个元素 —— 几万行
- * 的文件多出几万个节点，首屏和滚动都会顿。行数按换行符数 + 1 算，和
- * `<pre>` 实际渲染的行一一对应（结尾的换行会多出一个空行，两边一致）。
- */
-function lineNumbers(text: string): string {
-  let n = 1;
-  for (let i = text.indexOf("\n"); i >= 0; i = text.indexOf("\n", i + 1)) n++;
-  return Array.from({ length: n }, (_, i) => i + 1).join("\n");
-}
-
-/**
- * 算好的一份正文。
- *
- * `[约束]` 三样东西整包一起换，别拆回三个 state。文件被 agent 改了会
- * 原地重读（见 FilePreview 的 PreviewBody），而正文要等 hljs 那个
- * Promise，行号和截断提示是同步算出来的 —— 拆开就是"行号已经跳到新
- * 行数、正文还是旧的"那一帧。
- */
-interface Body {
-  /** 高亮后的 HTML。null = 认不出语言或文件太大，走 `text`。 */
-  html: string | null;
+/** 解码后的一份：编辑器的初始内容 + 存回去时要还原的格式。 */
+export interface Decoded {
   text: string;
-  gutter: string;
-  truncated: boolean;
+  /** 文件开头有 UTF-8 BOM。TextDecoder 会把它吃掉，存回去要补上。 */
+  bom: boolean;
+  lineSeparator: "\n" | "\r\n";
+  /** 只读的原因（i18n 键的后缀）。null = 可编辑。 */
+  readOnly: null | "lossy" | "mixedEol" | "truncated";
+  /** 整份字节（不是截断后的）的 SHA-256 —— 保存时告诉宿主"我改的是这一版"。 */
+  sha: string;
 }
+
+export function decode(buf: ArrayBuffer): Decoded {
+  const bytes = new Uint8Array(buf);
+  const sha = sha256Hex(bytes);
+  const truncated = bytes.length > RENDER_MAX;
+  const body = truncated ? bytes.subarray(0, RENDER_MAX) : bytes;
+  const bom = body[0] === 0xef && body[1] === 0xbb && body[2] === 0xbf;
+  let text: string;
+  let lossy = false;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(body);
+  } catch {
+    // 非 UTF-8（老 GBK 文件、二进制误入）：显示成替换字符，但不许存 ——
+    // 存回去就是把原文的字节全换成 U+FFFD。截断处切在多字节字符中间也会
+    // 走到这里，那种本来就只读。
+    text = new TextDecoder("utf-8", { fatal: false }).decode(body);
+    lossy = true;
+  }
+  const crlf = text.includes("\r\n");
+  // CRLF 文件里还夹着单独的 LF：按哪一种存都会改掉另一种的每一行。
+  const mixed = crlf && /(^|[^\r])\n/.test(text);
+  return {
+    text,
+    bom,
+    lineSeparator: crlf && !mixed ? "\r\n" : "\n",
+    readOnly: truncated ? "truncated" : lossy ? "lossy" : mixed ? "mixedEol" : null,
+    sha,
+  };
+}
+
+/** 编辑器外面那一条状态。null = 不显示。 */
+type Bar =
+  | { kind: "dirty" }
+  | { kind: "saving" }
+  | { kind: "error"; message: string }
+  /** 磁盘上的文件变了，而这里有没存的修改。 */
+  | { kind: "diskChanged"; disk: Decoded }
+  /** 保存被宿主拒了：磁盘上已经不是打开时那一版。 */
+  | { kind: "conflict" };
 
 export default function CodeView({
   buf,
-  ext,
   name,
+  path,
 }: {
   buf: ArrayBuffer;
-  /** 小写扩展名（可为空串）。 */
-  ext: string;
-  /** 文件名。Makefile / Dockerfile 这类靠它认语言。 */
-  name?: string;
+  /** 文件名。按它挑语法（Makefile / Dockerfile 这类没扩展名的也认）。 */
+  name: string;
+  /** 绝对路径，保存用。 */
+  path: string;
 }) {
   const { t } = useT();
-  const [body, setBody] = useState<Body | null>(null);
+  const hostRef = useRef<HTMLDivElement>(null);
+  const editorRef = useRef<EditorHandle | null>(null);
+  const [ready, setReady] = useState(false);
+  const [readOnly, setReadOnly] = useState<Decoded["readOnly"]>(null);
+  const [bar, setBar] = useState<Bar | null>(null);
 
+  /**
+   * 编辑器内容是从磁盘的哪一版来的、存回去之前长什么样。
+   *
+   * 放 ref 不放 state：⌘S 是编辑器键位里调的回调，建编辑器时就绑死了，
+   * 读 state 拿到的永远是第一次渲染的值。
+   */
+  const disk = useRef<{ decoded: Decoded; savedDoc: string } | null>(null);
+  const dirtyRef = useRef(false);
+  const savingRef = useRef(false);
+
+  /** 脏不脏的唯一写入口：同步报给标签栏（圆点、关标签前确认）。 */
+  const trackDirty = (d: boolean) => {
+    if (dirtyRef.current === d) return;
+    dirtyRef.current = d;
+    markUnsaved(path, d);
+  };
+
+  const setDirty = (d: boolean) => {
+    trackDirty(d);
+    setBar((b) => {
+      // 冲突、报错这类要用户处理的提示，不被"又敲了一个字"盖掉。
+      if (b && b.kind !== "dirty") return b;
+      return d ? { kind: "dirty" } : null;
+    });
+  };
+
+  const save = async (opts?: { force?: boolean }) => {
+    const ed = editorRef.current;
+    const cur = disk.current;
+    if (!ed || !cur || savingRef.current || cur.decoded.readOnly) return;
+    if (!dirtyRef.current && !opts?.force) return;
+    savingRef.current = true;
+    setBar({ kind: "saving" });
+    const body = ed.text();
+    try {
+      let base = cur.decoded.sha;
+      if (opts?.force) {
+        // "仍然覆盖"：拿磁盘现状的哈希当 base，宿主就放行。
+        base = sha256Hex(new Uint8Array(await readFileBytes(path)));
+      }
+      const sha = await writeFileText(path, (cur.decoded.bom ? "﻿" : "") + body, base);
+      // text 也要跟着换成存下去的这份：之后"放弃修改"回到的是刚存的版本，
+      // 不是打开时那一版。
+      disk.current = {
+        decoded: { ...cur.decoded, sha, text: body },
+        savedDoc: ed.doc().toString(),
+      };
+      // 保存期间又敲了字的话，存下去的是按 ⌘S 那一刻的内容，现在仍然是脏的。
+      const stillDirty = ed.doc().toString() !== disk.current.savedDoc;
+      trackDirty(stillDirty);
+      setBar(stillDirty ? { kind: "dirty" } : null);
+    } catch (e) {
+      if (isHostError(e) && e.is("host.file.changedOnDisk")) {
+        setBar({ kind: "conflict" });
+      } else {
+        setBar({ kind: "error", message: e instanceof Error ? e.message : String(e) });
+      }
+    } finally {
+      savingRef.current = false;
+    }
+  };
+  const saveRef = useRef(save);
+  saveRef.current = save;
+
+  // 建编辑器。只建一次（按 path 做 key 的组件，换文件是换实例）；之后
+  // 磁盘内容的变化走下面那个 effect 原地换。
+  //
+  // 不等抽屉动画播完（MarkdownView 那种 useSlideSettled）：CodeMirror 只
+  // 渲染视口里的几十行，建出来的 DOM 和文件大小无关，挂载那一下压在
+  // 动画里也不掉帧。
   useEffect(() => {
-    let stale = false;
-    // 不先清空 body。重读一遍磁盘就闪一下"正在高亮…"的话，内容整块
-    // 消失再回来，滚动位置也跟着甩回顶部 —— 而用户多半正盯着某一段看
-    // 模型改了什么。旧内容留到新的算好为止（文件树刷新同一个取舍）。
-    // 首次挂载它本来就是 null，该有的加载态一样在。
-    const truncated = buf.byteLength > RENDER_MAX;
-    // fatal:false —— 非 UTF-8（老 GBK 文件、二进制误入）出替换字符，
-    // 显示成乱码但不抛错；真要看的话头部按钮有系统应用兜底。
-    const text = new TextDecoder("utf-8", { fatal: false }).decode(
-      truncated ? buf.slice(0, RENDER_MAX) : buf,
-    );
-    const base = { text, gutter: lineNumbers(text), truncated };
-    const lang = langFor(ext, name);
-    if (!lang || buf.byteLength > HIGHLIGHT_MAX) {
-      setBody({ ...base, html: null });
+    if (editorRef.current) return;
+    let cancelled = false;
+    const decoded = decode(buf);
+    disk.current = { decoded, savedDoc: decoded.text.replace(/\r\n/g, "\n") };
+    setReadOnly(decoded.readOnly);
+    void import("../lib/codeEditor").then(({ createEditor }) => {
+      if (cancelled || !hostRef.current) return;
+      editorRef.current = createEditor(hostRef.current, {
+        doc: decoded.text,
+        filename: name,
+        lineSeparator: decoded.lineSeparator,
+        readOnly: decoded.readOnly !== null,
+        onDocChange: (doc) => {
+          const saved = disk.current?.savedDoc;
+          // 先比长度：绝大多数按键之后长度就不一样，省掉一次整篇 toString。
+          setDirty(saved === undefined || doc.length !== saved.length || doc.toString() !== saved);
+        },
+        onSave: () => void saveRef.current(),
+      });
+      setReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // buf 只取建编辑器那一刻的；之后的新字节交给下一个 effect。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [name]);
+
+  useEffect(
+    () => () => {
+      editorRef.current?.destroy();
+      editorRef.current = null;
+      // 标签关了（确认过丢弃）：圆点跟着撤。
+      if (dirtyRef.current) markUnsaved(path, false);
+      dirtyRef.current = false;
+    },
+    // path 不会变（按 path 做 key 的组件）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
+  // 磁盘上的字节变了（agent 改了文件、轮次结束重读、或者就是自己刚存的
+  // 那一版读回来了）。
+  useEffect(() => {
+    const ed = editorRef.current;
+    const cur = disk.current;
+    if (!ready || !ed || !cur) return;
+    const next = decode(buf);
+    // 自己刚存的那一版：哈希对得上，什么都不用做。
+    if (next.sha === cur.decoded.sha) return;
+    if (dirtyRef.current) {
+      // 这里有没存的修改，不能拿磁盘版本盖掉 —— 让用户选。
+      setBar({ kind: "diskChanged", disk: next });
       return;
     }
-    void import("highlight.js").then(
-      ({ default: hljs }) => {
-        if (stale) return;
-        try {
-          // hljs 会转义源文本，dangerouslySetInnerHTML 是安全的。
-          setBody({
-            ...base,
-            html: hljs.highlight(text, { language: lang, ignoreIllegals: true }).value,
-          });
-        } catch {
-          setBody({ ...base, html: null });
-        }
-      },
-      () => {
-        if (!stale) setBody({ ...base, html: null });
-      },
-    );
-    return () => {
-      stale = true;
-    };
-  }, [buf, ext, name]);
+    loadDisk(next);
+    // loadDisk 只碰 ref 和 setState，每次渲染重建也没有要追的新值。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [buf, ready]);
+
+  /** 把编辑器换成磁盘上的这一版，丢掉这里的修改。 */
+  const loadDisk = (next: Decoded) => {
+    const ed = editorRef.current;
+    if (!ed) return;
+    disk.current = { decoded: next, savedDoc: next.text.replace(/\r\n/g, "\n") };
+    ed.replaceDoc(next.text);
+    setReadOnly(next.readOnly);
+    trackDirty(false);
+    setBar(null);
+  };
+
+  const reloadFromDisk = async () => {
+    try {
+      loadDisk(decode(await readFileBytes(path)));
+    } catch (e) {
+      setBar({ kind: "error", message: e instanceof Error ? e.message : String(e) });
+    }
+  };
+
+  const discard = () => {
+    const cur = disk.current;
+    if (!cur) return;
+    loadDisk(cur.decoded);
+  };
+
+  /**
+   * 磁盘变了但保留这里的修改：认下磁盘上那一版是新的基准。之后"保存"
+   * 覆盖它（哈希对得上，宿主放行），"放弃修改"回到它 —— 而不是回到
+   * 最早打开、早已过时的那一版。
+   */
+  const keepMine = () => {
+    if (bar?.kind !== "diskChanged") return;
+    const d = bar.disk;
+    disk.current = { decoded: d, savedDoc: d.text.replace(/\r\n/g, "\n") };
+    setBar(null);
+    setDirty(editorRef.current?.doc().toString() !== disk.current.savedDoc);
+  };
 
   return (
     <div className="code-view">
-      {body?.truncated ? (
-        <div className="code-view-note">{t("transcript.preview.tooLarge", { size: "2 MB" })}</div>
-      ) : null}
-      {body ? (
-        // 行号栏和正文并排、共用一个滚动容器；横向滚时行号钉在左缘
-        // （sticky）。行号用 aria-hidden：读屏器念一串数字没有意义，
-        // 选中复制正文时也不该把行号一起带走（user-select: none）。
-        <div className="code-view-lines">
-          <pre className="code-view-gutter" aria-hidden>
-            {body.gutter}
-          </pre>
-          <pre>
-            {body.html !== null ? (
-              <code className="hljs" dangerouslySetInnerHTML={{ __html: body.html }} />
-            ) : (
-              <code>{body.text}</code>
-            )}
-          </pre>
+      {readOnly ? (
+        <div className="code-view-note">
+          {readOnly === "truncated"
+            ? t("transcript.fileEdit.readOnlyTruncated", { size: "4 MB" })
+            : readOnly === "lossy"
+              ? t("transcript.fileEdit.readOnlyLossy")
+              : t("transcript.fileEdit.readOnlyMixedEol")}
         </div>
-      ) : (
-        <div className="preview-panel-state">{t("transcript.preview.highlighting")}</div>
+      ) : null}
+      {bar ? (
+        <EditBar
+          bar={bar}
+          onSave={save}
+          onDiscard={discard}
+          onLoadDisk={(d) => (d ? loadDisk(d) : void reloadFromDisk())}
+          onKeepMine={keepMine}
+        />
+      ) : null}
+      {ready ? null : (
+        <div className="preview-panel-state">{t("transcript.preview.loadingEditor")}</div>
       )}
+      {/* 建编辑器时就要挂在 DOM 里；建好之前藏着，占位那一行才居中。 */}
+      <div
+        ref={hostRef}
+        className="code-view-editor"
+        style={ready ? undefined : { display: "none" }}
+      />
     </div>
   );
+}
+
+/** 编辑器上方的一条：没存的修改、保存中、冲突、报错。 */
+function EditBar({
+  bar,
+  onSave,
+  onDiscard,
+  onLoadDisk,
+  onKeepMine,
+}: {
+  bar: Bar;
+  onSave: (opts?: { force?: boolean }) => Promise<void>;
+  onDiscard: () => void;
+  /** 传了就载入这一版；没传就现读一次磁盘。 */
+  onLoadDisk: (disk?: Decoded) => void;
+  onKeepMine: () => void;
+}) {
+  const { t } = useT();
+  const mod = navigator.platform.toLowerCase().includes("mac") ? "⌘S" : "Ctrl+S";
+  switch (bar.kind) {
+    case "dirty":
+      return (
+        <div className="code-edit-bar">
+          <span className="code-edit-bar-text">{t("transcript.fileEdit.unsaved")}</span>
+          <button type="button" className="ghost" onClick={onDiscard}>
+            {t("transcript.fileEdit.discard")}
+          </button>
+          <button type="button" className="primary" onClick={() => void onSave()} title={mod}>
+            {t("transcript.fileEdit.save")}
+          </button>
+        </div>
+      );
+    case "saving":
+      return (
+        <div className="code-edit-bar">
+          <span className="code-edit-bar-text">{t("transcript.fileEdit.saving")}</span>
+        </div>
+      );
+    case "error":
+      return (
+        <div className="code-edit-bar warn">
+          <span className="code-edit-bar-text">
+            {t("transcript.fileEdit.saveFailed", { error: bar.message })}
+          </span>
+          <button type="button" className="primary" onClick={() => void onSave()}>
+            {t("transcript.fileEdit.save")}
+          </button>
+        </div>
+      );
+    case "diskChanged":
+      return (
+        <div className="code-edit-bar warn">
+          <span className="code-edit-bar-text">{t("transcript.fileEdit.diskChanged")}</span>
+          <button type="button" className="ghost" onClick={onKeepMine}>
+            {t("transcript.fileEdit.keepMine")}
+          </button>
+          <button type="button" className="primary" onClick={() => onLoadDisk(bar.disk)}>
+            {t("transcript.fileEdit.loadDisk")}
+          </button>
+        </div>
+      );
+    case "conflict":
+      return (
+        <div className="code-edit-bar warn">
+          <span className="code-edit-bar-text">{t("transcript.fileEdit.conflict")}</span>
+          <button type="button" className="ghost" onClick={() => onLoadDisk()}>
+            {t("transcript.fileEdit.loadDisk")}
+          </button>
+          <button type="button" className="primary" onClick={() => void onSave({ force: true })}>
+            {t("transcript.fileEdit.overwrite")}
+          </button>
+        </div>
+      );
+  }
 }

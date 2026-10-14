@@ -75,6 +75,10 @@ my-plugin/
 
 ## mcp.json（标准）
 
+本机自己用、不打包的走 `add-mcp` 技能（设置页只起
+stdio；远程用 `mcp-remote` 桥）。这里是打进插件的格式，多了原生 HTTP
+和占位符。
+
 ```json
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
@@ -86,12 +90,17 @@ my-plugin/
       "env": { "LOG": "info" },
       "cwd": "${PLUGIN_ROOT}"
     },
-    "remote": { "type": "streamable-http", "url": "https://mcp.example.com/mcp" }
+    "remote": {
+      "type": "streamable-http",
+      "url": "https://mcp.example.com/mcp",
+      "headers": { "Authorization": "Bearer …" }
+    }
   }
 }
 ```
 
-- `type` 必填：`stdio` / `streamable-http` / `sse`（旧协议）。
+- `type` 必填：`stdio` / `streamable-http`（`http` 同义）/ `sse`（旧协议）。HTTP 的字段
+  只有 `url` + `headers`；非回环必须 https，不许 userinfo / fragment。
 - stdio 的 `command` 是**单个 token**：裸命令名（`npx`、`uvx`，走 PATH）或
   `./` 开头的包内路径。**不能写 `${PLUGIN_ROOT}`**，不能带空格拼参数。
 - `args` / `env` 的值 / `cwd` 里可写 `${PLUGIN_ROOT}` / `${PLUGIN_DATA}`。

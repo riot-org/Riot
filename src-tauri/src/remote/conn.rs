@@ -48,8 +48,14 @@ const HARD_BACKLOG: usize = 20_000;
 
 /// 前端要听的全局事件（宿主事件总线上的名字）。加一个就在这里补一行 ——
 /// 桌面那边是前端 `listen(name)`，这边由宿主替它订总线再转成 Event 帧。
-/// schedule_*：定时任务面板；sessions_changed：侧栏会话/项目列表。
-const FORWARDED_EVENTS: &[&str] = &["schedule_run", "schedule_changed", "sessions_changed"];
+/// schedule_*：定时任务面板；sessions_changed：侧栏会话/项目列表；
+/// config_changed：config.json 被外部改过，重拉配置。
+const FORWARDED_EVENTS: &[&str] = &[
+    "schedule_run",
+    "schedule_changed",
+    "sessions_changed",
+    "config_changed",
+];
 
 enum Out {
     Msg(Message),

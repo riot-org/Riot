@@ -104,6 +104,14 @@ export default tseslint.config(
     },
   },
 
+  // 单测里的中文是测试数据（CJK 的 markdown、JSON 转义），不是界面文案。
+  {
+    files: ["src/**/*.test.ts"],
+    rules: {
+      "no-restricted-syntax": ["error", NO_TAURI_DYNAMIC_IMPORT],
+    },
+  },
+
   // Web Worker 里没有 window，globals 与主线程不同。
   {
     files: ["src/lib/*.worker.ts"],

@@ -122,6 +122,7 @@ export default {
   "tools.schedule.resume": "예약 작업 재개",
   "tools.schedule.delete": "예약 작업 삭제",
   "tools.schedule.manage": "예약 작업 관리",
+  "tools.reloadConfig": "앱 설정 다시 불러오기",
 
   // ── 도구 설명: 하위 agent ─────────────────────────────
   // {kind}는 explore / general-purpose 같은 식별자이며 번역하지 않습니다.

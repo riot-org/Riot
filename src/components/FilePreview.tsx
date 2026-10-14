@@ -23,11 +23,10 @@ import { useTimedFlag } from "../hooks/useTimedFlag";
 import { type Locale, useT } from "../i18n";
 import { basename, looksAbsPath, parentOf, relativeTo, tildify } from "../pathDisplay";
 import { Resizer } from "./chrome";
-// CodeView 组件本身很小可以直接进主 bundle；大头 highlight.js
+// CodeView 组件本身很小可以直接进主 bundle；编辑器（CodeMirror）
 // 在它内部按需加载。
 import CodeView, { CODE_EXTS } from "./CodeView";
 import { FileTree, type TreeTarget } from "./FileTree";
-import { FolderIcon } from "./icons";
 import { ProjectRootContext } from "./Markdown";
 // Markdown 用聊天同款 react-markdown（本来就在主 bundle）。
 // 为什么不用 file-viewer 的 md 管线：见 MarkdownView 头注释。
@@ -300,10 +299,9 @@ function loadTreeW(): number {
 }
 
 /**
- * 右侧抽屉里的预览面板：当前文件（操作行 + 渲染区）占满正文；项目
- * 文件树（见 FileTree）在预览时浮在右侧，不进文档流 —— 开合不挤正文、
- * 不重排渲染器。只有"文件"标签（active 为 null）时树才占一列，左边
- * 是一句占位。
+ * 右侧抽屉里的预览面板：项目文件树（见 FileTree）在左、当前文件（操作行
+ * + 渲染区）在右，两列并排。"文件"标签（active 为 null）时右边是一句
+ * 占位。
  *
  * 标签属于抽屉顶部的统一标签栏（见 Workbench）—— 每个文件是一个顶层
  * 工作台标签，和浏览器 / Git 改动平级。这里不再自带标签行，但仍然
@@ -361,10 +359,9 @@ export function FilePreviewPanel({
     if (active) openPath(active).catch(() => flashOpenErr(true));
   };
 
+  /** 树和正文同一级并排，不浮在正文上 —— 盖住的那一截正好是每行的开头。
+   *  代价是开合树时正文跟着重排（渲染器的 ResizeObserver 接得住）。 */
   const showTree = active === null || tree;
-  /** 正在看文件时树盖在正文上；只有"文件"标签才跟占位并排，否则
-   *  占位那一列会被挤没、正文也会跟着重排。 */
-  const overlayTree = active !== null && tree;
 
   return (
     <div
@@ -372,10 +369,19 @@ export function FilePreviewPanel({
       className="preview-panel"
       style={visible ? undefined : { display: "none" }}
     >
-      {/* 头部横跨整个面板（Codex 同款）：按钮贴面板最右缘，树栏从头部
-          下方开始。头部若只占编辑器那一列，按钮就夹在编辑器和树中间。 */}
+      {/* 头部横跨整个面板（Codex 同款），树栏从头部下方开始。树开关在
+          最左 —— 正好压在它管的那一栏上方；作用于当前文件的按钮贴右缘。 */}
       {active ? (
         <div className="preview-panel-head">
+          <button
+            type="button"
+            className={tree ? "icon on" : "icon"}
+            onClick={onToggleTree}
+            title={tree ? t("panels.filePreview.hideTree") : t("panels.filePreview.showTree")}
+            aria-pressed={tree}
+          >
+            <TreeIcon />
+          </button>
           <PathCrumbs path={active} root={root} />
           <span className="preview-panel-spacer" />
           {openErr ? (
@@ -397,21 +403,53 @@ export function FilePreviewPanel({
             onClick={() => void revealInFinder(active)}
             title={t("common.revealInFinder")}
           >
-            <FolderMarkIcon />
-          </button>
-          <button
-            type="button"
-            className={tree ? "icon on" : "icon"}
-            onClick={onToggleTree}
-            title={tree ? t("panels.filePreview.hideTree") : t("panels.filePreview.showTree")}
-            aria-pressed={tree}
-          >
-            <FolderIcon />
+            <RevealIcon />
           </button>
         </div>
       ) : null}
 
-      <div className={overlayTree ? "preview-split preview-split-overlay" : "preview-split"}>
+      <div className="preview-split">
+        {showTree ? (
+          <div className="file-tree-overlay" style={{ width: treeW }}>
+            <div className="file-tree-col">
+              <FileTree
+                sessionId={sessionId}
+                root={root}
+                selected={active}
+                refreshKey={refreshKey}
+                onOpen={onOpen}
+                onContextMenu={onTreeContextMenu}
+                onPickFromDisk={onPickFromDisk}
+                filterFocus={filterFocus}
+              />
+            </div>
+            <Resizer
+              axis="x"
+              onStart={() => {
+                dragFrom.current = treeW;
+                dragLive.current = treeW;
+              }}
+              onDelta={(d) => {
+                // 拖的是树栏的右缘：往右（正位移）变宽。最多占面板六成，
+                // 右边总得给正文留一截。
+                const max = Math.max(
+                  TREE_W.min,
+                  (panelRef.current?.clientWidth ?? 600) * 0.6,
+                );
+                const w = Math.min(Math.max(dragFrom.current + d, TREE_W.min), max);
+                dragLive.current = w;
+                setTreeW(w);
+              }}
+              onEnd={() =>
+                localStorage.setItem(TREE_W_KEY, String(Math.round(dragLive.current)))
+              }
+              onReset={() => {
+                setTreeW(TREE_W.def);
+                localStorage.setItem(TREE_W_KEY, String(TREE_W.def));
+              }}
+            />
+          </div>
+        ) : null}
         <div className="preview-main">
           {active ? null : (
             <div className="preview-panel-state">{t("panels.filePreview.pickOne")}</div>
@@ -427,48 +465,6 @@ export function FilePreviewPanel({
             <PreviewBody key={p} path={p} visible={p === active} rev={refreshKey} />
           ))}
         </div>
-
-        {showTree ? (
-          <div className="file-tree-overlay" style={{ width: treeW }}>
-            <Resizer
-              axis="x"
-              onStart={() => {
-                dragFrom.current = treeW;
-                dragLive.current = treeW;
-              }}
-              onDelta={(d) => {
-                // 拖的是树栏的左缘：往左（负位移）变宽。浮层最多盖住
-                // 面板六成，左边总得露出一截正文。
-                const max = Math.max(
-                  TREE_W.min,
-                  (panelRef.current?.clientWidth ?? 600) * 0.6,
-                );
-                const w = Math.min(Math.max(dragFrom.current - d, TREE_W.min), max);
-                dragLive.current = w;
-                setTreeW(w);
-              }}
-              onEnd={() =>
-                localStorage.setItem(TREE_W_KEY, String(Math.round(dragLive.current)))
-              }
-              onReset={() => {
-                setTreeW(TREE_W.def);
-                localStorage.setItem(TREE_W_KEY, String(TREE_W.def));
-              }}
-            />
-            <div className="file-tree-col">
-              <FileTree
-                sessionId={sessionId}
-                root={root}
-                selected={active}
-                refreshKey={refreshKey}
-                onOpen={onOpen}
-                onContextMenu={onTreeContextMenu}
-                onPickFromDisk={onPickFromDisk}
-                filterFocus={filterFocus}
-              />
-            </div>
-          </div>
-        ) : null}
       </div>
     </div>
   );
@@ -570,8 +566,8 @@ function PreviewBody({ path, visible, rev }: { path: string; visible: boolean; r
         MD_EXTS.has(extOf(path)) ? (
           <MarkdownView key={path} buf={buf} path={path} />
         ) : CODE_EXTS.has(extOf(path)) ? (
-          // 代码走自制视图：深色、highlight.js，和聊天代码块同一套配色。
-          <CodeView key={path} buf={buf} ext={extOf(path)} name={basename(path)} />
+          // 代码走 CodeView：CodeMirror 编辑器，能改能存，配色和聊天代码块同一套。
+          <CodeView key={path} buf={buf} name={basename(path)} path={path} />
         ) : PREVIEWABLE_EXTS.has(extOf(path)) ? (
           <Suspense
             fallback={
@@ -591,7 +587,7 @@ function PreviewBody({ path, visible, rev }: { path: string; visible: boolean; r
         ) : looksLikeText(buf) ? (
           // 名单外的扩展名（.env、Makefile、.lock、无后缀脚本）：像文本就
           // 当纯文本看。文件名认得出的（Makefile、Dockerfile）照样高亮。
-          <CodeView key={path} buf={buf} ext={extOf(path)} name={basename(path)} />
+          <CodeView key={path} buf={buf} name={basename(path)} path={path} />
         ) : (
           <div className="preview-panel-state">
             <p>{t("panels.filePreview.binary")}</p>
@@ -712,17 +708,44 @@ function LaunchIcon() {
   );
 }
 
-/** 在访达中显示：文件夹上一个定位点。 */
-function FolderMarkIcon() {
+/**
+ * 在访达中显示：文件夹 + 放大镜（"在所在的文件夹里找到它"）。早先是文件夹
+ * 里一个圆点，读起来像相机。
+ */
+function RevealIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
       <path
-        d="M1.8 4.2a1.4 1.4 0 0 1 1.4-1.4h3l1.4 1.6h5.2a1.4 1.4 0 0 1 1.4 1.4v6a1.4 1.4 0 0 1-1.4 1.4H3.2a1.4 1.4 0 0 1-1.4-1.4v-7.6z"
+        d="M14.5 7.5V5.5a1 1 0 00-1-1h-6L6 3H2.5a1 1 0 00-1 1v8a1 1 0 001 1h4.5"
         stroke="currentColor"
-        strokeWidth="1.3"
+        strokeWidth="1.2"
+        strokeLinecap="round"
         strokeLinejoin="round"
       />
-      <circle cx="8" cy="8.9" r="1.6" stroke="currentColor" strokeWidth="1.3" />
+      <circle cx="11" cy="11" r="2.3" stroke="currentColor" strokeWidth="1.2" />
+      <path d="M12.7 12.7l1.8 1.8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/**
+ * 文件树开关：父项一行、两条折线拉到缩进的子项 —— 画的就是"树"。
+ *
+ * 不用文件夹：这一块已经有"从磁盘打开"（翻开的文件夹）和"在访达中显示"
+ * （文件夹 + 放大镜），三个文件夹并排分不清谁是谁。也不用侧栏开关那个
+ * "矩形 + 竖线"：窗口左上角的应用侧栏开关就是它，同一个图标管两样东西。
+ */
+function TreeIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
+      <path
+        d="M7 3.5h7.5M9 8h5.5M9 12.5h5.5M2.5 3.5v2.5a2 2 0 002 2H7M2.5 6v4.5a2 2 0 002 2H7"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx="2.5" cy="3.5" r=".4" fill="currentColor" />
     </svg>
   );
 }

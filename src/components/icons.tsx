@@ -1,12 +1,23 @@
 /** 内联 SVG 图标。从 App.tsx 拆出 —— 纯展示，无状态。 */
 
 
+/*
+ * 布局开关（侧栏 / 右侧工作台）：矩形 + 一道分割线，线在哪边就是哪块
+ * 面板（VS Code、Cursor、Codex 同一套画法）。终端开关不在这一家，用的是
+ * 提示符（见 TerminalIcon）。
+ *
+ * `on` 时把那块面板填实（VS Code 的 layout-*-off / layout-* 同款）：开没开
+ * 看图标本身就知道，不只靠按钮底色 —— 底色在某些主题和悬停态下几乎看
+ * 不出差别。
+ */
+
 /** 侧边栏开关：矩形 + 左侧一道竖线。 */
-export function SidebarToggleIcon() {
+export function SidebarToggleIcon({ on = false }: { on?: boolean }) {
   return (
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden>
       <rect x="1.5" y="2.5" width="13" height="11" rx="2" stroke="currentColor" strokeWidth="1.3" />
       <path d="M6 2.5v11" stroke="currentColor" strokeWidth="1.3" />
+      {on ? <path d="M6 2.5H3.5a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2H6z" fill="currentColor" /> : null}
     </svg>
   );
 }
@@ -36,37 +47,59 @@ export function BrowserIcon() {
   );
 }
 
-/** 底部终端开关：矩形 + 底部一道横线。 */
-export function PanelBottomIcon() {
+/**
+ * 终端：提示符 `>_`。顶栏的终端开关和终端面板的标签共用这一个形状。
+ *
+ * 顶栏开关早先是"矩形 + 底部一道横线"（布局开关那一家）。那只说了"底下
+ * 有块面板"，没说是什么；提示符一眼就是终端。
+ */
+export function TerminalIcon({ size = 15 }: { size?: number }) {
   return (
-    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden>
-      <rect x="1.5" y="2.5" width="13" height="11" rx="2" stroke="currentColor" strokeWidth="1.3" />
-      <path d="M1.5 9.5h13" stroke="currentColor" strokeWidth="1.3" />
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden>
+      <path
+        d="M3 4.5l3.5 3.5L3 11.5M8.5 12H13"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
 
 /** 右侧工作台开关：矩形 + 右侧一道竖线。 */
-export function PanelRightIcon() {
+export function PanelRightIcon({ on = false }: { on?: boolean }) {
   return (
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden>
       <rect x="1.5" y="2.5" width="13" height="11" rx="2" stroke="currentColor" strokeWidth="1.3" />
       <path d="M10.5 2.5v11" stroke="currentColor" strokeWidth="1.3" />
+      {on ? <path d="M10.5 2.5h2a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-2z" fill="currentColor" /> : null}
     </svg>
   );
 }
 
-/** 改动一览：上面一个加号、下面一道减号 —— diff 的通用符号（octicon 同款）。 */
+/**
+ * Git 改动：折角文档里一个加号、一个减号（GitHub 的 file-diff 同款）。
+ * 外形和 FileDocIcon 同一个文档轮廓。
+ *
+ * 早先是光秃秃的「±」三笔：读起来像打出来的数学符号，而且和旁边的浏览器
+ * （整圆）、文件（整个轮廓）摆一列时分量轻得多，空落落的。
+ */
 export function DiffIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden>
       <path
-        d="M8 2.5v7M4.5 6h7"
+        d="M9.2 1.8H4.5a1 1 0 0 0-1 1v10.4a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1V5.1L9.2 1.8z"
         stroke="currentColor"
-        strokeWidth="1.4"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M8 5.8v3.4M6.3 7.5h3.4M6.3 11.3h3.4"
+        stroke="currentColor"
+        strokeWidth="1.3"
         strokeLinecap="round"
       />
-      <path d="M4.5 13h7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
     </svg>
   );
 }
@@ -311,6 +344,51 @@ export function PlanModeIcon() {
         <path d="M2.6 8h.01M6 8h7.4" />
         <path d="M2.6 11.6h.01M6 11.6h7.4" />
       </g>
+    </svg>
+  );
+}
+
+/** 下拉菜单选中项右侧的勾（Cursor 同款）。未选中时占位但不可见，保持各行对齐。 */
+export function MenuPickCheck({ active }: { active: boolean }) {
+  return (
+    <svg
+      className={active ? "menu-pick-check" : "menu-pick-check menu-pick-check--empty"}
+      width="12"
+      height="12"
+      viewBox="0 0 12 12"
+      aria-hidden
+    >
+      {active ? (
+        <path
+          d="M2.25 6.1 4.65 8.5 9.75 3.5"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      ) : null}
+    </svg>
+  );
+}
+
+/**
+ * 子 agent（子任务）。工作台标签、回答里的子任务链接共用这一枚，
+ * 看到它就知道"这是一个子 agent"。不用 ⑂ 字形：主字体里没有这个字符，
+ * 回退字体的笔画粗细和基线都和界面对不上。
+ */
+export function ForkIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden>
+      <circle cx="4" cy="3.5" r="1.7" stroke="currentColor" strokeWidth="1.3" />
+      <circle cx="12" cy="3.5" r="1.7" stroke="currentColor" strokeWidth="1.3" />
+      <circle cx="8" cy="12.5" r="1.7" stroke="currentColor" strokeWidth="1.3" />
+      <path
+        d="M4 5.2v1.3c0 1.2.8 2 2 2h4c1.2 0 2-.8 2-2V5.2M8 8.5v2.3"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+      />
     </svg>
   );
 }

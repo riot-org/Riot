@@ -460,6 +460,14 @@ struct Wake {
     cancel: CancellationToken,
 }
 
+/// 轮中重载 MCP 后新连上的工具清单（`ReloadConfig` 填，轮末取走）。
+///
+/// 工具清单在开轮时定死（前缀缓存、注册表都靠它稳定），轮中新连上的
+/// MCP 工具这一轮调不到。与其让模型干等用户再发一句，不如这一轮收尾后
+/// 用新清单就地唤起下一轮（见 [`Session::settle_turn`]）。存的是重载后
+/// hub 的**完整** MCP 工具清单，唤醒轮拿它整体替换上一轮的 MCP 部分。
+pub type McpRefresh = Arc<std::sync::Mutex<Option<Vec<Arc<dyn Tool>>>>>;
+
 /// 自我分叉的种子：父这一轮的请求形状 + 造调度器要的零件。
 ///
 /// 分叉出的子 agent 要和父**同 system、同工具清单**（前缀缓存命中的前提，
@@ -654,6 +662,8 @@ pub struct Session {
     tasks: Arc<crate::tasks::BackgroundTasks>,
     /// 上一轮的配置，唤醒轮沿用。见 [`LastTurn`]。
     last_turn: Mutex<Option<LastTurn>>,
+    /// 轮中重载出的新 MCP 工具，轮末据此唤起续轮。见 [`McpRefresh`]。
+    mcp_refresh: McpRefresh,
     /// 本轮的分叉种子。见 [`ForkSeed`]。
     fork_seed: Mutex<Option<ForkSeed>>,
     /// 还没送进历史的完成通知：到达时会话还没跑过任何一轮（没有配置可
@@ -744,6 +754,51 @@ fn leftover_notices_wake(
         result,
         Ok(Some(riot_protocol::event::TerminalReason::Completed))
     )
+}
+
+fn is_mcp_tool(name: &str) -> bool {
+    name.starts_with("mcp__")
+}
+
+/// 新 MCP 工具续轮的开场通知：告诉模型哪些服务器的工具到了、接着干。
+///
+/// 只列服务器不列工具：一个服务器几十个工具，全列出来就是把延迟加载
+/// 省下的上下文又花回去 —— 模型要用时 ToolSearch 按服务器名就能捞到。
+/// 合成消息、只带 system reminder，界面不画成用户气泡。
+fn mcp_reloaded_notice(
+    id: MessageId,
+    before: &[Arc<dyn Tool>],
+    fresh: &[Arc<dyn Tool>],
+) -> Message {
+    let old: std::collections::HashSet<&str> = before.iter().map(|t| t.name()).collect();
+    let mut servers: Vec<&str> = fresh
+        .iter()
+        .map(|t| t.name())
+        .filter(|n| !old.contains(n))
+        .filter_map(|n| n.strip_prefix("mcp__")?.split("__").next())
+        .collect();
+    servers.sort_unstable();
+    servers.dedup();
+    let text = format!(
+        "MCP servers were reloaded during the previous turn. Their tools are available from \
+         this turn on (newly connected: {}; load them with ToolSearch, e.g. query \"+<server> \
+         ...\", if they are deferred). This turn was started automatically — the user has not \
+         said anything new. Pick up the task you were working on before the reload, using the \
+         new tools, without asking the user to repeat their request.",
+        if servers.is_empty() {
+            "(see tool list)".to_owned()
+        } else {
+            servers.join(", ")
+        },
+    );
+    Message::User {
+        id,
+        content: vec![UserContent::Attachment(Attachment::SystemReminder { text })],
+        meta: MessageMeta {
+            synthetic: true,
+            ..Default::default()
+        },
+    }
 }
 
 /// 重新生成的截断点：指定助手消息前面最近一条用户提示的下标。
@@ -859,6 +914,7 @@ impl Session {
             env_seen: Mutex::new(None),
             env_band: Mutex::new(0),
             last_turn: Mutex::new(None),
+            mcp_refresh: Arc::default(),
             fork_seed: Mutex::new(None),
             pending_notices: std::sync::Mutex::new(Vec::new()),
             closing: AtomicBool::new(false),
@@ -922,6 +978,7 @@ impl Session {
             env_seen: Mutex::new(None),
             env_band: Mutex::new(0),
             last_turn: Mutex::new(None),
+            mcp_refresh: Arc::default(),
             fork_seed: Mutex::new(None),
             pending_notices: std::sync::Mutex::new(Vec::new()),
             closing: AtomicBool::new(false),
@@ -1308,6 +1365,11 @@ impl Session {
     /// 后台任务快照，随 session.resume 回给界面。
     pub fn tasks_snapshot(&self) -> Vec<riot_protocol::task::BackgroundTaskView> {
         self.tasks.snapshot()
+    }
+
+    /// 给 `ReloadConfig` 的槽：它重载出新 MCP 工具时填进来。
+    pub fn mcp_refresh(&self) -> McpRefresh {
+        Arc::clone(&self.mcp_refresh)
     }
 
     /// 一个后台子 agent 跑完了，把通知送进对话。
@@ -2424,7 +2486,7 @@ impl Session {
             tracing::info!(
                 session = %self.id.as_str(),
                 count = wake.notices.len(),
-                "轮次收场时收到后台任务通知，就地唤起新的一轮"
+                "轮次收场时有通知或新 MCP 工具，就地唤起新的一轮"
             );
             self.spawn_wake(wake, sink);
         }
@@ -2463,6 +2525,15 @@ impl Session {
         &self,
         result: &Result<Option<riot_protocol::event::TerminalReason>, UiError>,
     ) -> Option<Wake> {
+        // 轮中重载出了新 MCP 工具：槽无论如何都清掉（中断 / 出错的轮次
+        // 不续，理由同 leftover_notices_wake —— 用户刚按了停止，冒出一轮
+        // 续接就是在抢话），正常说完的才用新清单续一轮。
+        let refreshed = self
+            .mcp_refresh
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+            .filter(|_| leftover_notices_wake(result));
         let mut notices = Vec::new();
         let (mut interjections, mut nudges) = (0usize, 0usize);
         let wake = {
@@ -2476,15 +2547,25 @@ impl Session {
                 }
             }
             let mut wake = None;
-            if !notices.is_empty()
-                && leftover_notices_wake(result)
+            if (refreshed.is_some() || (!notices.is_empty() && leftover_notices_wake(result)))
                 && !self.closing.load(Ordering::Relaxed)
-                && let Some(last) = self.last_turn.lock().await.clone()
+                && let Some(mut last) = self.last_turn.lock().await.clone()
             {
+                let mut wake_notices = std::mem::take(&mut notices);
+                if let Some(fresh) = refreshed {
+                    wake_notices.push(mcp_reloaded_notice(
+                        MessageId::from_raw(self.ids.next_id("msg")),
+                        &last.caps.extra_tools,
+                        &fresh,
+                    ));
+                    // 只换 MCP 那部分；ReloadConfig、Skill 这些照旧。
+                    last.caps.extra_tools.retain(|t| !is_mcp_tool(t.name()));
+                    last.caps.extra_tools.extend(fresh);
+                }
                 let cancel = CancellationToken::new();
                 *g = Some(cancel.clone());
                 wake = Some(Wake {
-                    notices: std::mem::take(&mut notices),
+                    notices: wake_notices,
                     last,
                     cancel,
                 });
@@ -6723,6 +6804,115 @@ mod tests {
         let wake = s.settle_turn(&Ok(Some(TerminalReason::Completed))).await;
         assert!(wake.is_none());
         assert!(s.running.lock().await.is_none());
+    }
+
+    /// 只有名字的工具，给 MCP 续轮的测试凑清单用。
+    struct NamedTool(&'static str);
+
+    #[async_trait::async_trait]
+    impl Tool for NamedTool {
+        fn name(&self) -> &str {
+            self.0
+        }
+        fn input_schema(&self) -> schemars::Schema {
+            schemars::json_schema!({ "type": "object" })
+        }
+        fn prompt(&self, _ctx: &PromptContext) -> String {
+            String::new()
+        }
+        fn describe(&self, _input: &serde_json::Value) -> riot_protocol::text::UiText {
+            riot_protocol::ui_text!("tools.reloadConfig")
+        }
+        async fn call(
+            &self,
+            _input: serde_json::Value,
+            _ctx: riot_protocol::tool::ToolContext,
+        ) -> riot_protocol::tool::ToolOutcome {
+            riot_protocol::tool::ToolOutcome::ok_text("")
+        }
+    }
+
+    /// 轮中 ReloadConfig 连上了新 MCP 服务器：正常说完后就地续一轮，
+    /// 唤醒轮的工具清单换成新的 MCP 清单（非 MCP 的照旧），开场通知点名
+    /// 新服务器。这就是"用户不用再发一句继续"。
+    #[tokio::test]
+    async fn 轮中重载出新mcp工具_正常收场后用新清单续轮() {
+        use riot_protocol::event::TerminalReason;
+        let s = Arc::new(Session::new(
+            SessionId::from_raw("s1"),
+            std::path::PathBuf::from("/tmp"),
+            None,
+        ));
+        let mut caps = test_caps();
+        caps.extra_tools = vec![
+            Arc::new(NamedTool("mcp__old__q")),
+            Arc::new(NamedTool("ReloadConfig")),
+        ];
+        *s.last_turn.lock().await = Some(LastTurn {
+            model: test_model(),
+            caps,
+            limits: test_limits(),
+        });
+        *s.running.lock().await = Some(CancellationToken::new());
+        *s.mcp_refresh().lock().unwrap() = Some(vec![
+            Arc::new(NamedTool("mcp__old__q")),
+            Arc::new(NamedTool("mcp__fuyao-a-share__quote")),
+            Arc::new(NamedTool("mcp__fuyao-a-share__kline")),
+        ]);
+
+        let wake = s
+            .settle_turn(&Ok(Some(TerminalReason::Completed)))
+            .await
+            .expect("重载出新工具且正常说完，要续轮");
+        let names: Vec<&str> = wake.last.caps.extra_tools.iter().map(|t| t.name()).collect();
+        assert_eq!(
+            names,
+            [
+                "ReloadConfig",
+                "mcp__old__q",
+                "mcp__fuyao-a-share__quote",
+                "mcp__fuyao-a-share__kline"
+            ]
+        );
+        assert_eq!(wake.notices.len(), 1);
+        let Message::User { content, meta, .. } = &wake.notices[0] else {
+            panic!("开场通知是 user 消息");
+        };
+        assert!(meta.synthetic && meta.task_notice.is_none());
+        assert!(
+            matches!(&content[..], [UserContent::Attachment(Attachment::SystemReminder { text })]
+                if text.contains("fuyao-a-share") && !text.contains("old")),
+            "只点名新连上的服务器：{content:?}"
+        );
+        assert!(s.mcp_refresh().lock().unwrap().is_none(), "槽要清空");
+        *s.running.lock().await = None;
+    }
+
+    /// 同样重载出了新工具，但轮次被用户停下：不续轮，槽也清掉（下一轮
+    /// 开轮时本来就会现拉 MCP 清单）。
+    #[tokio::test]
+    async fn 被停止的轮次不因新mcp工具续轮() {
+        use riot_protocol::event::{AbortSource, TerminalReason};
+        let s = Arc::new(Session::new(
+            SessionId::from_raw("s1"),
+            std::path::PathBuf::from("/tmp"),
+            None,
+        ));
+        *s.last_turn.lock().await = Some(LastTurn {
+            model: test_model(),
+            caps: test_caps(),
+            limits: test_limits(),
+        });
+        *s.running.lock().await = Some(CancellationToken::new());
+        *s.mcp_refresh().lock().unwrap() = Some(vec![Arc::new(NamedTool("mcp__a__x"))]);
+        let wake = s
+            .settle_turn(&Ok(Some(TerminalReason::Aborted {
+                by: AbortSource::User,
+            })))
+            .await;
+        assert!(wake.is_none());
+        assert!(s.running.lock().await.is_none());
+        assert!(s.mcp_refresh().lock().unwrap().is_none());
     }
 
     /// 用户按停止只停前台，后台任务不受影响。

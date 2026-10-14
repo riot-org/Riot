@@ -271,7 +271,7 @@ export default {
   "settings.permission.clamp.max": "最大値 {value} に調整しました",
   "settings.permission.clamp.min": "最小値 {value} に調整しました",
   "settings.permission.timeout": "承認の待ち時間",
-  "settings.permission.timeout.desc": "確認ダイアログに応答がないまま何秒で諦めるか。タイムアウトは拒否として扱います。範囲 {min}–{max} 秒。",
+  "settings.permission.timeout.desc": "確認ダイアログに応答がないまま何秒で諦めるか。タイムアウトは拒否として扱います。範囲 {min}–{max} 秒。モデルからの質問はこの対象外で、回答するまで待ち続けます。",
   "settings.permission.timeout.aria": "承認の待ち時間（秒）",
   "settings.permission.unit.seconds": "秒",
   "settings.permission.turns": "1 ターンの最大ステップ数",

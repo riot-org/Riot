@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use std::path::PathBuf;
 
-use riot_protocol::browser::BLANK_PAGE;
+use riot_protocol::browser::{BLANK_PAGE, Nav};
 use riot_protocol::permission::{DecisionReason, PermissionContext, PermissionResult};
 use riot_protocol::text::UiText;
 use riot_protocol::tool::{PromptContext, Tool, ToolContext, ToolOutcome};
@@ -156,13 +156,16 @@ impl Tool for ShowBrowser {
     fn prompt(&self, _ctx: &PromptContext) -> String {
         "把内置浏览器面板打开给用户，让他看到你正在操作的这一页。\n\
          \n\
+         用户一开始就要看的页，直接在 BrowserNavigate 里填 `show: true`，不用再调\
+         这个。这个工具是给「先自己用 `show: false` 打开、后来才决定给他看」的。\n\
+         \n\
          ## 什么时候用\n\
-         - 用户让你「打开看看 / 跑起来给我看 / 演示一下」\n\
          - 你改完前端、自己验过了，想让他直接看到效果\n\
          - 接下来几步要在页面上操作，他跟着看才知道你在做什么\n\
          \n\
          ## 什么时候不要用\n\
-         别的 Browser* 工具**不会**自动把面板弹出来，弹不弹由你判断。抢用户\
+         除了 `show: true` 的 BrowserNavigate，别的 Browser* 工具**不会**把面板\
+         弹出来，弹不弹由你判断。抢用户\
          的屏幕是一件打扰的事 —— 纯粹是你自己在查（读结构、抓包、扫描、\
          对比多个标签页），就不要调它。一段工作里调一次就够，面板会一直开着。\n\
          \n\
@@ -210,6 +213,9 @@ impl Tool for ShowBrowser {
                 "浏览器里还没有打开任何页面。先用 BrowserNavigate 打开地址，再把它展示给用户。",
             );
         }
+        // 这一页归用户了，轮末别收掉。失败无所谓 —— 上面刚问到了地址，
+        // 浏览器是活的；真在这一刻崩了，也就没有页可收。
+        let _ = ctx.browser.browse(Nav::KeepTab).await;
         ToolOutcome::ok_text(format!(
             "已经把浏览器面板打开给用户，他现在看到的是 {url}。\
              这条结果不包含页面内容 —— 你自己要看用 BrowserSnapshot 或 BrowserView。"
@@ -346,8 +352,13 @@ mod tests {
             ..FakeBrowser::default()
         });
         let out = ShowBrowser
-            .call(serde_json::json!({}), browser_ctx(browser))
+            .call(serde_json::json!({}), browser_ctx(browser.clone()))
             .await;
+        assert_eq!(
+            *browser.calls.lock().unwrap(),
+            ["browse KeepTab"],
+            "摆给用户看的页要占住，轮末不能被当临时页收掉"
+        );
         let ToolOutcome::Ok { model_content, .. } = out else {
             panic!("该成功");
         };

@@ -128,6 +128,7 @@ export default {
   "tools.schedule.resume": "恢复定时任务",
   "tools.schedule.delete": "删除定时任务",
   "tools.schedule.manage": "管理定时任务",
+  "tools.reloadConfig": "重新读入应用配置",
 
   // ── 工具描述：子 agent ───────────────────────────────
   // {kind} 是 explore / general-purpose 这类标识，不翻译。

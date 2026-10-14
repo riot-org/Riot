@@ -384,6 +384,13 @@ impl SessionManager {
                 .unwrap_or_else(|| Arc::new(riot_protocol::permission::NoClassifier));
 
         let mut extra_tools = self.mcp.tools().await;
+        let known_mcp = extra_tools.iter().map(|t| t.name().to_owned()).collect();
+        extra_tools.push(Arc::new(crate::reload_config::ReloadConfigTool::new(
+            Arc::clone(&self.bridge),
+            Arc::clone(&self.mcp),
+            known_mcp,
+            session.mcp_refresh(),
+        )));
         let plugins = session.load_plugins().await;
         let skills = crate::skills::discover(&session.cwd, &plugins);
         let model_cards = skills.model_cards();

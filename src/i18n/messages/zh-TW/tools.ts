@@ -123,6 +123,7 @@ export default {
   "tools.schedule.resume": "恢復排程任務",
   "tools.schedule.delete": "刪除排程任務",
   "tools.schedule.manage": "管理排程任務",
+  "tools.reloadConfig": "重新讀入應用程式設定",
 
   // ── 工具描述：子 agent ───────────────────────────────
   // {kind} 是 explore / general-purpose 這類標識，不翻譯。

@@ -18,12 +18,7 @@ import {
   encodePlainForComposer,
   encodeRefForComposer,
   getConfig,
-  type ImageInput,
-  isHostError,
   listSessions,
-  notify,
-  type Nudge,
-  renderUiError,
   type PermissionMode,
   openInBrowser,
   pickFiles,
@@ -34,8 +29,6 @@ import {
   revealInFinder,
   scheduleAckMissed,
   scheduleDelete,
-  scheduleList,
-  scheduleMissed,
   scheduleRunNow,
   scheduleSetEnabled,
   type ScheduledTask,
@@ -43,17 +36,15 @@ import {
   setConfig as saveConfig,
   setSessionModel,
   setWindowTitle,
-  subscribeFullscreen,
-  subscribeScheduleChanges,
-  subscribeScheduleRuns,
+  subscribeConfigChanges,
   subscribeSessionsChanges,
 } from "./bridge";
 import { BrowserPanel } from "./components/BrowserPanel";
 import { GitChangesPanel } from "./components/GitChangesPanel";
-import { SessionChangesBar } from "./components/SessionChangesBar";
 import { ScopePanel } from "./components/ScopePanel";
 import { SessionSettings } from "./components/SessionSettings";
 import { ConfirmDialog, type ConfirmRequest } from "./components/ConfirmDialog";
+import { hasUnsaved } from "./lib/unsavedEdits";
 import { useDirectoryPicker } from "./components/DirPicker";
 import {
   FilePreviewPanel,
@@ -64,38 +55,23 @@ import {
 import type { TreeTarget } from "./components/FileTree";
 import { MissingProjectDialog } from "./components/MissingProjectDialog";
 import { ProjectRootContext } from "./components/Markdown";
-import {
-  PermissionDialog,
-} from "./components/PermissionDialog";
 import { PlanPanel } from "./components/PlanPanel";
 import { Settings } from "./components/Settings";
 import { SubagentPanel } from "./components/SubagentPanel";
 import { closeSessionTerminals, TerminalPanel } from "./components/TerminalPanel";
-import { hasActiveTodos, TodoPanel } from "./components/TodoPanel";
-import {
-  forgetSession,
-  thinkingClock,
-  useSession,
-  waitStartedAt,
-} from "./hooks/useSession";
+import { forgetSession } from "./hooks/useSession";
 import { useAppUpdate } from "./hooks/useAppUpdate";
+import { usePanelLayout } from "./hooks/usePanelLayout";
+import { useSchedules } from "./hooks/useSchedules";
+import { useSessionRecency } from "./hooks/useSessionRecency";
 import { useBrowserPanel } from "./hooks/useBrowserPanel";
-import { isMobileNow, useIsMobile } from "./hooks/useIsMobile";
-import { t, useT } from "./i18n";
-import {
-  latestPlan,
-  planTodos,
-  type PlanState,
-  samePlan,
-  sameTodos,
-  SWITCH_MODE_TOOL,
-  subscribePlanOpen,
-} from "./lib/plan";
+import { useT } from "./i18n";
+import { type PlanState, samePlan, sameTodos, subscribePlanOpen } from "./lib/plan";
 import { newPresetId } from "./lib/prompts";
 import { inheritedSampling } from "./lib/sampling";
 import { subscribeSessionOpen } from "./lib/sessionLink";
-import { SubagentsContext, subscribeSubagentOpen } from "./lib/subagentLink";
-import { Transcript, transcriptView } from "./components/Transcript";
+import { subscribeSubagentOpen } from "./lib/subagentLink";
+import { transcriptView } from "./components/Transcript";
 import {
   ContextMenu,
   type MenuState,
@@ -120,12 +96,26 @@ import {
 import { Sidebar } from "./components/Sidebar";
 import { SlidePanel, usePresence } from "./components/SlidePanel";
 import { Welcome } from "./components/Welcome";
-import { Composer, type PermissionPick, forgetComposerSession } from "./components/Composer";
-import {
-  FolderIcon,
-  RiotMark,
-} from "./components/icons";
+import { type PermissionPick, forgetComposerSession } from "./components/Composer";
 import { asDirRef, basename, looksAbsPath } from "./pathDisplay";
+import {
+  DRAWER_MIN,
+  LS,
+  SCHED_DETAIL,
+  SIDEBAR,
+  TERM,
+  clamp,
+  drawerDefault,
+  rightPanelMax,
+  savePx,
+} from "./lib/layout";
+import {
+  isMissingProjectError,
+  patchApplied,
+  sameSet,
+  sessionListEq,
+} from "./lib/sessionList";
+import { Chat } from "./components/Chat";
 
 /**
  * 布局照着 Codex 桌面端：左侧按项目分组的会话列表（可拖宽、可收起），
@@ -138,150 +128,8 @@ import { asDirRef, basename, looksAbsPath } from "./pathDisplay";
  * 目录，之后永不改变。多项目并行时谁也不影响谁；"换了目录代码还写进
  * 旧目录"那类 bug 在这个模型下没有生存空间。
  */
-/* ── 布局尺寸 ───────────────────────────────── */
-
-/** 布局尺寸的持久化键。存 localStorage —— 纯 UI 状态，不值得进宿主配置。 */
-const LS = {
-  sidebar: "riot.layout.sidebar",
-  sidebarOpen: "riot.layout.sidebarOpen",
-  drawer: "riot.layout.drawer",
-  term: "riot.layout.term",
-  schedDetail: "riot.layout.schedDetail",
-  recency: "riot.session.recency",
-};
-
-/** 侧栏按「最近聊过」排。纯 UI 顺序，不进宿主索引。 */
-function loadRecency(): Record<string, number> {
-  try {
-    const raw = localStorage.getItem(LS.recency);
-    if (!raw) return {};
-    const v: unknown = JSON.parse(raw);
-    if (!v || typeof v !== "object") return {};
-    const out: Record<string, number> = {};
-    for (const [k, n] of Object.entries(v as Record<string, unknown>)) {
-      if (typeof n === "number" && Number.isFinite(n)) out[k] = n;
-    }
-    return out;
-  } catch {
-    return {};
-  }
-}
-
-
-
 /** 同时保活的会话树上限。切走不卸 DOM，切回才不是白屏。 */
 const KEEP_CHATS = 4;
-
-const SIDEBAR = { def: 280, min: 180, max: 420 };
-/** 抽屉窄过这个值页面就没法看了，浏览器面板自己也有同样的下限。 */
-const DRAWER_MIN = 320;
-const TERM = { def: 260, min: 110 };
-/** 定时任务详情（占用系统右侧栏的位置，宽度独立于工作台抽屉）。 */
-const SCHED_DETAIL = { def: 612, min: 500, max: 1008 };
-/** 主区挤到底还要留的宽度。跟 .main 的 min-width 是同一个数。 */
-const MAIN_MIN = 280;
-
-/** 抽屉的默认宽度跟着窗口走 —— 固定像素在小窗口上会把对话挤没。 */
-const drawerDefault = () => Math.round(window.innerWidth * 0.42);
-
-/**
- * 右侧面板（工作台抽屉 / 任务详情）能拖到多宽。
- *
- * `[约束]` 上限必须按剩余空间算，不能只取窗口的一个比例。面板壳是
- * flex-shrink:0（开合动画得靠固定尺寸撑着），拖过头它不会被挤扁，而是把
- * 右缘顶出窗口、再被 .shell 的 overflow:hidden 裁掉 —— 表现就是面板跑到
- * 屏幕外面去了。所以得减掉左边两列真正占住的位置：侧栏（收起时为 0）
- * 加主区的下限。窗口窄到连 min 都塞不下时以 min 为准，让位给可用性。
- */
-function rightPanelMax(sidebar: number, min: number): number {
-  return Math.max(min, window.innerWidth - sidebar - MAIN_MIN);
-}
-
-function loadPx(key: string, fallback: number): number {
-  const v = Number(localStorage.getItem(key));
-  return Number.isFinite(v) && v > 0 ? v : fallback;
-}
-
-function savePx(key: string, v: number) {
-  localStorage.setItem(key, String(Math.round(v)));
-}
-
-function clamp(v: number, lo: number, hi: number): number {
-  return Math.min(Math.max(v, lo), hi);
-}
-
-/** 宿主把缺目录收成 `host.project.missing`；路径解析不了的也当同一类处理。按键判，不比文案。 */
-function isMissingProjectError(e: unknown): boolean {
-  return isHostError(e) && (e.is("host.project.missing") || e.is("host.fence.unresolvable"));
-}
-
-/* ── 会话列表的相等判定 ─────────────────────── */
-
-function samplingEq(a: SessionInfo["sampling"], b: SessionInfo["sampling"]): boolean {
-  return (
-    a.temperature === b.temperature &&
-    a.topP === b.topP &&
-    a.topK === b.topK &&
-    a.maxOutputTokens === b.maxOutputTokens
-  );
-}
-
-function thinkingEq(a: SessionInfo["thinking"], b: SessionInfo["thinking"]): boolean {
-  if (a.mode !== b.mode) return false;
-  // fixed 之外的几档没有别的字段，mode 相同就是相同。
-  return (a.mode === "fixed" ? a.level : null) === (b.mode === "fixed" ? b.level : null);
-}
-
-/**
- * 两条会话在界面看得见的层面上是不是同一份。
- *
- * `[约束]` 字段增删要跟着 `SessionInfo` 走。漏比一个字段的表现是"改了
- * 设置侧栏不更新"，而不是报错 —— 所以宁可多比一个也别漏。
- */
-function sessionEq(a: SessionInfo, b: SessionInfo): boolean {
-  return (
-    a.id === b.id &&
-    a.root === b.root &&
-    a.title === b.title &&
-    a.seq === b.seq &&
-    a.mode === b.mode &&
-    a.multitask === b.multitask &&
-    a.pythonVenv === b.pythonVenv &&
-    a.systemPrompt === b.systemPrompt &&
-    a.provider === b.provider &&
-    a.model === b.model &&
-    a.busy === b.busy &&
-    thinkingEq(a.thinking, b.thinking) &&
-    samplingEq(a.sampling, b.sampling)
-  );
-}
-
-function sessionListEq(a: SessionInfo[], b: SessionInfo[]): boolean {
-  return (
-    a.length === b.length &&
-    a.every((s, i) => {
-      const o = b[i];
-      return o !== undefined && sessionEq(s, o);
-    })
-  );
-}
-
-/** 两个字符串集合装的是不是同一批东西。 */
-/** 跑完之后改动条要重算的工具。三个文件工具落基线；Bash 也算 —— 它能
- *  按字面记基线（`cp` / `mv` / `rm`），更要紧的是能把已在改动栏里的文件
- *  删掉：Write 新建、再 `rm -f`，不重算的话那条「A」会一直挂着。 */
-function touchesFiles(name: unknown): boolean {
-  return name === "Edit" || name === "Write" || name === "Delete" || name === "Bash";
-}
-
-function sameSet(a: Set<string>, b: Set<string>): boolean {
-  return a.size === b.size && [...a].every((x) => b.has(x));
-}
-
-/** patch 里的每个字段是不是都已经是这个值了。 */
-function patchApplied(cur: SessionInfo, patch: Partial<SessionInfo>): boolean {
-  return (Object.keys(patch) as (keyof SessionInfo)[]).every((k) => cur[k] === patch[k]);
-}
 
 export function App() {
   const { t, tn } = useT();
@@ -312,39 +160,21 @@ export function App() {
     setSessions((prev) => (sessionListEq(prev, next) ? prev : next));
   }, []);
   const [active, setActive] = useState<string | null>(null);
-  /** 每个会话最近一次真开聊的时刻。侧栏同项目里按它倒序。 */
-  const [recency, setRecency] = useState(loadRecency);
-  /**
-   * 把会话顶到它那组最前。
-   *
-   * `[约束]` 只在**真开聊**（开轮）和新建时调，切换会话不算。翻旧会话
-   * 找一句话是高频动作，跟着改顺序的话，用户扫两眼列表就被重排一遍，
-   * 再也回不到刚才看的位置。
-   */
-  const touchSession = useCallback((id: string) => {
-    setRecency((prev) => {
-      const next = { ...prev, [id]: Date.now() };
-      localStorage.setItem(LS.recency, JSON.stringify(next));
-      return next;
-    });
-  }, []);
-  const sawBusy = useRef(new Set<string>());
   const [booting, setBooting] = useState(true);
+  const { recency, touchSession } = useSessionRecency(sessions, booting);
   const [showSettings, setShowSettings] = useState(false);
   /** 定时任务页在主区前台（侧栏一级菜单进入，选会话退出）。 */
   const [schedulePage, setSchedulePage] = useState(false);
   /** 详情面板正看着的任务。详情占用系统右侧栏（工作台抽屉的位置）。 */
   const [selectedSchedule, setSelectedSchedule] = useState<string | null>(null);
-  /** 详情侧栏宽度（拖出来的值）。 */
-  const [schedDetailW, setSchedDetailW] = useState(() => {
-    const v = loadPx(LS.schedDetail, SCHED_DETAIL.def);
-    // 旧默认 340，加宽之后低于新下限的存值作废。
-    return v < SCHED_DETAIL.min ? SCHED_DETAIL.def : v;
-  });
-  /** 定时任务清单（任务页展示）。 */
-  const [schedules, setSchedules] = useState<ScheduledTask[]>([]);
-  /** 启动时发现的错过运行。行上标黄；补跑/忽略后逐条消掉。 */
-  const [missedSchedules, setMissedSchedules] = useState<MissedRun[]>([]);
+  const {
+    schedules,
+    setSchedules,
+    missedSchedules,
+    setMissedSchedules,
+    reloadSchedules,
+    settleMissed,
+  } = useSchedules(applySessions);
   /** 创建定时任务的开场白。走 Composer 的 insertText 通道。 */
   const [schedSnippet, setSchedSnippet] = useState<string | null>(null);
   /** 手动创建定时任务的表单在右侧栏展开着。和 selectedSchedule 互斥 ——
@@ -412,27 +242,26 @@ export function App() {
   const [pickSnippet, setPickSnippet] = useState<string | null>(null);
   /** 最近看过的会话 id（LRU）。这些 Chat 卸不掉，切回去是显示/隐藏。 */
   const [kept, setKept] = useState<string[]>([]);
-  /** 窄屏（手机）。侧栏和右侧面板在这档下都是浮层，行为跟着改：
-   *  默认收起、选中会话后自动收起、点遮罩收起。 */
-  const isMobile = useIsMobile();
-  // 窄屏上侧栏是盖在对话上的抽屉，开着就看不见对话 —— 起步一律收起，
-  // 不读桌面上记住的偏好。
-  const [sidebarOpen, setSidebarOpen] = useState(
-    () => !isMobileNow() && localStorage.getItem(LS.sidebarOpen) !== "0",
-  );
-  /** 侧栏壳真正改宽度的那一拍。顶栏让位跟这个走，不能跟 sidebarOpen。 */
-  const [sidebarVisual, setSidebarVisual] = useState(
-    () => !isMobileNow() && localStorage.getItem(LS.sidebarOpen) !== "0",
-  );
-  // 旋转 / 拉窄跨过阈值那一刻收起侧栏：桌面态开着的侧栏到了手机态就是
-  // 一整屏遮罩，用户什么都点不到。
-  useEffect(() => {
-    if (isMobile) setSidebarOpen(false);
-  }, [isMobile]);
-  /** 窄屏上选完东西把抽屉收掉；桌面上不动。 */
-  const closeSidebarIfMobile = useCallback(() => {
-    if (isMobileNow()) setSidebarOpen(false);
-  }, []);
+  const {
+    isMobile,
+    sidebarOpen,
+    setSidebarOpen,
+    sidebarVisual,
+    setSidebarVisual,
+    closeSidebarIfMobile,
+    toggleSidebar,
+    sidebarW,
+    setSidebarW,
+    drawerW,
+    setDrawerW,
+    termH,
+    setTermH,
+    schedDetailW,
+    setSchedDetailW,
+    fullscreen,
+    dragFrom,
+    dragLive,
+  } = usePanelLayout();
   /** 终端收起动画那一拍里内容还要显示（见 TerminalPanel 的 visible）。
    *  放在状态区：App 有条件早退，hook 不能出现在那之后。 */
   const termPresent = usePresence(showTerm);
@@ -454,59 +283,6 @@ export function App() {
   /** 壳真正开始改宽度的那一拍。窗口开关跟这个走：跟收起动画对齐
    *  坐回顶栏，设置钮才不会先被主区拽到窗口右缘、再被开关挤回来。 */
   const [drawerVisual, setDrawerVisual] = useState(false);
-  const [sidebarW, setSidebarW] = useState(() => loadPx(LS.sidebar, SIDEBAR.def));
-  const [drawerW, setDrawerW] = useState(() => loadPx(LS.drawer, drawerDefault()));
-  const [termH, setTermH] = useState(() => loadPx(LS.term, TERM.def));
-  const [fullscreen, setFullscreen] = useState(false);
-  /** 正在拖的分隔线：按下时的尺寸 + 拖动中的最新值（onEnd 写盘用）。
-   *  同一时刻只可能拖一条线，所以三条线共用这一对 ref。 */
-  const dragFrom = useRef(0);
-  const dragLive = useRef(0);
-
-  useEffect(() => subscribeFullscreen(setFullscreen), []);
-
-  // 拖宽侧栏、把窗口拉窄，都会吃掉右侧面板站的地方，而面板壳是
-  // flex-shrink:0 不会自己让 —— 不主动收就是右缘顶出窗口被裁掉。
-  // 只改内存里的值：盘上存的宽度留着，窗口回大时下次启动还能回来。
-  useEffect(() => {
-    const fit = () => {
-      const side = sidebarOpen ? sidebarW : 0;
-      setDrawerW((w) => Math.min(w, rightPanelMax(side, DRAWER_MIN)));
-      setSchedDetailW((w) =>
-        Math.min(w, SCHED_DETAIL.max, rightPanelMax(side, SCHED_DETAIL.min)),
-      );
-    };
-    // 拖窗口期间把面板的开合过渡摘掉。过渡现在是常挂的（见 styles.css
-    // 的 .slide-panel），而这里每来一个 resize 就 clamp 一次宽度 ——
-    // 挂着过渡的话面板右缘追不上窗口边，会被 .shell 的 overflow 裁掉。
-    // 走 DOM 属性而不是 React state：这只是给 CSS 看的开关，没必要为它
-    // 在拖窗口的每一帧重渲染整棵树。
-    let quiet = 0;
-    const onResize = () => {
-      document.documentElement.dataset.resizing = "";
-      window.clearTimeout(quiet);
-      quiet = window.setTimeout(() => {
-        delete document.documentElement.dataset.resizing;
-      }, 120);
-      fit();
-    };
-    fit();
-    window.addEventListener("resize", onResize);
-    return () => {
-      window.removeEventListener("resize", onResize);
-      window.clearTimeout(quiet);
-      delete document.documentElement.dataset.resizing;
-    };
-  }, [sidebarOpen, sidebarW]);
-
-  const toggleSidebar = useCallback(() => {
-    setSidebarOpen((v) => {
-      // 窄屏上的开合是临时的（抽屉），不写进偏好 —— 否则手机上开过一次
-      // 侧栏，回到桌面宽度时它就一直开着。
-      if (!isMobileNow()) localStorage.setItem(LS.sidebarOpen, v ? "0" : "1");
-      return !v;
-    });
-  }, []);
 
   useEffect(() => {
     // 必须 catch。没有它的话，任何一次失败都表现为永远停在"启动中" ——
@@ -644,15 +420,29 @@ export function App() {
     (id: string) => {
       const idx = wb.tabs.findIndex((t) => tabId(t) === id);
       if (idx < 0) return;
-      const tabs = wb.tabs.filter((t) => tabId(t) !== id);
-      let active = wb.active;
-      if (active === id) {
-        const neighbor = tabs[Math.min(idx, tabs.length - 1)];
-        active = neighbor ? tabId(neighbor) : null;
+      const doClose = () => {
+        const tabs = wb.tabs.filter((t) => tabId(t) !== id);
+        let active = wb.active;
+        if (active === id) {
+          const neighbor = tabs[Math.min(idx, tabs.length - 1)];
+          active = neighbor ? tabId(neighbor) : null;
+        }
+        setWb({ ...wb, tabs, active, open: tabs.length > 0 && wb.open });
+      };
+      // 预览编辑器里改了没存：关标签就是丢掉这些修改，先问一句。
+      const tab = wb.tabs[idx];
+      if (tab?.kind === "preview" && hasUnsaved(tab.path)) {
+        setConfirm({
+          title: t("app.workbench.unsavedTitle", { name: basename(tab.path) }),
+          body: t("app.workbench.unsavedBody"),
+          confirmLabel: t("app.workbench.closeDiscard"),
+          action: doClose,
+        });
+        return;
       }
-      setWb({ ...wb, tabs, active, open: tabs.length > 0 && wb.open });
+      doClose();
     },
-    [wb],
+    [wb, t],
   );
 
   /** 收起抽屉（标签保留，激活项记着，再展开回到原处）。 */
@@ -1038,45 +828,9 @@ export function App() {
     [config],
   );
 
-  /** 重拉任务清单（创建/删除/到点运行后侧栏要立即对齐）。 */
-  const reloadSchedules = useCallback(() => {
-    scheduleList()
-      .then(setSchedules)
-      .catch(() => {});
-  }, []);
-
-  // 定时任务：启动时拉清单和"错过了什么"；表变了（模型调工具创建/
-  // 删除）就重拉；任务开跑/跑完时还要对齐会话列表 —— 后台新建的会话
-  // 要马上出现在侧栏，不能等下一次轮询。
+  // 会话表：另一端（网页版 / 另一窗口）新建、删除、改名时重拉。
+  // 顺带刷新 config —— 项目分组在那里，加项目不开会话也要跟上。
   useEffect(() => {
-    reloadSchedules();
-    scheduleMissed()
-      .then(setMissedSchedules)
-      .catch(() => {});
-    const offRuns = subscribeScheduleRuns((run) => {
-      reloadSchedules();
-      listSessions()
-        .then(applySessions)
-        .catch(() => {});
-      // 系统通知由前端发：文案要跟界面语言走，宿主那边没有词典。
-      // 只在跑完那一拍发，开跑不打扰。
-      if (run.phase === "done") {
-        if (run.error) {
-          void notify(
-            t("app.notify.scheduleFailed.title"),
-            t("app.notify.scheduleFailed.body", { name: run.name, error: renderUiError(run.error) }),
-          );
-        } else {
-          void notify(
-            t("app.notify.scheduleDone.title"),
-            t("app.notify.scheduleDone.body", { name: run.name }),
-          );
-        }
-      }
-    });
-    const offChanges = subscribeScheduleChanges(reloadSchedules);
-    // 会话表：另一端（网页版 / 另一窗口）新建、删除、改名时重拉。
-    // 顺带刷新 config —— 项目分组在那里，加项目不开会话也要跟上。
     const offSessions = subscribeSessionsChanges(() => {
       listSessions()
         .then(applySessions)
@@ -1085,24 +839,16 @@ export function App() {
         .then(setConfig)
         .catch(() => {});
     });
-    return () => {
-      offRuns();
-      offChanges();
-      offSessions();
-    };
-  }, [reloadSchedules, applySessions, t]);
-
-  /**
-   * 处理掉一条错过记录（补跑或忽略）。全部处理完才告诉宿主清空 ——
-   * 宿主只有整体 ack，逐条的账在前端记。
-   */
-  const settleMissed = useCallback((taskId: string) => {
-    setMissedSchedules((prev) => {
-      const left = prev.filter((m) => m.taskId !== taskId);
-      if (left.length === 0 && prev.length > 0) void scheduleAckMissed().catch(() => {});
-      return left;
+    const offConfig = subscribeConfigChanges(() => {
+      getConfig()
+        .then(setConfig)
+        .catch(() => {});
     });
-  }, []);
+    return () => {
+      offSessions();
+      offConfig();
+    };
+  }, [applySessions]);
 
   // 后台会话的忙碌状态没有事件可订阅（只有挂载中的会话有事件流），
   // 侧栏的"正在跑"指示点只能靠轮询对齐。只在确实有会话在跑时才轮 ——
@@ -1117,37 +863,6 @@ export function App() {
     }, 5000);
     return () => clearInterval(t);
   }, [anyBusy, applySessions]);
-
-  // 会话刚开跑（含后台定时任务）顶到该项目最前。启动那次 busy 快照
-  // 不当作一次新的聊天 —— 否则每次打开 App 列表都会被正在跑的会话打乱。
-  useEffect(() => {
-    const now = new Set(sessions.filter((s) => s.busy).map((s) => s.id));
-    if (!booting) {
-      for (const id of now) {
-        if (!sawBusy.current.has(id)) touchSession(id);
-      }
-    }
-    sawBusy.current = now;
-  }, [sessions, booting, touchSession]);
-
-  // 删掉的会话从顺序表里拿掉，免得 localStorage 越积越大。
-  useEffect(() => {
-    if (booting) return;
-    const alive = new Set(sessions.map((s) => s.id));
-    setRecency((prev) => {
-      let changed = false;
-      const next = { ...prev };
-      for (const id of Object.keys(next)) {
-        if (!alive.has(id)) {
-          delete next[id];
-          changed = true;
-        }
-      }
-      if (!changed) return prev;
-      localStorage.setItem(LS.recency, JSON.stringify(next));
-      return next;
-    });
-  }, [sessions, booting]);
 
   /**
    * 全局 ⌘ 快捷键。macOS 用户带着 Finder/浏览器的肌肉记忆来 ——
@@ -2209,382 +1924,3 @@ export function App() {
   );
 }
 
-/* ── 对话 ───────────────────────────────────── */
-
-/**
- * 长任务在后台跑完时发系统通知。权限与失败处理见 bridge 的 `notify`。
- * 标题不写「Riot」：横幅自己会标出发通知的应用，标题留给事情本身。
- */
-function notifyTurnDone() {
-  void notify(t("app.notify.turnDone.title"), t("app.notify.turnDone.body"));
-}
-
-function Chat({
-  sessionId,
-  visible,
-  expectHistory,
-  config,
-  workspace,
-  workspaceMissing,
-  onMissingWorkspace,
-  initialMode,
-  initialMultitask = false,
-  sessionProvider,
-  sessionModel,
-  onSessionEndpoint,
-  onConfig,
-  onOpenSettings,
-  permissionPick,
-  onPermissionChange,
-  execMode,
-  onFirstMessage,
-  onSessionEmptied,
-  onAgentBrowser,
-  onAgentPreview,
-  onTurnEnd,
-  onFilesChanged,
-  onBusy,
-  onPlanChange,
-  onPlanOpen,
-  insertText,
-  onInserted,
-}: {
-  sessionId: string;
-  /** 在前台。隐藏的保活实例不接全局快捷键 / 粘贴 / 权限弹窗。 */
-  visible: boolean;
-  /** 侧栏已经有标题：历史还没到时别画成空招呼页。 */
-  expectHistory: boolean;
-  config: ConfigStatus;
-  workspace: string;
-  /** 绑定的项目目录已经不在磁盘上。 */
-  workspaceMissing?: boolean;
-  onMissingWorkspace?: () => void;
-  initialMode: PermissionMode;
-  /** 宿主侧这个会话的多任务开关。 */
-  initialMultitask?: boolean;
-  sessionProvider: string;
-  sessionModel: string;
-  onSessionEndpoint: (provider: string, model: string) => void;
-  onConfig: (s: ConfigStatus) => void;
-  onOpenSettings: () => void;
-  /** 会话设置弹窗选的权限档，透传给 Composer。 */
-  permissionPick: PermissionPick | null;
-  /** Composer 上报生效中的权限档。 */
-  onPermissionChange: (m: PermissionMode) => void;
-  /** 这个会话生效中的权限档（App 汇总的那份）。切换卡切回 agent 时落成它。 */
-  execMode: PermissionMode;
-  onFirstMessage: (sessionId: string, text: string) => void;
-  /** 撤回把会话清空了。侧栏那句自动标题该跟着撤。 */
-  onSessionEmptied?: (sessionId: string) => void;
-  /** 模型明说要给用户看浏览器时（ShowBrowser / BrowserHandoff）打开右侧
-   *  抽屉。其余 Browser* 工具是它自己在查，不弹 —— 见 useSession。 */
-  onAgentBrowser?: () => void;
-  /** 模型的 PreviewFile 工具成功后，把文件在预览面板展示给用户。
-   *  路径是模型传的原文，可能是相对路径 —— 由外层按会话根目录解析。 */
-  onAgentPreview?: (path: string) => void;
-  /** 一轮跑完。改动面板据此再对一次 —— 抽屉是常驻的，模型改完文件
-   *  不刷新的话，那里还停在上一轮的样子。 */
-  onTurnEnd?: () => void;
-  /** 磁盘变了：回退/重做，以及跑轮当中的 Edit / Write 落盘。
-   *  预览抽屉挂着打开那一刻的字节，不推一下还是旧的。 */
-  onFilesChanged?: () => void;
-  /** 忙碌状态变化。侧栏的"正在跑"指示点靠它即时更新。 */
-  onBusy?: (busy: boolean) => void;
-  /** 这个会话的计划变了（新计划、正在流的正文、能不能构建）。右侧抽屉
-   *  的计划面板画的就是这份 —— 计划是从对话条目派生的，只有 Chat 看得见。 */
-  onPlanChange?: (sessionId: string, state: PlanState) => void;
-  /** 模型开始写一份新计划：把右侧抽屉切到计划标签（只在前台时）。 */
-  onPlanOpen?: () => void;
-  /** 要塞进输入框的一段文字（终端选中的输出）。null = 没有。 */
-  insertText?: string | null;
-  onInserted?: () => void;
-}) {
-  const { t } = useT();
-  const session = useSession(
-    sessionId,
-    onAgentBrowser || onAgentPreview
-      ? {
-          ...(onAgentBrowser ? { onBrowserOpen: onAgentBrowser } : {}),
-          ...(onAgentPreview ? { onPreviewFile: onAgentPreview } : {}),
-        }
-      : undefined,
-  );
-
-  const busy = session.busy;
-  const turnEndRef = useRef(onTurnEnd);
-  turnEndRef.current = onTurnEnd;
-  const filesChangedRef = useRef(onFilesChanged);
-  filesChangedRef.current = onFilesChanged;
-  const busyRef = useRef(onBusy);
-  busyRef.current = onBusy;
-  // 跳过挂载那次：挂载时的 busy 是历史快照，不是一次"变化"。
-  //
-  // `[约束]` onTurnEnd 也归这个 ref 守。它是"一轮跑完了"的通知，而挂载
-  // 时的 `busy=false` 只是"这个会话现在闲着" —— 不守的话，KEEP_CHATS
-  // 保活四个 Chat，切一次会话就连发几次 setChangesRev，Git 改动面板
-  // 跟着做几次无谓的全量比对。
-  const sawBusy = useRef(false);
-  useEffect(() => {
-    busyRef.current?.(busy);
-    if (busy) {
-      sawBusy.current = true;
-      return;
-    }
-    if (!sawBusy.current) return;
-    turnEndRef.current?.();
-    // 长任务跑完而窗口在后台：发一条系统通知，不然就错过了。
-    // 窗口在前台时不发 —— 用户正看着呢。
-    if (!document.hasFocus()) notifyTurnDone();
-  }, [busy]);
-  // 回退不占 busy，上面那个 effect 看不到。filesRev 变了就通知外层重读
-  // 预览 / 改动面板。跳过挂载：缓存里带回来的数字不是一次新的写盘。
-  const filesRevSeen = useRef(session.filesRev);
-  useEffect(() => {
-    if (filesRevSeen.current === session.filesRev) return;
-    filesRevSeen.current = session.filesRev;
-    filesChangedRef.current?.();
-  }, [session.filesRev]);
-  const empty =
-    session.items.length === 0 &&
-    !session.streaming &&
-    !session.thinking &&
-    (session.ready || !expectHistory);
-
-  // 撤回把会话清空了：那句话回到了输入框，侧栏不该再拿它当名字。
-  // 只报一次 —— 输入框消费掉之后 withdrawn 就置回 null 了。
-  const emptiedRef = useRef(onSessionEmptied);
-  emptiedRef.current = onSessionEmptied;
-  const withdrawn = session.withdrawn;
-  useEffect(() => {
-    if (withdrawn?.sessionEmpty) emptiedRef.current?.(sessionId);
-  }, [withdrawn, sessionId]);
-
-  // 每有一次会动文件的工具跑完就递增,改动条跟着重新比对 —— 跑轮当中改动
-  // 也要实时长出来,不能等轮子结束才一次性冒出一排文件。Bash 失败也算：
-  // `rm -f a && false` 退出码非零，文件照样已经没了。
-  const editCount = useMemo(
-    () =>
-      session.items.filter((it) => it.kind === "tool" && it.status !== "running" && touchesFiles(it.name))
-        .length,
-    [session.items],
-  );
-  // 改动条的刷新键。主 agent 的编辑之外还要盯子 agent：它们改的文件也算
-  // 这个会话的（内核把基线记到父会话头上），但它们的 Edit / Write / Delete /
-  // Bash 不进主会话的 items —— 主会话只看得到 Task 卡片收尾、后台完成通知，
-  // 以及任务面板里"正在调哪个工具"那一行。只在那一行是会动文件的工具时把
-  // 调用计数掺进来：子 agent 翻代码时的几十次 Read 不值得每次都去重算 diff。
-  const changesKey = useMemo(() => {
-    let n = editCount;
-    for (const it of session.items) {
-      if (it.kind === "task_notice" || (it.kind === "tool" && it.name === "Task" && it.status === "ok")) n++;
-    }
-    let sub = "";
-    for (const t of session.tasks) {
-      const a = t.activity;
-      const editing = a.key === "kernel.task.activity.tool" && touchesFiles(a.args?.name);
-      sub += `${t.id}:${t.status}:${editing ? t.tool_uses : 0};`;
-    }
-    return `${n}|${sub}`;
-  }, [editCount, session.items, session.tasks]);
-
-  // 预览抽屉 / Git 面板跟改动条用同一条线索：Edit / Write 一落盘就重读，
-  // 不能等轮子结束。跳过挂载；后台保活的会话不推 —— 切回来面板会整块
-  // 重挂，那一次读的就是新的。
-  const changesKeySeen = useRef(changesKey);
-  useEffect(() => {
-    if (changesKeySeen.current === changesKey) return;
-    changesKeySeen.current = changesKey;
-    if (!visible) return;
-    filesChangedRef.current?.();
-  }, [changesKey, visible]);
-
-  // 输入框上方那一格的占位规则:跑轮期间有没做完的任务清单,就让
-  // 任务临时顶掉改动条;清单全部完成、或轮子停了(含切回已结束的
-  // 会话),任务自动让位 —— 它是进行时的进度,不是要留档的结果。
-  const todoActive = busy && hasActiveTodos(session.items);
-
-  // 换模式的建议和选择题都走对话流里的内联卡：它们是对话的一部分，
-  // 不是危险操作。Bash / Write 这类权限询问仍弹窗 —— 必须看见原文才能签。
-  const isModeAsk = (a: (typeof session.asks)[number]) =>
-    a.detail.tool_name === SWITCH_MODE_TOOL;
-  // 环境变量表单也走选择题这条内联路（见 Transcript 里按 kind 分卡）。
-  const isChoiceAsk = (a: (typeof session.asks)[number]) =>
-    a.detail.preview.kind === "choice" || a.detail.preview.kind === "env_vars";
-  const modeAsk = session.asks.find(isModeAsk);
-  const choiceAsk = session.asks.find(isChoiceAsk);
-  const modalAsk = session.asks.find((a) => !isModeAsk(a) && !isChoiceAsk(a));
-
-  // 计划 = 对话里最近一次 CreatePlan 调用（见 lib/plan）。右侧抽屉的面板、
-  // 标签上的标题、输入框的「构建」键都从这一份派生。
-  const plan = useMemo(() => latestPlan(session.items), [session.items]);
-  // 计划的待办进度：初稿在 CreatePlan 的参数里，构建后由模型的 TodoWrite
-  // 接管（见 lib/plan 的 planTodos）。
-  const todos = useMemo(() => planTodos(session.items, plan), [session.items, plan]);
-  const [buildAvailable, setBuildAvailable] = useState(false);
-  const planChangeRef = useRef(onPlanChange);
-  planChangeRef.current = onPlanChange;
-  const streamingPlan = session.streamingPlan;
-  useEffect(() => {
-    planChangeRef.current?.(sessionId, {
-      plan,
-      streaming: streamingPlan,
-      canBuild: buildAvailable && plan?.status === "ok",
-      edits: editCount,
-      todos,
-    });
-  }, [sessionId, plan, streamingPlan, buildAvailable, editCount, todos]);
-  // 模型开始写一份**新**计划（卡片刚以运行态出现）→ 抽屉切到计划标签。
-  // 只认运行态：切回会话时水合出来的历史计划都是落定的，不该每次切回
-  // 都把抽屉弹开。后台会话不抢前台的抽屉（和浏览器、预览同一个取舍）。
-  const planOpenRef = useRef(onPlanOpen);
-  planOpenRef.current = onPlanOpen;
-  const openedPlan = useRef<string | null>(null);
-  useEffect(() => {
-    if (!plan || plan.status !== "running" || openedPlan.current === plan.id) return;
-    openedPlan.current = plan.id;
-    if (visible) planOpenRef.current?.();
-  }, [plan, visible]);
-
-  const send = (
-    text: string,
-    images: ImageInput[] = [],
-    refs: string[] = [],
-    nudge?: Nudge,
-  ): Promise<boolean> => {
-    onFirstMessage(sessionId, text);
-    return session.send(text, images, refs, nudge);
-  };
-
-  const composer = (
-    <Composer
-      sessionId={sessionId}
-      workspace={workspace}
-      {...(workspaceMissing ? { workspaceMissing: true, onMissingWorkspace } : {})}
-      busy={session.busy}
-      config={config}
-      onConfig={onConfig}
-      sessionProvider={sessionProvider}
-      sessionModel={sessionModel}
-      onSessionEndpoint={onSessionEndpoint}
-      initialMode={initialMode}
-      initialMultitask={initialMultitask}
-      hostMode={session.hostMode}
-      planReady={plan?.status === "ok"}
-      onBuildAvailable={setBuildAvailable}
-      tokens={session.tokens}
-      queued={session.queued}
-      onQueueDelete={session.queueDelete}
-      onQueueEdit={session.queueEdit}
-      onQueueSendNow={session.queueSendNow}
-      tasks={session.tasks}
-      onTaskCancel={session.cancelTask}
-      onSend={send}
-      onStop={session.stop}
-      withdrawn={session.withdrawn}
-      onWithdrawnRestored={session.clearWithdrawn}
-      onOpenSettings={onOpenSettings}
-      permissionPick={permissionPick}
-      onPermissionChange={onPermissionChange}
-      insertText={insertText ?? null}
-      armed={visible}
-      {...(onInserted ? { onInserted } : {})}
-    />
-  );
-
-  /**
-   * 输入框那一格。空会话和有对话时是**同一个** dock —— 位置、结构、
-   * DOM 顺序都不变，翻转的只是它上面那块（招呼语 ↔ 对话流）。
-   *
-   * `[约束]` 两个分支里 dock 的孩子必须逐位对应。React 按位置复用，
-   * 形状一样才不会在发出第一条消息时把 Composer 整个重挂载 ——
-   * 重挂载会丢掉草稿、待发的图和刚选好的权限模式。
-   */
-  const dock = (
-    <div className="composer-dock">
-      {/* 任务清单和改动条共用输入框上方这一格:跑轮时看进度,
-          其余时间看改动(Cursor 同款)。两个都常驻会叠成两层横条,
-          把输入框越垫越高。空会话时两者都渲染成空,不占位置。 */}
-      {todoActive ? (
-        <TodoPanel items={session.items} />
-      ) : (
-        <SessionChangesBar
-          sessionId={sessionId}
-          refreshKey={`${changesKey}/${session.filesRev}`}
-          paused={!visible}
-        />
-      )}
-      {composer}
-    </div>
-  );
-
-  return (
-    <div className="chat">
-      {empty ? (
-        <div className="hero">
-          <span className="hero-logo">
-            <RiotMark />
-          </span>
-          <h1 className="hero-title">{t("app.hero.title")}</h1>
-          <p className="hero-ws" title={workspace}>
-            {workspaceMissing ? (
-              <button
-                type="button"
-                className="hero-ws-missing"
-                onClick={onMissingWorkspace}
-              >
-                {t("app.hero.dirGone")}
-              </button>
-            ) : (
-              <>
-                <FolderIcon /> <span className="hero-ws-path">{workspace}</span>
-              </>
-            )}
-          </p>
-        </div>
-      ) : (
-        // 子 agent 视图给 Task 卡片认领（按 tool_use_id 直播标题/模型/动作）。
-        <SubagentsContext.Provider value={session.tasks}>
-          <Transcript
-            sessionId={sessionId}
-            items={session.items}
-            streaming={session.streaming}
-            thinking={session.thinking}
-            thinkClock={thinkingClock(sessionId, session.thinking)}
-            busy={session.busy}
-            compacting={session.compacting}
-            waitSince={waitStartedAt(sessionId)}
-            armed={visible}
-            onRegenerate={session.regenerate}
-            onEditEntry={session.editEntry}
-            onResendEntry={session.resendEntry}
-            onDeleteEntry={session.deleteEntry}
-            checkpointIds={session.checkpointIds}
-            onRestoreEntry={session.restoreEntry}
-            redoAvailable={session.redoAvailable}
-            onRedo={() => void session.redoRestore()}
-            {...(modeAsk ? { modeAsk } : {})}
-            {...(choiceAsk ? { choiceAsk } : {})}
-            // 切回 agent 时落成这个会话进规划前那一档（Composer 上报的）。
-            execMode={execMode}
-            onAnswerMode={(r) => modeAsk && void session.answer(r, modeAsk.requestId)}
-            onAnswerChoice={(r) => choiceAsk && void session.answer(r, choiceAsk.requestId)}
-          />
-        </SubagentsContext.Provider>
-      )}
-      {dock}
-
-      {visible && modalAsk ? (
-        // key 让每个请求拿到全新的弹窗实例：并发的两个请求先后弹出时，
-        // 第一个里勾的"总是允许"不会残留到第二个上。
-        <PermissionDialog
-          key={modalAsk.requestId}
-          ask={modalAsk.detail}
-          pendingCount={session.asks.length}
-          onAnswer={(r) => void session.answer(r, modalAsk.requestId)}
-        />
-      ) : null}
-    </div>
-  );
-}
-
-/* ── 输入框 ─────────────────────────────────── */

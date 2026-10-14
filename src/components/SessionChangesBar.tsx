@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 
 import { type FileChange, sessionChanges } from "../bridge";
 import { useT } from "../i18n";
@@ -15,7 +15,7 @@ import { FileChangeList } from "./FileChangeList";
  * 收起时只占一行(N 个文件 +x −y);点开在原地向上展开列表。没有
  * 改动时整条不出现 —— 一条常驻的"0 个文件"只是噪音。
  */
-export function SessionChangesBar({
+export const SessionChangesBar = memo(function SessionChangesBar({
   sessionId,
   /** 变一次就重新拉一次。外层把主 agent 的编辑落盘、子 agent 的收尾和
    *  编辑活动都编进去 —— 跑轮中的改动要实时长出来,不能等到轮子结束。 */
@@ -103,4 +103,4 @@ export function SessionChangesBar({
       </div>
     </div>
   );
-}
+});

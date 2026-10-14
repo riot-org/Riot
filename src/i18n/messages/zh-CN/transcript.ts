@@ -22,6 +22,7 @@ export default {
   "transcript.wait.runningTool": "正在执行 {tool}",
   "transcript.wait.compacting": "正在压缩上下文…",
   "transcript.jumpBottom": "回到底部",
+  "transcript.jumpBottomNew": "回到底部（有新内容）",
   "transcript.compactRule": "以上消息已被压缩",
 
   // 消息行与悬停操作
@@ -76,6 +77,9 @@ export default {
   "transcript.image.attached": "消息附图",
   "transcript.image.original": "{name}（原图）",
   "transcript.image.zoomed": "{name}（放大）",
+  "transcript.image.zoomIn": "放大",
+  "transcript.image.zoomOut": "缩小",
+  "transcript.image.zoomReset": "还原缩放",
 
   // 思考块
   "transcript.thinking.live": "思考中…",
@@ -83,14 +87,15 @@ export default {
 
   // 过程折叠组的摘要
   "transcript.fold.readFiles": "读取 {count} 个文件",
-  "transcript.fold.readOne": "读取 {name}",
-  "transcript.fold.readMore": "读取 {name} 等 {count} 个文件",
+  "transcript.fold.created": "创建 {count} 个文件",
+  "transcript.fold.edited": "编辑 {count} 个文件",
+  "transcript.fold.deleted": "删除 {count} 个文件",
   "transcript.fold.searches": "搜索 {count} 次",
-  "transcript.fold.commands": "命令 {count} 条",
-  "transcript.fold.subtasks": "子任务 {count} 个",
-  "transcript.fold.web": "联网 {count} 次",
-  "transcript.fold.browser": "浏览器 {count} 步",
-  "transcript.fold.other": "其他 {count} 步",
+  "transcript.fold.commands": "运行 {count} 条命令",
+  "transcript.fold.web": "查询网页 {count} 次",
+  "transcript.fold.tools": "调用工具 {count} 次",
+  "transcript.fold.todos": "更新待办",
+  "transcript.fold.sep": "，",
   "transcript.fold.thinkingOnly": "思考过程 · {dur}",
   "transcript.fold.failed": "{count} 项失败",
 
@@ -269,6 +274,13 @@ export default {
   "transcript.md.imageUnavailable": "图片读不到",
   "transcript.md.videoUnavailable": "视频读不到",
   "transcript.md.audioUnavailable": "音频读不到",
+  "transcript.md.audioPlay": "播放",
+  "transcript.md.audioPause": "暂停",
+  "transcript.md.audioSeek": "播放进度",
+  "transcript.md.videoMute": "静音",
+  "transcript.md.videoUnmute": "取消静音",
+  "transcript.md.videoFullscreen": "全屏",
+  "transcript.md.videoExitFullscreen": "退出全屏",
   "transcript.md.playVideo": "播放 {name}",
   "transcript.mermaid.copySource": "复制源码",
   "transcript.mermaid.rendering": "图渲染中…",
@@ -285,6 +297,22 @@ export default {
   "transcript.preview.tooLarge": "文件太大，只显示前 {size}。完整内容请用“系统应用打开”。",
   "transcript.preview.rendering": "正在渲染…",
   "transcript.preview.highlighting": "正在高亮…",
+  "transcript.preview.loadingEditor": "正在打开编辑器…",
+
+  // 预览里的代码编辑器（CodeView）
+  "transcript.fileEdit.unsaved": "未保存的修改",
+  "transcript.fileEdit.save": "保存",
+  "transcript.fileEdit.saving": "正在保存…",
+  "transcript.fileEdit.discard": "放弃修改",
+  "transcript.fileEdit.saveFailed": "保存失败：{error}",
+  "transcript.fileEdit.diskChanged": "磁盘上的文件变了（可能是 agent 刚改的），你这里还有没保存的修改。",
+  "transcript.fileEdit.loadDisk": "载入磁盘版本",
+  "transcript.fileEdit.keepMine": "保留我的修改",
+  "transcript.fileEdit.conflict": "保存失败：文件在你编辑期间被改过了。",
+  "transcript.fileEdit.overwrite": "仍然覆盖",
+  "transcript.fileEdit.readOnlyLossy": "文件不是 UTF-8 编码，只读显示，以免保存时损坏内容。",
+  "transcript.fileEdit.readOnlyMixedEol": "文件里 CRLF 和 LF 换行混用，只读显示，以免保存时改动整个文件。",
+  "transcript.fileEdit.readOnlyTruncated": "文件太大，只显示前 {size}，只读。完整内容请用“系统应用打开”。",
 
   // useSession 落到对话流里的提示与错误
   "transcript.session.subscribeFailed": "事件流订阅失败，这个会话收不到回复：{message}",
@@ -310,4 +338,6 @@ export default {
   "transcript.session.err.unknown": "未知错误",
   "transcript.session.result.spilled": "结果过大（{bytes} 字节），已写入 {path}",
   "transcript.session.result.cleared": "（历史结果已清理）",
+  "transcript.user.expand": "展开全部（{count} 行）",
+  "transcript.user.collapse": "收起",
 };

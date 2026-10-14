@@ -20,6 +20,7 @@ export default {
   "transcript.wait.runningTool": "{tool} 실행 중",
   "transcript.wait.compacting": "컨텍스트를 압축하는 중…",
   "transcript.jumpBottom": "맨 아래로",
+  "transcript.jumpBottomNew": "맨 아래로 (새 내용 있음)",
   "transcript.compactRule": "위의 메시지는 압축되었습니다",
 
   // 메시지 행과 호버 동작
@@ -75,6 +76,9 @@ export default {
   "transcript.image.attached": "메시지 첨부 이미지",
   "transcript.image.original": "{name} (원본)",
   "transcript.image.zoomed": "{name} (확대)",
+  "transcript.image.zoomIn": "확대",
+  "transcript.image.zoomOut": "축소",
+  "transcript.image.zoomReset": "배율 초기화",
 
   // 사고 블록
   "transcript.thinking.live": "생각하는 중…",
@@ -82,14 +86,15 @@ export default {
 
   // 과정 접기 그룹 요약
   "transcript.fold.readFiles": "파일 {count}개 읽기",
-  "transcript.fold.readOne": "{name} 읽기",
-  "transcript.fold.readMore": "{name} 등 파일 {count}개 읽기",
+  "transcript.fold.created": "파일 {count}개 생성",
+  "transcript.fold.edited": "파일 {count}개 편집",
+  "transcript.fold.deleted": "파일 {count}개 삭제",
   "transcript.fold.searches": "검색 {count}회",
-  "transcript.fold.commands": "명령 {count}개",
-  "transcript.fold.subtasks": "하위 작업 {count}개",
-  "transcript.fold.web": "웹 요청 {count}회",
-  "transcript.fold.browser": "브라우저 {count}단계",
-  "transcript.fold.other": "기타 {count}단계",
+  "transcript.fold.commands": "명령 {count}개 실행",
+  "transcript.fold.web": "웹 조회 {count}회",
+  "transcript.fold.tools": "도구 {count}회 사용",
+  "transcript.fold.todos": "할 일 업데이트",
+  "transcript.fold.sep": ", ",
   "transcript.fold.thinkingOnly": "사고 과정 · {dur}",
   "transcript.fold.failed": "{count}개 실패",
 
@@ -268,6 +273,13 @@ export default {
   "transcript.md.imageUnavailable": "이미지를 불러올 수 없습니다",
   "transcript.md.videoUnavailable": "동영상을 불러올 수 없습니다",
   "transcript.md.audioUnavailable": "오디오를 불러올 수 없습니다",
+  "transcript.md.audioPlay": "재생",
+  "transcript.md.audioPause": "일시정지",
+  "transcript.md.audioSeek": "재생 위치",
+  "transcript.md.videoMute": "음소거",
+  "transcript.md.videoUnmute": "음소거 해제",
+  "transcript.md.videoFullscreen": "전체 화면",
+  "transcript.md.videoExitFullscreen": "전체 화면 종료",
   "transcript.md.playVideo": "{name} 재생",
   "transcript.mermaid.copySource": "소스 복사",
   "transcript.mermaid.rendering": "다이어그램 렌더링 중…",
@@ -284,6 +296,22 @@ export default {
   "transcript.preview.tooLarge": "파일이 너무 커서 처음 {size}만 표시합니다. 전체 내용은 「시스템 앱으로 열기」를 사용하세요.",
   "transcript.preview.rendering": "렌더링하는 중…",
   "transcript.preview.highlighting": "강조 표시하는 중…",
+  "transcript.preview.loadingEditor": "편집기를 여는 중…",
+
+  // 预览里的代码编辑器（CodeView）
+  "transcript.fileEdit.unsaved": "저장하지 않은 변경",
+  "transcript.fileEdit.save": "저장",
+  "transcript.fileEdit.saving": "저장 중…",
+  "transcript.fileEdit.discard": "변경 취소",
+  "transcript.fileEdit.saveFailed": "저장 실패: {error}",
+  "transcript.fileEdit.diskChanged": "디스크의 파일이 변경되었습니다(agent가 수정했을 수 있음). 저장하지 않은 변경이 있습니다.",
+  "transcript.fileEdit.loadDisk": "디스크 버전 불러오기",
+  "transcript.fileEdit.keepMine": "내 변경 유지",
+  "transcript.fileEdit.conflict": "저장 실패: 편집하는 동안 파일이 변경되었습니다.",
+  "transcript.fileEdit.overwrite": "그래도 덮어쓰기",
+  "transcript.fileEdit.readOnlyLossy": "UTF-8 파일이 아니어서 저장 시 내용이 손상되지 않도록 읽기 전용으로 표시합니다.",
+  "transcript.fileEdit.readOnlyMixedEol": "CRLF와 LF 줄바꿈이 섞여 있어 저장 시 파일 전체가 바뀌지 않도록 읽기 전용으로 표시합니다.",
+  "transcript.fileEdit.readOnlyTruncated": "파일이 너무 커서 앞부분 {size}만 읽기 전용으로 표시합니다. 전체 내용은 시스템 앱으로 열어 주세요.",
 
   // useSession이 대화 흐름에 표시하는 안내와 오류
   "transcript.session.subscribeFailed": "이벤트 스트림 구독에 실패해 이 세션은 답변을 받을 수 없습니다: {message}",
@@ -309,4 +337,6 @@ export default {
   "transcript.session.err.unknown": "알 수 없는 오류",
   "transcript.session.result.spilled": "결과가 너무 커서({bytes}바이트) {path}에 기록했습니다",
   "transcript.session.result.cleared": "(이전 결과가 정리됨)",
+  "transcript.user.expand": "전체 보기 ({count}줄)",
+  "transcript.user.collapse": "접기",
 } satisfies Dict<typeof zh>;

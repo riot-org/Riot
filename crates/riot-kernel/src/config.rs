@@ -1835,6 +1835,21 @@ pub fn load_at(p: &Path) -> (AppConfig, Option<PathBuf>) {
     }
 }
 
+/// 运行中重读配置（智能体改了文件之后调 ReloadConfig）。读不到或读不懂
+/// 返回原因，**不备份、不回落**。
+///
+/// `[约束]` 不能复用 [`load_at`]。启动时读不懂就用默认值是对的，运行中
+/// 这么做等于把内存里一份完好的配置换成空白 —— 模型写错一个逗号，用户的
+/// 全部设置就瞬间消失。
+pub fn reread_at(p: &Path) -> Result<AppConfig, String> {
+    #[allow(clippy::disallowed_methods)]
+    let raw = std::fs::read_to_string(p).map_err(|e| format!("读不到 {}：{e}", p.display()))?;
+    try_parse(&raw).ok_or_else(|| match serde_json::from_str::<AppConfig>(&raw) {
+        Err(e) => format!("{} 解析失败：{e}", p.display()),
+        Ok(_) => format!("{} 解析失败", p.display()),
+    })
+}
+
 /// 把读不懂的配置挪到旁边，再让应用用默认值继续。
 ///
 /// `[约束]` 必须在回落到默认值**之前**把原文件挪走。

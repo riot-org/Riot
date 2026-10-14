@@ -28,7 +28,7 @@
 //! 每次调用后关掉的话，下一次又要付启动成本，而且页面状态（登录、滚动
 //! 位置、SPA 的路由）全丢 —— 模型改完一次样式再截图会发现自己回到了首页。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
@@ -216,6 +216,14 @@ struct Tabs {
     order: Vec<TabId>,
     /// 当前显示的那一页。0 = 一页都没有（0 不是合法的号）。
     active: TabId,
+    /// 临时页：模型自己开的、用户还没看过的页。一轮结束时由
+    /// [`HostBrowser::close_scratch`] 收掉。
+    ///
+    /// `[取舍]` 按"有没有上过屏"判，不另要模型声明用途。面板不会自己弹
+    /// 出来（见 ShowBrowser），所以面板关着时模型开的页只可能是它自己在查
+    /// 数据、渲染截图；面板开着时用户可能正跟着看，那一页就不算临时的。
+    /// 上过一次屏就永久摘掉，之后面板关了也不回到临时。
+    scratch: HashSet<TabId>,
 }
 
 /// 最近一次快照的编号表连同它的元数据:是在哪个标签页拍的、当时的文档
@@ -387,7 +395,9 @@ impl HostBrowser {
         if let Some(id) = self.current().await {
             return Ok((b, id));
         }
-        let id = self.spawn_tab(&b, None, true).await?;
+        // 这条路上开出来的页默认算临时：模型的工具先到就是模型开的；面板
+        // 先到的话 start_screencast 紧接着就让它上屏，临时标记随即摘掉。
+        let id = self.spawn_tab(&b, None, true, true).await?;
         Ok((b, id))
     }
 
@@ -397,11 +407,42 @@ impl HostBrowser {
         (!tabs.order.is_empty()).then_some(tabs.active)
     }
 
-    /// 开一个标签页并切过去。
+    /// 开一个标签页并切过去。用户在面板上点「新建标签页」走这条。
     pub async fn open_tab(&self) -> Result<PanelState, BrowserUnavailable> {
         let b = self.get().await?;
-        self.spawn_tab(&b, None, true).await?;
+        self.spawn_tab(&b, None, true, false).await?;
         self.state().await
+    }
+
+    /// 一轮结束 —— 关掉这一轮里模型开的、用户没看过的页（见 [`Tabs::scratch`]）。
+    ///
+    /// 不为这个起进程：没起来就没有页可关，崩过的那份清单已经由
+    /// [`Self::forget_crashed`] 清掉了。
+    pub async fn close_scratch(&self) {
+        let Some(b) = self.live().await else {
+            return;
+        };
+        let doomed: Vec<TabId> = {
+            let tabs = self.tabs.lock().await;
+            tabs.order
+                .iter()
+                .copied()
+                .filter(|t| tabs.scratch.contains(t))
+                .collect()
+        };
+        for tab in doomed {
+            // 同 [`Self::close_tab`]：先摘再发，用户恰好同时点了关闭也不会
+            // 发出第二条。
+            if self.forget_tab(tab).await {
+                let _ = b.send(&Command::CloseTab { tab });
+            }
+        }
+    }
+
+    /// 这一页上屏了，或者模型明说要交给用户（ShowBrowser、BrowserHandoff）。
+    /// 从此不再是临时页。
+    async fn keep(&self, tab: TabId) {
+        self.tabs.lock().await.scratch.remove(&tab);
     }
 
     /// 关一个标签页。
@@ -451,6 +492,7 @@ impl HostBrowser {
                 return false;
             };
             tabs.order.remove(at);
+            tabs.scratch.remove(&tab);
             if tabs.active == tab {
                 // 顶掉右边那个，没有右边就取左边 —— 和常见浏览器一致。
                 tabs.active = tabs
@@ -512,6 +554,7 @@ impl HostBrowser {
         {
             let mut tabs = self.tabs.lock().await;
             tabs.order.clear();
+            tabs.scratch.clear();
             tabs.active = 0;
         }
         // 等 `TabOpened` 的人永远等不到了 —— 那条事件本该由旧进程的事件流
@@ -550,6 +593,7 @@ impl HostBrowser {
         let order = {
             let mut tabs = self.tabs.lock().await;
             tabs.active = 0;
+            tabs.scratch.clear();
             std::mem::take(&mut tabs.order)
         };
         // 画面出口先摘：此后哪怕还漏进一帧也没人画。
@@ -596,7 +640,10 @@ impl HostBrowser {
             return;
         }
 
-        let id = match self.spawn_tab(&b, Some(source), !background).await {
+        // 临时页里点出来的还是临时的；用户看着的页里点出来的（含 cmd 点开的
+        // 后台页）归用户 —— 它没上过屏，但那是用户自己要开的。
+        let scratch = self.tabs.lock().await.scratch.contains(&source);
+        let id = match self.spawn_tab(&b, Some(source), !background, scratch).await {
             Ok(id) => id,
             Err(e) => {
                 tracing::warn!(error = %e, source, url, "页面要求开的标签页没开成");
@@ -680,12 +727,14 @@ impl HostBrowser {
     /// 真的开一个标签页:发命令、等它就绪、装 console 钩子、切过去。
     ///
     /// `after` 是把新页插在谁的右边，`None` 是排到最后。`focus` 决定要不要
-    /// 切过去 —— 一页都没有时它不起作用，那一页必然是当前页。
+    /// 切过去 —— 一页都没有时它不起作用，那一页必然是当前页。`scratch` 见
+    /// [`Tabs::scratch`]；随后上屏的话 [`Self::stream`] 会把它摘掉。
     async fn spawn_tab(
         &self,
         b: &Arc<Browser>,
         after: Option<TabId>,
         focus: bool,
+        scratch: bool,
     ) -> Result<TabId, BrowserUnavailable> {
         // 会话已经删了就别开。拿着一个刚从表里摘掉的句柄进来的调用（前端的
         // 最后一次轮询、还在飞的工具调用）会走到这里 —— 开出来的页没人管。
@@ -750,6 +799,9 @@ impl HostBrowser {
                 .and_then(|src| tabs.order.iter().position(|&t| t == src))
                 .map_or(tabs.order.len(), |i| i + 1);
             tabs.order.insert(at, id);
+            if scratch {
+                tabs.scratch.insert(id);
+            }
             // 一页都没有时必须切过去:`active` 那时是 0，那不是个合法的号，
             // 留着它面板会以为"有一页但问不出它的地址"。
             let show = focus || tabs.order.len() == 1;
@@ -784,6 +836,8 @@ impl HostBrowser {
             return;
         }
 
+        // 面板开着，这一页就上屏了。
+        self.keep(tab).await;
         let mut cur = self.streaming.lock().await;
         if let Some(old) = *cur
             && old != tab
@@ -813,6 +867,7 @@ impl HostBrowser {
         sink: mpsc::UnboundedSender<Frame>,
     ) -> Result<(), BrowserUnavailable> {
         let (b, tab) = self.active().await?;
+        self.keep(tab).await;
         *self.frames.lock().await = Some(sink);
         *self.streaming.lock().await = Some(tab);
         b.cdp(
@@ -1613,6 +1668,7 @@ impl BrowserAccess for HostBrowser {
                 if st.tabs.is_empty() {
                     return Ok("当前没有打开的标签页。".to_owned());
                 }
+                let scratch = self.tabs.lock().await.scratch.clone();
                 let mut out = String::from("标签页:\n");
                 for t in &st.tabs {
                     let active = if t.id == st.active {
@@ -1620,12 +1676,20 @@ impl BrowserAccess for HostBrowser {
                     } else {
                         ""
                     };
-                    out.push_str(&format!("[{}] {}{active}\n", t.id, tab_line(t)));
+                    let temp = if scratch.contains(&t.id) {
+                        "（临时，本轮结束后关闭）"
+                    } else {
+                        ""
+                    };
+                    out.push_str(&format!("[{}] {}{active}{temp}\n", t.id, tab_line(t)));
                 }
                 Ok(out)
             }
             Nav::NewTab => {
-                self.open_tab().await.map_err(InteractError::Unavailable)?;
+                let b = self.get().await.map_err(InteractError::Unavailable)?;
+                self.spawn_tab(&b, None, true, true)
+                    .await
+                    .map_err(InteractError::Unavailable)?;
                 Ok("已新开一个空白标签页。用 BrowserNavigate 打开地址。".to_owned())
             }
             // 标签号给错是模型的问题，不是浏览器坏了 —— 归 Target，让它重新
@@ -1635,6 +1699,12 @@ impl BrowserAccess for HostBrowser {
                     .await
                     .map_err(|e| InteractError::Target(e.to_string()))?;
                 Ok(format!("已切到标签页 [{id}]。"))
+            }
+            Nav::KeepTab => {
+                if let Some(tab) = self.current().await {
+                    self.keep(tab).await;
+                }
+                Ok(String::new())
             }
             Nav::CloseTab(id) => {
                 self.close_tab(id)
@@ -2417,8 +2487,21 @@ mod tests {
             let mut tabs = host.tabs.try_lock().expect("刚建好，没人抢");
             tabs.order = vec![1, 2, 3];
             tabs.active = 2;
+            tabs.scratch = HashSet::from([2, 3]);
         }
         host
+    }
+
+    /// ShowBrowser 摆给用户的那一页从此不是临时页；别的临时页照旧。
+    ///
+    /// 盯着的是"模型说了给你看、轮一结束页没了"：面板要等前端收到工具
+    /// 结果才打开，轮次常常先一步结束，等不到上屏那一下。
+    #[tokio::test]
+    async fn 交给用户的当前页不再是临时页() {
+        let host = 用过的();
+        let out = host.browse(Nav::KeepTab).await.expect("不需要浏览器进程");
+        assert!(out.is_empty());
+        assert_eq!(host.tabs.lock().await.scratch, HashSet::from([3]));
     }
 
     /// 崩溃之后，按标签页号存的东西必须一个不留。
@@ -2446,6 +2529,7 @@ mod tests {
                 "幻影标签页会让面板上每一下点击都静默失败"
             );
             assert_eq!(tabs.active, 0, "0 不是合法的号，正是「什么都没打开」");
+            assert!(tabs.scratch.is_empty(), "号不复用，留着只是白占");
         }
         assert!(host.streaming.lock().await.is_none());
         assert!(host.taps.lock().await.is_empty());

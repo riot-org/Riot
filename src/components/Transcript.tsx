@@ -1,14 +1,18 @@
 /**
  * 对话流：消息列表、会话内查找、贴底跟随，以及消息行的渲染。
  *
- * 从 App.tsx 拆出的独立职责。滚动语义（倒排容器的距底坐标、非对称
- * 迟滞、程序化滚动 pinning、锚点补偿、每会话位置缓存）全在这里 ——
+ * 从 App.tsx 拆出的独立职责。滚动语义（贴底跟随、按意图交出跟随、
+ * 程序化滚动 pinning、锚点补偿、每会话位置缓存）全在这里 ——
  * 改贴底/恢复行为只动这个文件。
  *
- * 滚动容器是 column-reverse 的倒排容器（学 Codex 桌面端）：scrollTop
- * 贴底为 0、向上翻为负，浏览器保持的是"距底距离"。于是贴底跟随免费、
- * 视口上方的行懒水合长高不再撼动画面；剩下要自己管的是翻历史时下方
- * 流式长高（锚点补偿）。取舍见 styles.css 的 .transcript 注释。
+ * 滚动容器是普通的正排容器（开源的 use-stick-to-bottom 和主流 AI 聊天
+ * 界面观察到的行为都是这一种：翻上去时生成内容在下方追加、画面不动）。早先学 Codex 用过 column-reverse
+ * 倒排：贴底免费、上方懒加载不动视口，代价是翻历史时**下方**每长一行
+ * 都要写一次 scrollTop 把画面拉回 —— 生成中每帧都写，和 WKWebView
+ * 滚动线程上的原生滚动（触控板惯性）打架，翻历史时画面一直抖，怎么
+ * 修补时序都根治不了。正排把代价换了个方向：下方长高天然不动视口
+ * （生成中翻历史零写入），贴底改成跟随时主动写到底；上方长高（懒加载
+ * 换真身、估高落地）由锚点补偿兜着，那是偶发的，不是每帧。
  * 渲染预算的三层（懒解析 / memo / content-visibility）见
  * ARCHITECTURE §13.1。
  */
@@ -24,6 +28,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { flushSync } from "react-dom";
 
 import {
   host,
@@ -44,17 +49,22 @@ import {
   extractMentionSpans,
   mentionCovers,
 } from "../lib/promptText";
+import { findHits, findTextRanges } from "../lib/findHits";
+import { type LiveTextStore, useLiveText } from "../lib/liveText";
+import { ENTER_TRANSCRIPT_EVENT } from "../lib/transcriptNav";
+import { estimateTurnHeight, isLongUserText } from "../lib/turnHeight";
 import { openPlanPanel } from "../lib/plan";
 import { Chevron } from "./Chevron";
 import { Chip, FileChip } from "./Chip";
 import { Composer } from "./Composer";
 import { ConfirmDialog, type ConfirmRequest } from "./ConfirmDialog";
 import { PlanModeIcon } from "./icons";
-import { LazyMarkdown, Markdown } from "./Markdown";
+import { HYDRATE_EVENT, LazyMarkdown, Markdown } from "./Markdown";
 import { AskChoiceCard, EnvVarsCard, ModeSwitchCard } from "./PermissionDialog";
 import {
   type Block,
   groupBlocks,
+  LiveThinking,
   ProcessGroup,
   type ThinkClock,
   ThinkingBlock,
@@ -64,54 +74,23 @@ import { TaskNoticeCard } from "./TaskPanel";
 import { ShotViewer, ToolCard } from "./ToolCard";
 
 /**
- * 对话流滚到哪、跟不跟随底部。top 存原始 scrollTop —— 倒排容器里
- * 贴底为 0、向上翻为负。
+ * 对话流滚到哪、跟不跟随底部。top 存原始 scrollTop（距顶）。
  *
  * 正式包 WKWebView 一给面板加 `visibility:hidden` / 改 `position`，
- * 会把 scrollTop 清成 0 并冒一次 scroll（倒排后 0 是底部，症状从
- * "切回来跳到顶"变成"跳回底部"，机制相同）。dev 的 WebView 常常不
- * 这么做，所以只有打包后才复现。记的必须是用户还看得见时的位置，
- * 隐藏之后那次假滚动一律丢掉。
+ * 会把 scrollTop 清成 0 并冒一次 scroll（症状是"切回来跳到顶"）。
+ * dev 的 WebView 常常不这么做，所以只有打包后才复现。记的必须是用户
+ * 还看得见时的位置，隐藏之后那次假滚动一律丢掉。
  */
+const EMPTY_IDS: ReadonlySet<string> = new Set();
+
 export const transcriptView = new Map<string, { top: number; stick: boolean }>();
 
-/**
- * 距底距离。倒排容器的滚动原点在底部：scrollTop 贴底为 0、向上翻为
- * 负，取负即距底。clamp 到 0 —— 底部橡皮筋回弹时 scrollTop 会短暂
- * 冲成正值，那不算"离开了底部"。
- */
-const distFromBottom = (box: HTMLElement) => Math.max(0, -box.scrollTop);
+/** 距底距离。clamp 到 0 —— 底部橡皮筋回弹时会短暂冲出可滚动范围。 */
+const distFromBottom = (box: HTMLElement) =>
+  Math.max(0, box.scrollHeight - box.clientHeight - box.scrollTop);
 
-/**
- * 把对话列的顶边钉在整数像素上：底下垫 0~1px 的 margin，让「列高 +
- * 垫高」恒为整数。
- *
- * 倒排容器里列是从底边往上排的，顶边 = 容器底 − 列高。列高几乎总是
- * 小数（正文行高 1.7 × 14px = 23.8px），翻着历史时下方每长一行，画面
- * 就被顶走一个小数距离。scrollTop 只能写整数（WKWebView 还朝零截断），
- * 补偿必然剩下 <1px 的余数。早先把余数塞进 thread-col 的 translateY，
- * 但引擎绘制时滚动偏移和合成层 transform **各自**对齐设备像素，两次
- * 取整的误差不相抵：余数每变一次（每长一行就变），画面就差出一个设备
- * 像素 —— 生成时翻上去看，正文一直在上下抖一个像素。
- *
- * 从根上把位移变成整数：列高怎么长，顶边都只按整像素挪，补偿只写
- * 整数 scrollTop，画面分毫不动。垫的是 margin 而不是 padding：不改列
- * 自己的尺寸，ResizeObserver 不会因为这里再触发一轮（在回调里改被观察
- * 元素的尺寸会报 "ResizeObserver loop"）。
- *
- * 锚点上方的长高不用管：倒排容器保持"距底距离"，上方长高本来就不动
- * 视口。
- *
- * `[约束]` 只在翻离底部（锚点补偿生效）时垫，贴底时清掉（`on = false`）。
- * 贴底时钉住的是列的**底边**，垫高每帧在 0~1px 之间变，底边就跟着
- * 抖 —— 等于把抖动从翻历史时搬到了贴底时。
- */
-function snapColTop(col: HTMLElement, on: boolean) {
-  const h = col.getBoundingClientRect().height;
-  const pad = Math.ceil(h - 0.001) - h;
-  const want = on && pad > 0.001 ? `${pad}px` : "";
-  if (col.style.marginBottom !== want) col.style.marginBottom = want;
-}
+/** 贴底时的 scrollTop。 */
+const bottomTop = (box: HTMLElement) => Math.max(0, box.scrollHeight - box.clientHeight);
 
 /**
  * 一轮问答：一条用户消息开一轮，之后的过程组、回答、报错都归它，直到
@@ -127,14 +106,14 @@ function snapColTop(col: HTMLElement, on: boolean) {
  */
 type Turn = { key: string; from: number; blocks: Block[] };
 
-function groupTurns(blocks: Block[]): Turn[] {
+function groupTurns(blocks: Block[], keyOf: (id: string) => string): Turn[] {
   const turns: Turn[] = [];
   blocks.forEach((b, i) => {
     const cur = turns[turns.length - 1];
     if (!cur || (b.kind === "row" && b.item.kind === "user")) {
-      // key 取首块的 id。用户消息的 id 在整个会话里稳定 —— 轮在长大
-      // （过程组并入、回答落定）时不换 key，里面的东西不会重挂载。
-      turns.push({ key: b.kind === "row" ? b.item.id : b.id, from: i, blocks: [b] });
+      // key 取首块的 id（经 keyOf 换成稳定的那个，见 Transcript 的 keyAlias）。
+      // 轮在长大（过程组并入、回答落定）时不换 key，里面的东西不会重挂载。
+      turns.push({ key: b.kind === "row" ? keyOf(b.item.id) : b.id, from: i, blocks: [b] });
       return;
     }
     cur.blocks.push(b);
@@ -163,6 +142,11 @@ function firstBelow(kids: HTMLCollection, boxTop: number): Element | null {
     }
   }
   return kids[first] ?? null;
+}
+
+/** 这块正在尾部追加内容（直播思考、直播过程组、正在流的正文）。 */
+function growsInPlace(el: Element): boolean {
+  return el.matches(".think-block.live, .fold-block.live") || el.querySelector("[data-md-animated]") !== null;
 }
 
 /** 文档序里的下一个锚点候选：同轮内的下一块，没有就下一轮的首块。 */
@@ -205,6 +189,40 @@ function wheelNeedsHijack(start: EventTarget | null, box: HTMLElement, deltaY: n
   return false;
 }
 
+/** 命中落的文本节点被换掉了（任一端脱离文档）。 */
+function deadRange(r: Range): boolean {
+  return !r.startContainer.isConnected || !r.endContainer.isConnected;
+}
+
+/** 命中所在的那一轮（`.turn`）。轮尾的流式正文不在任何轮里，返回 null。 */
+function turnOf(r: Range | undefined): Element | null {
+  return r?.startContainer.parentElement?.closest(".turn") ?? null;
+}
+
+/**
+ * 从滚轮落点往上找，第一个此刻**还能往这个方向滚**的子层（代码块、
+ * 工具输出、思考块……）。找不到返回 null —— 这一下该由对话流自己滚。
+ */
+function innerScroller(start: EventTarget | null, box: HTMLElement, deltaY: number): HTMLElement | null {
+  let el: HTMLElement | null =
+    start instanceof HTMLElement ? start : start instanceof Element ? start.parentElement : null;
+  while (el && el !== box) {
+    if (canScrollY(el, deltaY)) return el;
+    el = el.parentElement;
+  }
+  return null;
+}
+
+/** 这个元素自己能不能再往 deltaY 的方向滚。 */
+function canScrollY(el: HTMLElement, deltaY: number): boolean {
+  const oy = getComputedStyle(el).overflowY;
+  if (oy !== "auto" && oy !== "scroll" && oy !== "overlay") return false;
+  const max = el.scrollHeight - el.clientHeight;
+  if (max <= 1) return false;
+  return deltaY < 0 ? el.scrollTop > 1 : el.scrollTop < max - 1;
+}
+
+
 /** 敲字停下多久才真去扫 DOM。见 FindBar 里那个防抖 effect。 */
 const FIND_QUIET_MS = 80;
 
@@ -222,16 +240,42 @@ const FIND_QUIET_MS = 80;
  */
 function FindBar({
   box,
+  onNeedle,
+  onJump,
+  scrollTo,
   onClose,
 }: {
   /** 对话流的滚动容器。 */
   box: React.RefObject<HTMLElement | null>;
+  /**
+   * 扫 DOM 之前先告诉外层在找什么：外层只把**含这个词**的懒加载行解析
+   * 成真身（见 Transcript 的 findHits）。早先一打开查找就把整个会话全量
+   * 水合 —— 长会话里几百条 markdown 一口气 parse，查找条还没弹稳界面
+   * 先卡住一下。调用方必须同步提交（flushSync），扫描紧跟其后。
+   */
+  onNeedle: (q: string) => void;
+  /**
+   * 要滚去某个命中之前调用。跟随底部只认用户的滚动输入，scrollIntoView
+   * 不算 —— 不先交出跟随的话，生成中跳过去的下一帧又被拽回底部。
+   */
+  onJump: () => void;
+  /** 平滑滚到命中所在处（见 Transcript 的 glideToEl）。`flash` = 换了一条消息。 */
+  scrollTo: (el: Element, align?: "center" | "start", flash?: boolean) => void;
   onClose: () => void;
 }) {
   const { t } = useT();
   const [query, setQuery] = useState("");
   const [cur, setCur] = useState(0);
+  const curRef = useRef(0);
+  curRef.current = cur;
   const hitsRef = useRef<Range[]>([]);
+  /**
+   * 当前命中所在的轮和它在那一轮里是第几个。命中会失效（流式输出换掉了
+   * 文本节点、懒加载行进了视野换成真身），重扫之后靠它找回"刚才看到哪"，
+   * 而不是跳回第一个。记的是命中还活着时的位置 —— 死掉的 Range 已经
+   * 脱离文档，那时再问它在哪一轮已经问不出来了。
+   */
+  const curPlace = useRef<{ turn: Element | null; ord: number }>({ turn: null, ord: 0 });
   const [total, setTotal] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const ime = useImeGuard();
@@ -245,27 +289,11 @@ function FindBar({
     highlights?.delete("riot-find-cur");
   }, [highlights]);
 
-  /** 全量重扫。 */
+  /** 全量重扫。命中可以跨行内格式（见 findTextRanges）。 */
   const scan = useCallback(
     (q: string): Range[] => {
       const root = box.current;
-      if (!root || !q) return [];
-      const needle = q.toLowerCase();
-      const ranges: Range[] = [];
-      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-        const text = node.textContent ?? "";
-        const hay = text.toLowerCase();
-        let at = hay.indexOf(needle);
-        while (at !== -1) {
-          const r = document.createRange();
-          r.setStart(node, at);
-          r.setEnd(node, at + needle.length);
-          ranges.push(r);
-          at = hay.indexOf(needle, at + needle.length);
-        }
-      }
-      return ranges;
+      return root && q ? findTextRanges(root, q) : [];
     },
     [box],
   );
@@ -285,12 +313,54 @@ function FindBar({
     [clear, highlights],
   );
 
-  const jump = useCallback((ranges: Range[], i: number) => {
-    const r = ranges[i];
-    if (!r) return;
-    const el = r.startContainer.parentElement;
-    el?.scrollIntoView({ block: "center" });
+  /** 记下第 i 个命中在哪一轮、是那一轮里的第几个（见 curPlace）。 */
+  const place = useCallback((ranges: Range[], i: number) => {
+    const turn = turnOf(ranges[i]);
+    let ord = 0;
+    for (let k = i - 1; k >= 0 && turn && turnOf(ranges[k]) === turn; k--) ord++;
+    curPlace.current = { turn, ord };
   }, []);
+
+  const jump = useCallback(
+    (ranges: Range[], i: number) => {
+      const r = ranges[i];
+      if (!r) return;
+      const prevTurn = curPlace.current.turn;
+      place(ranges, i);
+      onJump();
+      const el = r.startContainer.parentElement;
+      // 跳到另一轮时把落点那条消息闪一下：远距离跳过去，眼睛得知道落在哪。
+      // 同一条消息里逐个往下按就不闪，只有命中高亮在挪。
+      if (el) scrollTo(el, "center", curPlace.current.turn !== prevTurn);
+    },
+    [place, onJump, scrollTo],
+  );
+
+  /**
+   * 命中失效后重扫，并留在原来那个命中上（同一轮里的同一个序号）。只重画
+   * 不滚动 —— 这是后台对账，用户没按"下一个"，视野不该被拽走。
+   */
+  const refresh = useCallback(
+    (q: string): Range[] => {
+      const ranges = scan(q);
+      const { turn, ord } = curPlace.current;
+      let at = Math.min(curRef.current, Math.max(0, ranges.length - 1));
+      if (turn?.isConnected) {
+        const first = ranges.findIndex((r) => turnOf(r) === turn);
+        if (first >= 0) {
+          let last = first;
+          while (last + 1 < ranges.length && turnOf(ranges[last + 1]) === turn) last++;
+          at = Math.min(first + ord, last);
+        }
+      }
+      hitsRef.current = ranges;
+      setTotal(ranges.length);
+      setCur(at);
+      paint(ranges, at);
+      return ranges;
+    },
+    [scan, paint],
+  );
 
   // 防抖之后再扫。scan 要 walk 一遍整个 `.transcript` 的文本节点（长会话
   // 是几万个），而输入是逐字来的 —— 同步扫等于每敲一个字全量遍历一次
@@ -304,6 +374,8 @@ function FindBar({
       return;
     }
     const timer = window.setTimeout(() => {
+      // 先让含这个词的行解析成真身、同步提交，再扫 —— 扫到的才是最终的文本节点。
+      flushSync(() => onNeedle(query));
       const ranges = scan(query);
       hitsRef.current = ranges;
       setTotal(ranges.length);
@@ -312,24 +384,40 @@ function FindBar({
       jump(ranges, 0);
     }, FIND_QUIET_MS);
     return () => window.clearTimeout(timer);
-  }, [query, scan, paint, jump, clear]);
+  }, [query, scan, paint, jump, clear, onNeedle]);
+
+  // 命中会被换掉的节点带走：流式输出重解析正在长的那段、懒加载行滚进视野
+  // 换成真身。DOM 一变（攒一下再看）就查有没有死掉的命中，有就重扫并留在
+  // 原处 —— 不然高亮一块块消失、"3/12" 还挂着，点下一个没反应。
+  useEffect(() => {
+    const root = box.current;
+    if (!root || !query) return;
+    let timer = 0;
+    const mo = new MutationObserver(() => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        if (hitsRef.current.some(deadRange)) refresh(query);
+      }, 150);
+    });
+    mo.observe(root, { subtree: true, childList: true, characterData: true });
+    return () => {
+      mo.disconnect();
+      window.clearTimeout(timer);
+    };
+  }, [box, query, refresh]);
 
   const step = (dir: 1 | -1) => {
-    // 先把死掉的命中滤掉。查找条开着的时候流式输出仍在往 DOM 里追加，
-    // 正在流的那段 Markdown 每帧都要重新 parse —— 落在被换掉的节点上的
-    // Range 已经脱离文档，高亮画不出来、scrollIntoView 也一声不响地
-    // 什么都不做，而计数还照旧显示，看起来就是"点下一个没反应"。
-    const alive = hitsRef.current.filter((r) => r.startContainer.isConnected);
-    if (alive.length !== hitsRef.current.length) {
-      hitsRef.current = alive;
-      setTotal(alive.length);
-    }
+    // 有死掉的命中就先重扫（留在原处，见 refresh）。查找条开着的时候流式
+    // 输出仍在往 DOM 里追加、懒加载行滚进视野会换成真身 —— 落在被换掉的
+    // 节点上的 Range 已经脱离文档，高亮画不出来、scrollIntoView 也一声
+    // 不响地什么都不做，看起来就是"点下一个没反应"。
+    let alive = hitsRef.current;
+    if (alive.some(deadRange)) alive = refresh(query);
     if (!alive.length) {
       clear();
       return;
     }
-    // 滤完之后 cur 可能已经越界（后面的命中先没的）。
-    const from = Math.min(cur, alive.length - 1);
+    const from = Math.min(curRef.current, alive.length - 1);
     const next = (from + dir + alive.length) % alive.length;
     setCur(next);
     paint(alive, next);
@@ -424,9 +512,34 @@ function suppressNativeMenu(e: React.MouseEvent) {
   e.preventDefault();
 }
 
-export function Transcript({
+/**
+ * 跳到某处之后，把落点那条消息闪一下（Claude 桌面版同款）：底色亮起再
+ * 淡掉。远距离跳过去，眼睛得知道落在了哪。
+ */
+function flashRow(el: Element) {
+  const row = el.closest(".turn > *, .thread-col > *") ?? el;
+  row.classList.remove("row-flash");
+  // 连按两次跳到同一条：先摘掉再强制一次样式计算，动画才会重新开始。
+  void (row as HTMLElement).offsetWidth;
+  row.classList.add("row-flash");
+  row.addEventListener("animationend", () => row.classList.remove("row-flash"), { once: true });
+}
+
+/** 对话流里的一条（键盘逐条跳的单位，见 Transcript 的键盘导航）。 */
+const ARTICLE = ".turn > *, .thread-col > .msg";
+
+/** 按下去是"操作一个控件"而不是点在内容上（见 Transcript 的 onPointerDown）。 */
+const PRESS_CONTROL =
+  'button,a[href],input,select,textarea,summary,label,video,audio,[role="button"],[contenteditable="true"],[aria-expanded]';
+
+/** 能拿键盘焦点的元素（见 Transcript 里焦点进对话流的处理）。 */
+const FOCUSABLE =
+  'a[href],button,input,select,textarea,summary,[tabindex]:not([tabindex="-1"]),[contenteditable="true"]';
+
+export const Transcript = memo(function Transcript({
   sessionId,
   items,
+  live,
   streaming,
   thinking,
   thinkClock,
@@ -450,8 +563,15 @@ export function Transcript({
 }: {
   sessionId: string;
   items: Item[];
-  streaming: string;
-  thinking: string;
+  /**
+   * 正在流的正文 / 思考本身。Transcript 不读它渲染 —— 那样每帧整个对话
+   * 重跑一遍 —— 交给订阅它的叶子（LiveMarkdown 等，见 lib/liveText）。
+   */
+  live: LiveTextStore;
+  /** 有没有正文在流。只在开始 / 落定时翻转。 */
+  streaming: boolean;
+  /** 有没有思考在流。 */
+  thinking: boolean;
   /** 正在流的思考的计时（见 useSession 的 thinkingClock）。 */
   thinkClock?: ThinkClock | null;
   busy: boolean;
@@ -492,27 +612,67 @@ export function Transcript({
 }) {
   const { t } = useT();
   const boxRef = useRef<HTMLDivElement>(null);
+  /** 跟随底部。用户往上翻就交出，自己滚回底部（或发了新消息）再接上。 */
   const stick = useRef(true);
-  /** 程序化贴底时挡住 onScroll，免得自己把 stick 打成 false。 */
-  const pinning = useRef(false);
   /**
-   * 向上翻看时的滚动锚点：视口里第一个顶边完整可见的块 + 它到视口顶的距离。
+   * 正在做的程序化滚动，挡掉它自己冒出来的 scroll。
    *
-   * 倒排容器把"上方长高"消化掉了（懒水合落高度不动视口），剩下会动
-   * 视口的是**下方**长高：用户翻着历史时流式输出还在底部追加，浏览器
-   * 保持"距底距离"，正读的内容就往下漂。WKWebView 没有原生滚动锚定
-   * （overflow-anchor 到 Safari 27 才有）—— 自己记住「正看着哪个块」，
-   * 高度变了把 scrollTop 补回去（补偿在下面的 ResizeObserver 里）。
-   * 贴底时用不上，锚点清空。
-   *
-   * 基线只在**用户**滚动时重记，补偿性滚动绝不重记 —— 引擎会把
-   * scrollTop 写入取整，补完重记等于把取整误差吸进新基线，永不回正；
-   * 反复开合折叠每轮攒下几像素，页面就一点点爬（WebKit 每轮 5~7px，
-   * Chromium 也有）。对着原始基线做伺服，误差不再累积。
+   * - `"restore"`：切回会话还原位置。这一拍里的 scroll 一律不算用户的 ——
+   *   正式包揭开面板时 WKWebView 会把 scrollTop 清成 0 再冒一次。
+   * - `"bottom"`：贴底。只挡**落在底部**的那次 scroll；落在别处说明用户
+   *   同一帧里在往上翻，必须按用户算。
    */
-  const anchor = useRef<{ el: Element; top: number } | null>(null);
+  const pinning = useRef<null | "bottom" | "restore">(null);
+  /**
+   * 翻历史时的滚动锚点：视口里第一个顶边完整可见的块 + 它到视口顶的距离。
+   *
+   * 正排容器里，**下方**长高（流式输出在底部追加）天然不动视口 —— 这是
+   * 生成中翻历史稳不稳的关键：那段时间这里一次 scrollTop 都不写。会动
+   * 视口的只剩**上方**长高：懒加载的行换成真身、content-visibility 的估高
+   * 落地、图片出图。WKWebView 没有原生滚动锚定（overflow-anchor 到
+   * Safari 27 才有），自己记住"正看着哪个块"，高度变了把 scrollTop 补回去。
+   *
+   * 基线只在**用户**滚动时重记，补偿性滚动绝不重记 —— 引擎会把写入取整，
+   * 补完重记等于把取整误差吸进新基线，越补越偏。
+   */
+  const anchor = useRef<{
+    el: Element;
+    top: number;
+    /**
+     * 锚点前面那个块（没有就是它所在的轮）和它当时的位置。锚点被换掉时用
+     * 它补偿（见 ResizeObserver 那段）：正在长的块落定时会被**换成新元素**
+     * —— 直播思考落成条目、直播过程组换真身、流着的正文落成一行 —— 旧
+     * 节点没了，按它补偿无从算起；而它前面那块没动，新元素就接在原处。
+     */
+    prev: { el: Element; top: number } | null;
+  } | null>(null);
+  /**
+   * 我们最后一次"知道"的 scrollTop（onScroll 处理过的、或自己写进去的）。
+   * 对不上 = 用户刚滚过、scroll 事件还没派发（要等下一帧）。
+   */
+  const knownTop = useRef(0);
   /** 补偿写入后 scrollTop 的回读值。scroll 事件里等值命中 = 补偿滚动。 */
   const expectedTop = useRef<number | null>(null);
+  /** 手指 / 滚动条拖拽进行中：这期间自动跟随一律不写 scrollTop。 */
+  const touching = useRef(false);
+  const draggingBar = useRef(false);
+  /** 最近一次用户滚动输入（滚轮、触摸移动、翻页键、按住滚动条）的时刻。 */
+  const lastInputAt = useRef(0);
+  /** 最近一次"往上滚、这一下会滚对话流"的滚轮的时刻（见 pinBottom）。 */
+  const upIntentAt = useRef(0);
+  /**
+   * 用户此刻正在亲手滚动。
+   *
+   * `[约束]` 跟随中，"视口往上挪了"只有在用户正在滚的时候才算他要离开。
+   * 正排容器里 scrollTop 会因为很多别的原因变小：输入框发送后从多行缩回
+   * 一行（对话区变高）、面板出现消失、内容重排时浏览器把 scrollTop 夹回
+   * 新的底部 —— 这些都冒出向上的 scroll 事件。按位置推断的话，发一条
+   * 多行消息跟随就断了，之后整轮生成停在那条消息上不动。
+   */
+  const userScrolling = () =>
+    touching.current || draggingBar.current || performance.now() - lastInputAt.current < 300;
+  /** 上一次看到的内容总高。下方长了东西（而视口没动）= 有新内容。 */
+  const lastHeight = useRef(0);
   // 渲染期就写：正式包隐藏面板时 scroll 发生在 commit 里，
   // effect 还没跑，闭包里的 armed 仍是 true，会把清零后的 0 记进去。
   const armedRef = useRef(armed);
@@ -526,10 +686,6 @@ export function Transcript({
   const captureAnchor = () => {
     const box = boxRef.current;
     const col = box?.querySelector<HTMLElement>(".thread-col");
-    // 基线要在垫好之后量：交出跟随的这一刻垫高从无到有，列整体挪一点
-    // （≤1px，发生在用户正在滚动的时候，动势掩住了它）。先量后垫的话
-    // 基线和之后每一帧都差着这一点小数，补偿永远对不齐。
-    if (col) snapColTop(col, !stick.current);
     if (stick.current) {
       anchor.current = null;
       return;
@@ -555,17 +711,38 @@ export function Transcript({
     let el = (turn.classList.contains("turn") ? firstBelow(turn.children, boxTop) : null) ?? turn;
     // 跨着视口顶边的块锚不住：它水合长高时顶边不动、内部整体重排，
     // 补偿无从算起。锚下一个块（顶边在视口内的）—— 除非它一块占满全屏。
-    if (el.getBoundingClientRect().top < boxTop - 1) {
+    //
+    // 例外：跨着顶边的正是**还在长**的那块（展开着的直播思考、正在流的
+    // 正文、直播过程组）。它只在尾部追加，顶边不动 —— 锚它自己，补偿
+    // 恒为 0。改锚它下面那块（多半是状态行）的话，那块每帧被往下顶，
+    // 补偿就每帧把画面往上拽，正读的思考一行行往上漂。
+    if (el.getBoundingClientRect().top < boxTop - 1 && !growsInPlace(el)) {
       const next = nextAnchor(el, col);
       if (next && next.getBoundingClientRect().top - boxTop < box.clientHeight) el = next;
     }
-    anchor.current = { el, top: el.getBoundingClientRect().top - boxTop };
+    const prevEl = el.previousElementSibling ?? (el.parentElement !== col ? el.parentElement : null);
+    anchor.current = {
+      el,
+      top: el.getBoundingClientRect().top - boxTop,
+      prev: prevEl ? { el: prevEl, top: prevEl.getBoundingClientRect().top - boxTop } : null,
+    };
   };
 
   /** 离底超过一屏时浮现「回到底部」按钮。 */
   const [awayFromBottom, setAwayFromBottom] = useState(false);
+  /**
+   * 翻着历史时下面又长出了新内容。「回到底部」上挂个点 —— 用户往上翻
+   * 看东西的时候，不该靠盯着滚动条才知道模型又说了话。回到底部清掉。
+   */
+  const [hasNew, setHasNew] = useState(false);
   /** ⌘F 查找条。长对话找不到历史内容是真实痛点。 */
   const [findOpen, setFindOpen] = useState(false);
+  /** 查找条里此刻在找的词（防抖之后的）。只有含它的懒加载行先解析。 */
+  const [findNeedle, setFindNeedle] = useState("");
+  const findHydrate = useMemo(
+    () => (findOpen ? findHits(items, findNeedle) : EMPTY_IDS),
+    [findOpen, items, findNeedle],
+  );
   /** 待确认的上下文删除。删的是一整轮，动手前必须看得见后果。 */
   const [confirmDel, setConfirmDel] = useState<ConfirmRequest | null>(null);
 
@@ -666,10 +843,15 @@ export function Transcript({
    * 所以也要同样的确认 —— 用户上一轮结束后手改过的文件会被盖掉，
    * 不能因为按的是「重新生成」而不是「发送」就静默动手。
    */
+  // 回调里现读 items，不进依赖：items 在跑轮时每帧都换（工具参数、
+  // 进度行），进了依赖这个回调就每帧换一个，memo 过的 Row 全部白比 ——
+  // 长会话里每帧几百行助手消息跟着重渲染。
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
   const requestRegenerate = useCallback(
     (assistantItemId: string) => {
       if (!onRegenerate) return;
-      const prompt = userPromptBefore(items, assistantItemId);
+      const prompt = userPromptBefore(itemsRef.current, assistantItemId);
       if (!prompt || prompt.id.startsWith("local-")) {
         onRegenerate(assistantItemId);
         return;
@@ -683,46 +865,217 @@ export function Transcript({
         if (ok) onRegenerate(assistantItemId);
       });
     },
-    [confirmFileRestore, items, onRegenerate, t],
+    [confirmFileRestore, onRegenerate, t],
   );
 
   /** 回退后留下的那条提问：它上面的回退图标翻成前进。 */
   const redoId = redoAvailable && onRedo ? lastRestoredUserId(items) : undefined;
 
-  const pinBottom = () => {
+  /** 用户要离开底部：交出跟随，按此刻的位置记下锚点。 */
+  const releaseStick = () => {
+    const box = boxRef.current;
+    if (!stick.current || !box) return;
+    stick.current = false;
+    knownTop.current = box.scrollTop;
+    captureAnchor();
+    rememberView(box);
+  };
+
+  // 给查找条的稳定引用（它进了 FindBar 里 effect 的依赖）。
+  const releaseStickFn = useRef(releaseStick);
+  releaseStickFn.current = releaseStick;
+  const releaseStickRef = useCallback(() => releaseStickFn.current(), []);
+
+  /**
+   * 贴底。`force` = 用户明确要回到底部（点了回程按钮、刚发了消息、切回
+   * 一个原本贴底的会话）。
+   *
+   * 非 force 的调用是内容长高时的自动跟随。`[约束]` 它必须让着用户：
+   * - 手指按着、正拖滚动条时不写；
+   * - 用户正在滚、视口又比我们上次知道的位置**靠上** —— 他刚往上滚过，
+   *   scroll 事件要下一帧才派发。这时写回底部就是把用户拽回来。
+   *   用户没在滚时视口靠上（对话区变高、内容重排被浏览器夹回）不算，
+   *   照常贴回底部（见 userScrolling）。
+   */
+  const pinBottom = (force = false) => {
     const box = boxRef.current;
     if (!box) return;
-    pinning.current = true;
-    // 倒排容器的底部就是滚动原点。
-    box.scrollTop = 0;
+    if (!force) {
+      if (touching.current || draggingBar.current) return;
+      // 用户刚往上滚了一下，原生滚动可能还没落到 scrollTop 上：这一帧不贴，
+      // 等 scroll 事件来了 onScroll 会交出跟随。真没滚动（那一下被子层接走了）
+      // 的话，过了这一小段照常贴。
+      if (performance.now() - upIntentAt.current < 250) return;
+      if (userScrolling() && box.scrollTop < knownTop.current - 1 && distFromBottom(box) > 1) {
+        releaseStick();
+        setAwayFromBottom(distFromBottom(box) > box.clientHeight);
+        return;
+      }
+    }
+    const target = bottomTop(box);
+    if (Math.abs(box.scrollTop - target) > 0.5) {
+      pinning.current = "bottom";
+      box.scrollTop = target;
+      requestAnimationFrame(() => {
+        if (pinning.current === "bottom") pinning.current = null;
+      });
+    }
+    knownTop.current = box.scrollTop;
     stick.current = true;
     anchor.current = null;
-    const col = box.querySelector<HTMLElement>(".thread-col");
-    if (col) snapColTop(col, false);
     rememberView(box);
     // 程序化滚动被 pinning 挡掉 onScroll，这里自己收按钮 ——
     // 不收的话点了「回到底部」它还挂着。
     setAwayFromBottom(false);
-    requestAnimationFrame(() => {
-      pinning.current = false;
-    });
+    setHasNew(false);
   };
+  const pinBottomFn = useRef(pinBottom);
+  pinBottomFn.current = pinBottom;
+  /**
+   * 最后一轮（`data-tail`，始终完整渲染）量到的真实高度，按轮的 key 记。
+   *
+   * `[约束]` 一轮摘掉 `data-tail` 时从 content-visibility: visible 变回
+   * auto。浏览器判定"它在屏幕上"之前，那一帧按占位高度
+   * （contain-intrinsic-size）排 —— 而它从没以 auto 渲染过，没有"记住的
+   * 尺寸"，用的是估值。估值按思考收着算，展开着在读的一轮实际几千像素：
+   * 内容当场缩掉几千像素，离底不够远的阅读位置被浏览器夹到新的最大
+   * scrollTop，下一帧轮长回来，位置却回不去了（这一下不是脚本写的）。
+   * 所以一直记着它的真实高度，摘掉那一帧拿它当占位。
+   */
+  const liveTurnHeights = useRef(new Map<string, number>());
+  /** 键盘导航正在把焦点放到某条消息上（见键盘导航和焦点进对话流的处理）。 */
+  const navFocusing = useRef(false);
+
+  /**
+   * 正在进行的程序化平滑滚动（见 glideTo）。`last` 是上一帧自己写下的
+   * scrollTop —— 下一帧位置对不上，就是有别人（用户）动了。
+   */
+  const glide = useRef<{ raf: number; last: number; startAt: number } | null>(null);
+  const stopGlide = () => {
+    if (glide.current) cancelAnimationFrame(glide.current.raf);
+    glide.current = null;
+  };
+
+  /**
+   * 平滑滚到 `target()`，到了调 `done`。
+   *
+   * 学 Claude 桌面版：每帧走剩余距离的一截（起步 6%，250ms 内加到 25%），
+   * 目标每帧重算 —— 生成中底部还在长也追得上。用户一碰（滚轮、触摸、拖
+   * 滚动条、键盘），或者 scrollTop 不是自己上一帧写的值，立刻放手，
+   * 不和用户抢。太远的先瞬移到离目标一屏半处再滑：一路滑过去会把中间
+   * 每一轮都渲染一遍。系统设了减少动态效果就直接到。
+   */
+  const glideTo = (target: () => number | null, done?: () => void) => {
+    const box = boxRef.current;
+    if (!box) return;
+    stopGlide();
+    const to0 = target();
+    if (to0 === null) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      box.scrollTop = to0;
+      done?.();
+      return;
+    }
+    const far = box.clientHeight * 1.5;
+    if (Math.abs(to0 - box.scrollTop) > far) box.scrollTop = to0 - Math.sign(to0 - box.scrollTop) * far;
+    const g = { raf: 0, last: box.scrollTop, startAt: performance.now() };
+    glide.current = g;
+    const step = () => {
+      if (glide.current !== g) return;
+      const cur = box.scrollTop;
+      if (
+        Math.abs(cur - g.last) > 2 ||
+        touching.current ||
+        draggingBar.current ||
+        lastInputAt.current > g.startAt
+      ) {
+        glide.current = null;
+        return;
+      }
+      const to = target();
+      if (to === null) {
+        glide.current = null;
+        return;
+      }
+      const d = to - cur;
+      if (Math.abs(d) < 1) {
+        // 最后半像素直接落到位（高分屏上 scrollTop 是小数）。
+        box.scrollTop = to;
+        knownTop.current = box.scrollTop;
+        glide.current = null;
+        done?.();
+        return;
+      }
+      const k = 0.06 + 0.19 * Math.min(1, (performance.now() - g.startAt) / 250);
+      box.scrollTop = cur + Math.sign(d) * Math.max(1, Math.abs(d) * k);
+      g.last = box.scrollTop;
+      knownTop.current = g.last;
+      g.raf = requestAnimationFrame(step);
+    };
+    g.raf = requestAnimationFrame(step);
+  };
+
+  const glideToBottomFn = useRef(() => {});
+  /** 平滑回到底部，到了接上跟随。 */
+  const glideToBottom = () => {
+    const box = boxRef.current;
+    if (!box) return;
+    setHasNew(false);
+    glideTo(
+      () => bottomTop(box),
+      () => {
+        stick.current = true;
+        pinBottomFn.current(true);
+      },
+    );
+  };
+
+  glideToBottomFn.current = glideToBottom;
+
+  /**
+   * 平滑滚到某个元素：放在视口中间（比视口高的贴着顶），到了闪一下（见
+   * flashRow）。查找跳转、键盘逐条跳都走这里。
+   */
+  const glideToEl = (el: Element, align: "center" | "start" = "center", flash = true) => {
+    const box = boxRef.current;
+    if (!box) return;
+    glideTo(
+      () => {
+        if (!el.isConnected) return null;
+        const r = el.getBoundingClientRect();
+        const v = box.getBoundingClientRect();
+        const off =
+          align === "start" || r.height > box.clientHeight - 40
+            ? 16
+            : (box.clientHeight - r.height) / 2;
+        return Math.max(0, Math.min(bottomTop(box), box.scrollTop + r.top - v.top - off));
+      },
+      flash ? () => flashRow(el) : undefined,
+    );
+  };
+  const glideToElFn = useRef(glideToEl);
+  glideToElFn.current = glideToEl;
+  const glideToElRef = useCallback(
+    (el: Element, align?: "center" | "start", flash?: boolean) => glideToElFn.current(el, align, flash),
+    [],
+  );
 
   const restoreView = () => {
     const box = boxRef.current;
     const saved = transcriptView.get(sessionId);
     if (!box || !saved) return;
     if (saved.stick) {
-      pinBottom();
+      pinBottom(true);
       return;
     }
     stick.current = false;
-    pinning.current = true;
+    pinning.current = "restore";
     box.scrollTop = saved.top;
+    knownTop.current = box.scrollTop;
     captureAnchor();
     setAwayFromBottom(distFromBottom(box) > box.clientHeight);
     requestAnimationFrame(() => {
-      pinning.current = false;
+      if (pinning.current === "restore") pinning.current = null;
     });
   };
 
@@ -758,6 +1111,7 @@ export function Transcript({
       const delta = top - lastTop;
       // pinning 帧也要记位置，不然下一次用户滚动会拿到跨帧的假 delta。
       lastTop = top;
+      knownTop.current = top;
       // 锚点补偿自己冒的 scroll：不改 stick、更不重记锚点基线（见
       // anchor 的注释）。等值不命中说明同帧还叠着用户滚动，按用户算。
       const compScroll = expectedTop.current !== null && top === expectedTop.current;
@@ -766,20 +1120,28 @@ export function Transcript({
       // 隐藏那一帧正式包会把 scrollTop 打成 0。armed 在渲染时已是
       // false，这次滚动不是用户翻的，不能写进缓存、也不能改 stick。
       if (!armedRef.current) return;
-      if (pinning.current) return;
+      if (pinning.current === "restore") return;
+      if (pinning.current === "bottom" && Math.abs(top - bottomTop(box)) <= 1) return;
       const dfb = distFromBottom(box);
-      if (delta < 0 && dfb > 1) {
-        // 倒排坐标里向上翻 = scrollTop 变负，和正排同号。dfb > 1 挡掉
-        // 底部橡皮筋回弹：过冲弹回时 scrollTop 也在变小，但那不是
-        // "想往上翻"。
+      if (delta < 0 && dfb > 1 && (!stick.current || userScrolling())) {
+        // 往上翻。dfb > 1 挡掉两种假象：底部橡皮筋回弹，以及内容变短时
+        // 浏览器把 scrollTop 夹回底部 —— scrollTop 都在变小，但都不是
+        // "想往上翻"。滚轮 / 键盘那条路在事件到这里之前已经交出了跟随，
+        // 这里兜的是触控板以外的来源（拖滚动条、辅助功能滚动）。
         stick.current = false;
-      } else if (delta > 0 && dfb < 24) {
+      } else if (delta > 0 && (dfb < 24 || top >= lastHeight.current - box.clientHeight - 24)) {
+        // 滚回底部接上跟随。第二个条件按**用户滚动时看到的**内容高度判：
+        // scroll 事件晚一帧才派发，这期间流式输出又在下面长了几行，按此刻
+        // 的高度量，用户明明滚到了底却"差着几十像素"，跟随就再也接不上。
+        // lastHeight 是上一次布局（ResizeObserver）记下的高度，正是用户
+        // 滚的时候眼前那一版。
         // 只有自己滚回贴底才恢复跟随。阈值收窄到约一行 —— 停在离底
         // 几十像素处阅读时，跟随不该被抢回去。
         stick.current = true;
       }
       rememberView(box);
       setAwayFromBottom(dfb > box.clientHeight);
+      if (dfb < 24) setHasNew(false);
       captureAnchor();
     };
     box.addEventListener("scroll", onScroll, { passive: true });
@@ -790,12 +1152,31 @@ export function Transcript({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
-  // 只在子层会吞掉滚轮时才接手。平时交给浏览器，才能跟左边会话栏
-  // 一样走系统平滑和触控板惯性。passive:false 才能 preventDefault。
+  // 滚轮。嵌套滚动（代码块 / 工具输出 / 思考块里滚、滚到头之后交给页面）
+  // 全交给浏览器原生：WebKit / Chromium 都有滚动锁定（scroll latching），
+  // 按系统给的精确手势阶段（手指按着、松手、惯性）把一次手势锁在一个
+  // 滚动区上 —— 滚到头不带着页面走，下一次手势才交给外层。这套 JS 拿不到
+  // 阶段，模仿只能猜惯性；而且要拦截就得 passive:false，浏览器每个滚轮
+  // 事件都得等主线程跑完监听器才敢滚，生成中主线程一直在忙，滚动就发涩。
+  //
+  // 所以 macOS 这里只挂**被动**监听：记下"用户在滚"（见 userScrolling），
+  // 不拦截、不代滚，滚动全程走合成线程。
+  //
+  // 例外是 Windows：WebView2 对子层的链式滚动经常不交（最初接管滚轮就是
+  // 为它），在那里保留老办法 —— 子层会把这一下吞掉时由这里代滚对话流。
   useEffect(() => {
     const box = boxRef.current;
     if (!box) return;
-    const onWheel = (e: WheelEvent) => {
+    const onWheelIntent = (e: WheelEvent) => {
+      if (e.deltaY === 0 || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+      const now = performance.now();
+      lastInputAt.current = now;
+      // 往上滚、落点下又没有能接住它的子层：这一下多半会滚动对话流。这一刻
+      // 先别贴底（见 pinBottom），等原生滚动的 scroll 事件来了再由 onScroll
+      // 判断是否离开底部 —— 抢在它前面写回底部就是和原生滚动打架。
+      if (e.deltaY < 0 && !innerScroller(e.target, box, e.deltaY)) upIntentAt.current = now;
+    };
+    const onWheelHijack = (e: WheelEvent) => {
       if (e.defaultPrevented) return;
       if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
       if (!wheelNeedsHijack(e.target, box, e.deltaY)) return;
@@ -806,17 +1187,343 @@ export function Transcript({
       box.scrollTop += dy;
       e.preventDefault();
     };
-    box.addEventListener("wheel", onWheel, { passive: false });
-    return () => box.removeEventListener("wheel", onWheel);
+    const hijack = /Windows/i.test(navigator.userAgent);
+    // 触屏：手指按着的时候一个像素都不替用户滚。松手后由 scroll 事件
+    // 按位置决定还跟不跟。
+    const onTouchStart = () => {
+      touching.current = true;
+      lastInputAt.current = performance.now();
+    };
+    const onTouchEnd = () => {
+      touching.current = false;
+      // 松手后惯性还在滚，这段也算用户的。
+      lastInputAt.current = performance.now() + 700;
+    };
+    // 键盘往上翻（焦点在对话流里时）。
+    const onKey = (e: KeyboardEvent) => {
+      // 键盘开合卡片同鼠标点（见 onPointerDown）。
+      if (
+        (e.key === "Enter" || e.key === " ") &&
+        e.target instanceof Element &&
+        e.target.closest("[aria-expanded]")
+      ) {
+        releaseStick();
+        return;
+      }
+      if (e.key === "PageUp" || e.key === "ArrowUp" || e.key === "Home" || (e.key === " " && e.shiftKey)) {
+        lastInputAt.current = performance.now();
+        releaseStick();
+      } else if (e.key === "PageDown" || e.key === "ArrowDown" || e.key === "End" || e.key === " ") {
+        lastInputAt.current = performance.now();
+      }
+    };
+    // 拖滚动条：按在容器自身、落在右侧滚动条那一窄条上。
+    //
+    // 按在内容上（Claude 桌面版同款）：贴底时先交出跟随。
+    // - 点的是展开 / 收起类控件（带 aria-expanded 的：工具卡、思考块、过程
+    //   组、长气泡）：内容在它下面长出来，贴底的话整页往上推，刚点的标题
+    //   从鼠标底下滑走。交出跟随后由锚点补偿把它钉在原处。
+    // - 点在文字上：可能是要选一段字，生成中还贴着底的话字在鼠标底下跑。
+    //   松手 500ms 内页面没滚、也没选中文字 —— 只是随手点了一下 —— 再贴回去。
+    // - 别的控件（复制、链接、播放器）不动布局，不交。
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.target === box) {
+        if (e.clientX >= box.getBoundingClientRect().right - 16) draggingBar.current = true;
+        return;
+      }
+      if (e.button !== 0 || !stick.current || !(e.target instanceof Element)) return;
+      const hit = e.target.closest(PRESS_CONTROL);
+      if (hit && !hit.matches("[aria-expanded]")) return;
+      releaseStick();
+      if (hit) return;
+      const top = box.scrollTop;
+      window.addEventListener(
+        "pointerup",
+        () => {
+          window.setTimeout(() => {
+            if (stick.current || !box.isConnected || Math.abs(box.scrollTop - top) > 1) return;
+            const sel = window.getSelection();
+            if (sel && !sel.isCollapsed && sel.anchorNode && box.contains(sel.anchorNode)) return;
+            pinBottomFn.current(true);
+          }, 500);
+        },
+        { once: true },
+      );
+    };
+    const onPointerUp = () => {
+      if (draggingBar.current) lastInputAt.current = performance.now();
+      draggingBar.current = false;
+    };
+    box.addEventListener("wheel", onWheelIntent, { passive: true });
+    if (hijack) box.addEventListener("wheel", onWheelHijack, { passive: false });
+    box.addEventListener("touchstart", onTouchStart, { passive: true });
+    box.addEventListener("touchend", onTouchEnd, { passive: true });
+    box.addEventListener("touchcancel", onTouchEnd, { passive: true });
+    box.addEventListener("keydown", onKey);
+    box.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("pointerup", onPointerUp);
+    return () => {
+      box.removeEventListener("wheel", onWheelIntent);
+      box.removeEventListener("wheel", onWheelHijack);
+      box.removeEventListener("touchstart", onTouchStart);
+      box.removeEventListener("touchend", onTouchEnd);
+      box.removeEventListener("touchcancel", onTouchEnd);
+      box.removeEventListener("keydown", onKey);
+      box.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("pointerup", onPointerUp);
+    };
+    // releaseStick 只读 ref（同 onScroll 那个 effect 的说明）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 切回来把位置还回去。layout 一次不够：正式包揭开 visibility
-  // 之后还要再排一次，第二帧再写才能压住 WebKit 的清零。
+  // 键盘在消息之间跳（Claude 桌面版同款）。焦点在对话里（某条消息本身，
+  // 或消息里的按钮、链接）时：↑ / ↓ 上一条 / 下一条，Home / End 第一条 /
+  // 最后一条，Esc 回到输入框。输入框空着时按 ↑ 从最后一条进来。
+  //
+  // 消息平时不能拿焦点 —— 带 tabindex 的话鼠标点在字上也会把焦点给它，
+  // WKWebView 随即把它滚进视野（长消息就是一跳）。只在跳到它的那一刻临时
+  // 给一个 tabindex=-1，焦点一走就摘掉。
+  useEffect(() => {
+    const box = boxRef.current;
+    if (!box) return;
+    const focusArticle = (el: HTMLElement, key: string | null) => {
+      if (!el.hasAttribute("tabindex")) {
+        el.tabIndex = -1;
+        el.addEventListener("blur", () => el.removeAttribute("tabindex"), { once: true });
+      }
+      navFocusing.current = true;
+      el.focus({ preventScroll: true });
+      navFocusing.current = false;
+      const r = el.getBoundingClientRect();
+      const v = box.getBoundingClientRect();
+      // 从输入框进来（key = null）：落在眼前这条上，看得见一截就不滚。
+      if (key === null && r.bottom > v.top && r.top < v.bottom) return;
+      const list = box.querySelectorAll(ARTICLE);
+      if (key === "End" || (el === list[list.length - 1] && key !== "Home" && key !== "ArrowUp")) {
+        // 到了最后一条：滚到底、接上跟随。
+        glideToBottomFn.current();
+        return;
+      }
+      releaseStickFn.current();
+      if (r.top < v.top + 8 || r.bottom > v.bottom - 8) glideToElFn.current(el, "start", false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.altKey || e.metaKey || e.ctrlKey || e.shiftKey || e.defaultPrevented) return;
+      if (!["ArrowUp", "ArrowDown", "Home", "End", "Escape"].includes(e.key)) return;
+      const target = e.target;
+      if (!(target instanceof HTMLElement)) return;
+      if (target.closest('input,textarea,select,[contenteditable="true"],.find-bar')) return;
+      const cur = target.closest<HTMLElement>(ARTICLE);
+      if (!cur || !box.contains(cur)) return;
+      e.preventDefault();
+      if (e.key === "Escape") {
+        box.closest(".chat-pane")?.querySelector<HTMLElement>(".composer-input")?.focus();
+        return;
+      }
+      const list = Array.from(box.querySelectorAll<HTMLElement>(ARTICLE));
+      const i = list.indexOf(cur);
+      const next =
+        e.key === "ArrowUp" ? i - 1 : e.key === "ArrowDown" ? i + 1 : e.key === "Home" ? 0 : list.length - 1;
+      const el = list[next];
+      if (el) focusArticle(el, e.key);
+    };
+    const onEnter = () => {
+      const list = box.querySelectorAll<HTMLElement>(ARTICLE);
+      const last = list[list.length - 1];
+      if (last) focusArticle(last, null);
+    };
+    box.addEventListener("keydown", onKey);
+    box.addEventListener(ENTER_TRANSCRIPT_EVENT, onEnter);
+    return () => {
+      box.removeEventListener("keydown", onKey);
+      box.removeEventListener(ENTER_TRANSCRIPT_EVENT, onEnter);
+    };
+  }, []);
+
+  // 空闲时把视口附近还没解析的正文提前解析掉（Claude 桌面版的 lookahead）。
+  //
+  // 懒加载行本来要进到视口 1200px 内才解析（见 LazyMarkdown），往上快速翻
+  // 历史时，解析就挤在滚动的那几帧里，长回答一条十几毫秒。这里等滚动停
+  // 下来，趁空闲一次解析一条：离视口最近的先来，上方优先（翻历史多半往上
+  // 翻），三屏以内。解析会让上方的行变高，这时用户没在滚，锚点补偿那一下
+  // 不和触控板惯性打架。
+  useEffect(() => {
+    const box = boxRef.current;
+    if (!box || !armed) return;
+    const ric = typeof window.requestIdleCallback === "function" ? window.requestIdleCallback : null;
+    let idle = 0;
+    let timer = 0;
+    let quiet = 0;
+    let stopped = false;
+    const cancel = () => {
+      if (idle && ric) window.cancelIdleCallback(idle);
+      window.clearTimeout(timer);
+      idle = 0;
+      timer = 0;
+    };
+    const pick = (): Element | null => {
+      const v = box.getBoundingClientRect();
+      const range = box.clientHeight * 3;
+      let best: Element | null = null;
+      let bestD = Infinity;
+      for (const el of box.querySelectorAll(".md-lazy")) {
+        // 量所在的轮：轮本身不被跳过排版，量它不会逼浏览器排里面。
+        const r = (el.closest(".turn") ?? el).getBoundingClientRect();
+        const d =
+          r.bottom <= v.top ? v.top - r.bottom : r.top >= v.bottom ? (r.top - v.bottom) * 1.5 : 0;
+        if (d < range && d < bestD) {
+          best = el;
+          bestD = d;
+        }
+      }
+      return best;
+    };
+    const work = () => {
+      idle = 0;
+      timer = 0;
+      if (stopped || userScrolling()) return;
+      const el = pick();
+      if (!el) return;
+      el.dispatchEvent(new Event(HYDRATE_EVENT));
+      schedule();
+    };
+    function schedule() {
+      cancel();
+      if (ric) idle = ric(work, { timeout: 1500 });
+      else timer = window.setTimeout(work, 80);
+    }
+    const onScroll = () => {
+      cancel();
+      window.clearTimeout(quiet);
+      quiet = window.setTimeout(schedule, 200);
+    };
+    box.addEventListener("scroll", onScroll, { passive: true });
+    quiet = window.setTimeout(schedule, 600);
+    return () => {
+      stopped = true;
+      cancel();
+      window.clearTimeout(quiet);
+      box.removeEventListener("scroll", onScroll);
+    };
+  }, [armed, sessionId]);
+
+  // 贴底时键盘焦点从外面进来（输入框里 Shift+Tab、侧栏里 Tab），落点在视口
+  // 外的话浏览器会把它滚进视野 —— 一下跳到很久以前那条消息、贴底也跟着
+  // 丢了。Claude 桌面版的做法：改落到视口里最后一个能聚焦的元素上，
+  // preventScroll，位置不动。
+  //
+  // 只管"从外面进来"。焦点在对话流里挪（Tab 一个个往上走）是用户自己在
+  // 翻，照常滚；鼠标点出来的焦点（编辑框、按钮）也不管。
+  useEffect(() => {
+    const box = boxRef.current;
+    if (!box) return;
+    let pointerAt = -Infinity;
+    const onPointer = () => {
+      pointerAt = performance.now();
+    };
+    const onFocusIn = (e: FocusEvent) => {
+      const target = e.target;
+      const from = e.relatedTarget;
+      if (!stick.current || !(target instanceof HTMLElement) || target === box) return;
+      // 键盘逐条跳过来的：落点就是用户要的，滚动由那边管。
+      if (navFocusing.current) return;
+      if (from instanceof Node && box.contains(from)) return;
+      if (performance.now() - pointerAt < 500) return;
+      // 位置按"贴在底部时"判：Chromium 先把目标滚进视野再派发 focusin，
+      // 这时量到的已经是滚过之后的位置。贴着底的话滚之前 scrollTop 就是
+      // 底部，差多少补回多少。
+      const shift = bottomTop(box) - box.scrollTop;
+      const view = box.getBoundingClientRect();
+      const inView = (el: Element) => {
+        const r = el.getBoundingClientRect();
+        return r.height > 0 && r.top - shift >= view.top && r.bottom - shift <= view.bottom;
+      };
+      if (inView(target)) return;
+      const all = box.querySelectorAll<HTMLElement>(FOCUSABLE);
+      for (let i = all.length - 1; i >= 0; i--) {
+        const el = all[i]!;
+        if (el.matches(":disabled") || !inView(el)) continue;
+        if (typeof el.checkVisibility === "function" && !el.checkVisibility({ visibilityProperty: true })) {
+          continue;
+        }
+        // 落在一条消息的操作栏里时落到栏首（复制），不落在末尾的删除 /
+        // 重新生成上 —— 回车一按就是动作。再按 Tab 照常往后走。
+        const bar = el.closest(".msg-actions");
+        (bar?.querySelector<HTMLElement>(".msg-action") ?? el).focus({ preventScroll: true });
+        break;
+      }
+      // 浏览器可能已经先滚过去了（Chromium），也可能在这之后才滚（各家
+      // 时机不一）：当场贴回底部，下一帧再核一次。
+      pinBottomFn.current(true);
+      requestAnimationFrame(() => {
+        if (stick.current) pinBottomFn.current(true);
+      });
+    };
+    box.addEventListener("pointerdown", onPointer, true);
+    box.addEventListener("focusin", onFocusIn);
+    return () => {
+      box.removeEventListener("pointerdown", onPointer, true);
+      box.removeEventListener("focusin", onFocusIn);
+    };
+  }, []);
+
+  // 切回来把位置还回去。
+  //
+  // 正式包的 WKWebView 揭开隐藏的会话面板（content-visibility）之后，会在
+  // 接下来某一帧把 scrollTop 清零 —— 时机不定，layout 时写一次压不住。
+  // 正排容器里 0 是对话的**最顶上**：清零那一帧画出来，就是整页闪到开头
+  // 再跳回来（早先倒排时 0 恰好是底部，贴底的会话看不出来）。
+  //
+  // 所以位置落稳之前，对话列先透明（只动 opacity，不影响布局和滚动）：
+  // 每帧核对一次，被清了就再写回去，连续两帧都在该在的地方才显示出来，
+  // 最多等 6 帧。用户看到的第一帧就是正确的位置。清零会冒一次 scroll，
+  // 那里也当场写回。
+  //
+  // `[约束]` 显示不能只靠 rAF：窗口被遮挡、低电量时 rAF 会被系统降频，
+  // 内容就一直透明着。150ms 兜底，到点无论如何显示。
   useLayoutEffect(() => {
     if (!armed) return;
+    const box = boxRef.current;
+    const col = box?.querySelector<HTMLElement>(".thread-col");
+    const saved = transcriptView.get(sessionId);
+    if (col) col.style.opacity = "0";
     restoreView();
-    const again = requestAnimationFrame(() => restoreView());
-    return () => cancelAnimationFrame(again);
+    let raf = 0;
+    let frames = 0;
+    let settled = 0;
+    let fallback = 0;
+    const onFakeScroll = () => {
+      if (!box) return;
+      const want = !saved || saved.stick ? bottomTop(box) : saved.top;
+      if (Math.abs(box.scrollTop - want) > 1) restoreView();
+    };
+    const reveal = () => {
+      if (col) col.style.opacity = "";
+      window.clearTimeout(fallback);
+      box?.removeEventListener("scroll", onFakeScroll);
+    };
+    box?.addEventListener("scroll", onFakeScroll, { passive: true });
+    fallback = window.setTimeout(() => {
+      cancelAnimationFrame(raf);
+      reveal();
+    }, 150);
+    const check = () => {
+      if (!box) return reveal();
+      const want = !saved || saved.stick ? bottomTop(box) : saved.top;
+      if (Math.abs(box.scrollTop - want) > 1) {
+        restoreView();
+        settled = 0;
+      } else {
+        settled++;
+      }
+      if (settled >= 2 || ++frames >= 6) return reveal();
+      raf = requestAnimationFrame(check);
+    };
+    raf = requestAnimationFrame(check);
+    return () => {
+      cancelAnimationFrame(raf);
+      reveal();
+    };
     // `[约束]` restoreView 绝不能进依赖。它每次渲染都是新引用，进去之后
     // 这个 effect 每渲染一次就把滚动位置写回缓存值一次 —— 流式输出期间
     // 等于每帧把用户拽回上次记录的位置，页面再也滚不动。
@@ -824,67 +1531,139 @@ export function Transcript({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [armed, sessionId]);
 
-  // 内容高度一变（流式追加、懒水合落地、图片 / mermaid 出图）就到这里
-  // 校正。倒排容器把贴底和"上方长高"都交给了浏览器，这里剩两件事。
+  // 内容高度一变（流式追加、懒水合落地、图片 / mermaid 出图）就到这里。
+  //
+  // - 跟随中：贴回底部（pinBottom 自己会让着正在滚的用户）。
+  // - 翻历史中：**下方**长高什么都不用做 —— 正排容器里它不动视口。这正是
+  //   生成中翻历史稳定的原因：流式输出每帧都在长，这里一次都不写
+  //   scrollTop，原生滚动（触控板惯性、平滑滚动）完全不受打扰。只有锚点
+  //   **上方**的东西变了高（懒加载换真身、估高落地、图片出图）才补一次。
+  //
+  // ResizeObserver 回调在 layout 之后、paint 之前跑，补写用户看不到中间态。
   useEffect(() => {
     const box = boxRef.current;
     const col = box?.querySelector(".thread-col");
     if (!box || !col) return;
+    lastHeight.current = box.scrollHeight;
     const ro = new ResizeObserver(() => {
-      snapColTop(col as HTMLElement, !stick.current);
+      lastHeight.current = box.scrollHeight;
+      const liveTurn = col.querySelector<HTMLElement>(".turn[data-tail]");
+      const liveKey = liveTurn?.dataset["turnKey"];
+      if (liveTurn && liveKey) {
+        liveTurnHeights.current.set(liveKey, Math.round(liveTurn.getBoundingClientRect().height));
+      }
       if (stick.current) {
-        // 贴底本是免费的（scrollTop 恒为 0 指着底部），pinBottom 只是
-        // 把补偿期间可能攒下的几像素残差归零，顺手收掉回程按钮。
         pinBottom();
         return;
       }
-      // 翻着历史时会动视口的只剩**下方**长高：流式输出在底部追加、
-      // 折叠组在视口内开合，浏览器保持"距底距离"，正读的内容就漂 ——
-      // 把锚点块拉回原位。上方长高（懒水合）倒排后天然不动视口，那时
-      // dy 恰好是 0。ResizeObserver 回调在 layout 之后、paint 之前跑，
-      // 这里补写 scrollTop 用户看不到中间态。写完回读进 expectedTop，
-      // 让 onScroll 认出这次滚动不是用户翻的；基线不重记（见 anchor
-      // 注释）。pinning 帧（restoreView 正在二次补写）不掺和；隐藏的
-      // 保活面板（!armed）量出来的是假布局，也不动。
-      //
-      // snapColTop 让列高（连同垫的 margin）恒为整数，下方长高把画面
-      // 顶走的量也就恒为整数 —— 只写整数 scrollTop 就补得分毫不差，
-      // 不留亚像素残差。Math.round 只是吸掉浮点噪声。
-      const a = anchor.current;
-      if (a && a.el.isConnected && armedRef.current && !pinning.current) {
-        const dy = a.el.getBoundingClientRect().top - box.getBoundingClientRect().top - a.top;
-        if (Math.abs(dy) > 0.05) {
+      if (armedRef.current && !pinning.current) {
+        const boxTop = box.getBoundingClientRect().top;
+        let dy = 0;
+        if (Math.abs(box.scrollTop - knownTop.current) > 0.5) {
+          // 用户刚滚过、scroll 事件还没派发：锚点基线还是滚动之前的，拿它
+          // 补偿等于把用户这一下按回去。按此刻的位置重记，这一帧不补。
+          knownTop.current = box.scrollTop;
+          captureAnchor();
+        } else if (anchor.current && !anchor.current.el.isConnected) {
+          // 锚点块被换成了新元素（正在长的块落定）：按它前面那块挪了多少
+          // 补，再在新布局上重记锚点。不补的话，落定那一帧布局一变，正读
+          // 着的思考 / 正文当场跳走。
+          const p = anchor.current.prev;
+          if (p?.el.isConnected) dy = p.el.getBoundingClientRect().top - boxTop - p.top;
+          captureAnchor();
+          if (anchor.current) anchor.current.top -= Math.round(dy);
+          if (anchor.current?.prev) anchor.current.prev.top -= Math.round(dy);
+        } else {
+          const a = anchor.current;
+          dy = a ? a.el.getBoundingClientRect().top - boxTop - a.top : 0;
+        }
+        if (Math.abs(dy) > 0.5) {
           box.scrollTop = box.scrollTop + Math.round(dy);
           expectedTop.current = box.scrollTop;
+          knownTop.current = box.scrollTop;
+          // 平滑滚动途中补偿：这一下是自己写的，别让它当成用户接手。
+          if (glide.current) glide.current.last = box.scrollTop;
           rememberView(box);
         }
+        // 前一块的基线跟着这一帧重记：它自己可能刚长高过（懒加载换真身），
+        // 锚点补偿把锚点拉回了原处，前一块却挪了。不重记的话，等锚点被换
+        // 掉那一下会按这段旧账多补一截。
+        const p = anchor.current?.prev;
+        if (p?.el.isConnected) p.top = p.el.getBoundingClientRect().top - box.getBoundingClientRect().top;
       }
       // 交出跟随后内容还在下面长，离底距离变大但不触发 scroll 事件 ——
       // 「回到底部」得靠这里浮出来，不然用户翻上去就找不到回程。
       setAwayFromBottom(distFromBottom(box) > box.clientHeight);
     });
     ro.observe(col);
+    // 对话区自己变高变矮也要管：输入框随草稿长高缩回、上方出现横条时，
+    // 列没变、视口变了 —— 跟随中不贴一下，底部就露出一截或被盖住一截。
+    ro.observe(box);
     return () => ro.disconnect();
-    // pinBottom / rememberView 同上：只读 ref 的新引用函数。放进依赖会让
-    // ResizeObserver 每次渲染 disconnect 再重建，而它正是用来观测流式
-    // 长高的 —— 每帧重建既贵又会丢掉观测基线。
+    // pinBottom / rememberView 只读 ref。放进依赖会让 ResizeObserver 每次
+    // 渲染 disconnect 再重建 —— 每帧重建既贵又会丢掉观测基线。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 「回到底部」上的新内容提示，按**数据**判，不按高度判。
+  //
+  // `[约束]` 不能用"内容变高了"推断。切到历史会话往上翻时，视口下方的行
+  // 一直在变高 —— 懒加载换真身、content-visibility 的估高落地、图片出图
+  // —— 那只是渲染完成，不是模型说了新话；按高度判，翻历史时这个点亮个
+  // 不停。这里只认对话内容本身往后长了：多了条目、正文 / 思考在流、最后
+  // 那张工具卡的状态或输出变了。且只在这一轮正在跑时认 —— 切会话、拉历史
+  // 快照对账换掉 items 时 busy 为假，不会误报；后台任务完成通知会让轮子
+  // 重新跑起来，那时它再长出来的内容照常算。
+  const contentMark = (() => {
+    const last = items[items.length - 1];
+    const tail =
+      last?.kind === "tool"
+        ? `${last.status}:${last.output.length}:${last.result?.length ?? 0}`
+        : last && "text" in last
+          ? `${last.text.length}`
+          : "";
+    return `${items.length}|${last?.id ?? ""}|${tail}`;
+  })();
+  const seenMark = useRef(contentMark);
+  useEffect(() => {
+    if (seenMark.current === contentMark) return;
+    seenMark.current = contentMark;
+    if (armed && busy && !stick.current) setHasNew(true);
+  }, [contentMark, armed, busy]);
+  // 正文 / 思考在流也算新内容。它们不经过渲染（见 live），直接听 store。
+  const markGate = useRef({ armed, busy });
+  markGate.current = { armed, busy };
+  useEffect(
+    () =>
+      live.subscribe(() => {
+        const g = markGate.current;
+        if (g.armed && g.busy && !stick.current) setHasNew(true);
+      }),
+    [live],
+  );
+
   // 自己发的消息无条件回到底部。没有这条的话，在上面翻历史时发了新
   // 消息，stick 是 false，整轮生成都不跟随 —— 得手动滑到底才恢复。
-  const lastUserId = useRef("");
+  //
+  // 认"新消息"按最后一条用户消息的**位置**往后挪，不按 id 变：乐观气泡
+  // 换成宿主回声时 id 会从 `local-*` 变成正式的，那不是新发的一句 ——
+  // 按 id 认的话，用户在开轮头几百毫秒里往上翻，会被这一下拽回底部。
+  const lastUserAt = useRef(-1);
   useLayoutEffect(() => {
+    let force = false;
+    let at = -1;
     for (let i = items.length - 1; i >= 0; i--) {
-      const it = items[i];
-      if (it?.kind !== "user") continue;
-      if (it.id !== lastUserId.current) {
-        lastUserId.current = it.id;
-        stick.current = true;
+      if (items[i]?.kind === "user") {
+        at = i;
+        break;
       }
-      break;
     }
-    if (stick.current) pinBottom();
+    if (at > lastUserAt.current) {
+      stick.current = true;
+      force = true;
+    }
+    lastUserAt.current = at;
+    if (stick.current) pinBottom(force);
     // pinBottom 不进依赖：依赖列的是"什么变化该重新贴底"，那是内容本身。
     // 把每帧新建的函数混进去只会让这个列表失去表达力。
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -907,15 +1686,71 @@ export function Transcript({
   // 连续的思考 / 工具折成组（学 Cursor）。长探索几十行连排会把回答
   // 挤出屏幕，折完对话流里剩下的才是内容。生成期间正在跑的工具也在
   // 组里，组头单行直播（见 ProcessGroup）—— 工具完成只换字不增删行，
-  // 底部不再随每个工具弹跳。正文开始流（streaming 非空）说明尾部那段
+  // 底部不再随每个工具弹跳。正文开始流（streaming 为真）说明尾部那段
   // 过程已经讲完，live 撤下、单条段落还原成普通行 —— 一行换一行，
-  // 这次落定同样不跳。liveTail 先算成布尔再进 useMemo：流式期间
-  // Transcript 每帧重渲染，分组不该跟着每帧重算。
+  // 这次落定同样不跳。liveTail 先算成布尔再进 useMemo：跑轮时工具参数、
+  // 输出也在一帧帧改 items，分组不该跟着无关的重渲染重算。
+  // ── 条目身份与入场 ──────────────────────────
+  //
+  // 乐观气泡（`local-*`）在宿主回声到达时换成正式 id。React 按 id 当 key
+  // 的话，那一下整条气泡（连同它开的那一轮）卸掉重挂：入场动画被拦腰
+  // 截断、悬停态和编辑态丢掉、轮里的东西全部重建。这里把正式 id 映射回
+  // 它顶替的那个本地 id，key 从头到尾不变。映射只增不减、按内容配对，
+  // 同样的输入算出同样的结果（渲染期计算安全）。
+  const keyAlias = useRef(new Map<string, string>());
+  /** 上一次提交时还在的乐观气泡（提交后才更新，见下面的 layout effect）。 */
+  const prevLocals = useRef<{ id: string; text: string }[]>([]);
+  for (const it of items) {
+    if (it.kind !== "user" || it.id.startsWith("local-") || keyAlias.current.has(it.id)) continue;
+    const was = prevLocals.current.find(
+      (l) => l.text === it.text && !items.some((x) => x.id === l.id),
+    );
+    if (was && ![...keyAlias.current.values()].includes(was.id)) keyAlias.current.set(it.id, was.id);
+  }
+  const keyOf = useCallback((id: string) => keyAlias.current.get(id) ?? id, []);
+
+  /**
+   * 这一次渲染里**新出现**的条目：挂上时轻轻淡入（见 Row 的 enter）。
+   *
+   * 首次挂载、切回会话、历史水合进来的都不算 —— 那是"一直在那儿的东西"，
+   * 整屏一起淡入只会显得慢。一次冒出来好几条也当水合（快照对账），
+   * 不算新消息。
+   */
+  const seen = useRef<Set<string> | null>(null);
+  const fresh = useMemo(() => {
+    const out = new Set<string>();
+    const known = seen.current;
+    if (!known) return out;
+    for (const it of items) {
+      const k = keyAlias.current.get(it.id) ?? it.id;
+      if (!known.has(k)) out.add(k);
+    }
+    return out.size > 3 ? new Set<string>() : out;
+  }, [items]);
+  useLayoutEffect(() => {
+    const known = seen.current ?? new Set<string>();
+    for (const it of items) known.add(keyAlias.current.get(it.id) ?? it.id);
+    seen.current = known;
+    prevLocals.current = items.flatMap((it) =>
+      it.kind === "user" && it.id.startsWith("local-") ? [{ id: it.id, text: it.text }] : [],
+    );
+  }, [items]);
+
   const liveTail = busy && !streaming;
   const blocks = useMemo(() => groupBlocks(items, liveTail), [items, liveTail]);
   // 再按轮收一层。离屏的轮整个跳过排版绘制，这一层就是那个开关挂的地方
   // （见 groupTurns 和 styles.css 的 `.turn`）。
-  const turns = useMemo(() => groupTurns(blocks), [blocks]);
+  const turns = useMemo(() => groupTurns(blocks, keyOf), [blocks, keyOf]);
+  // 每轮没渲染过时的占位高度，按内容估（见 lib/turnHeight）。列宽取渲染时
+  // 量到的；第一次渲染还没有 DOM，按最宽算。渲染过的轮浏览器记着真实
+  // 高度（contain-intrinsic-size 的 auto），这个估值就不再起作用。
+  const colWidth = boxRef.current?.querySelector<HTMLElement>(".thread-col")?.clientWidth || 720;
+  //
+  // 当过最后一轮的例外，用量到的真实高度（见 liveTurnHeights）。
+  const turnHeights = useMemo(
+    () => turns.map((t) => liveTurnHeights.current.get(t.key) ?? estimateTurnHeight(t.blocks, colWidth)),
+    [turns, colWidth],
+  );
   // 正在流的思考并进尾部直播组（组头滚思考预览、落定进组行数不变），
   // 没有直播组可挂时才单独成行 —— 那一行随后被组头原地接替，也不跳。
   const tailBlock = blocks[blocks.length - 1];
@@ -927,23 +1762,48 @@ export function Transcript({
   return (
     <div className="transcript-shell" onContextMenu={suppressNativeMenu}>
       <main className="transcript" ref={boxRef}>
+        {/* 查找条 sticky 钉在视口上缘，所以必须是滚动容器的第一个孩子。 */}
+        {findOpen && armed ? (
+          <FindBar
+            box={boxRef}
+            onNeedle={setFindNeedle}
+            onJump={releaseStickRef}
+            scrollTo={glideToElRef}
+            onClose={() => {
+              setFindOpen(false);
+              setFindNeedle("");
+            }}
+          />
+        ) : null}
         <div className="thread-col">
         {turns.map((t, ti) => (
           <div
             className="turn"
             key={t.key}
-            // 最后一轮正在生成时不省渲染：内容每帧在长，估高一直失效，
-            // 而它本来就在视口里（见 styles.css 的 .turn[data-live]）。
+            style={{ containIntrinsicSize: `auto ${turnHeights[ti]}px` }}
+            data-turn-key={t.key}
+            // 最后一轮不省渲染：生成中内容每帧在长，估高一直失效，而它
+            // 本来就在视口里（见 styles.css 的 .turn[data-tail]）。
+            // data-live 另算，只在生成中挂（操作栏的悬停显示用它）。
+            //
+            // `[约束]` data-tail 生成结束后也不摘，等下一轮出现才摘。结束那一下正好是
+            // 直播思考 / 正文搬进这一轮的同一次提交：此时摘掉，它变回
+            // content-visibility: auto，判定"在屏幕上"之前那一帧按占位高度
+            // 排，内容当场缩掉几千像素，阅读位置被浏览器夹走（见
+            // liveTurnHeights）。等下一轮出现时它早已按真实高度排过、量过。
+            {...(ti === turns.length - 1 ? { "data-tail": "" } : {})}
             {...(busy && ti === turns.length - 1 ? { "data-live": "" } : {})}
           >
             {t.blocks.map((b, bi) => {
               // 懒水合的窗口按块数算，所以要用块在 blocks 里的原下标。
               const i = t.from + bi;
+              const rowKey = b.kind === "row" ? keyOf(b.item.id) : "";
               return b.kind === "row" ? (
                 <Row
-                  key={b.item.id}
+                  key={rowKey}
                   item={b.item}
-                  hydrate={findOpen || i >= hydrateFrom}
+                  enter={fresh.has(rowKey)}
+                  hydrate={i >= hydrateFrom || findHydrate.has(b.item.id)}
                   regenEnabled={!busy}
                   mutateEnabled={!busy}
                   {...(onRegenerate ? { onRegenerate: requestRegenerate } : {})}
@@ -960,10 +1820,11 @@ export function Transcript({
               ) : (
                 <ProcessGroup
                   key={b.id}
+                  id={b.id}
                   items={b.items}
                   live={b.live}
                   {...(b === liveFold && thinking
-                    ? { thinkingText: thinking, thinkingClock: thinkClock ?? null }
+                    ? { thinkingLive: live, thinkingClock: thinkClock ?? null }
                     : {})}
                 />
               );
@@ -972,17 +1833,9 @@ export function Transcript({
         ))}
 
         {thinking && !liveFold ? (
-          <ThinkingBlock text={thinking} live clock={thinkClock ?? null} />
+          <LiveThinking live={live} clock={thinkClock ?? null} />
         ) : null}
-        {/* animated：正在流的这一条里，新长出来的块逐个淡入 —— token
-            是成撮到的，不淡的话是一坨一坨往外蹦。落定成 Row 之后就是
-            普通历史消息，不再带这个开关（见 styles.css 的
-            .md[data-md-animated]）。 */}
-        {streaming ? (
-          <div className="msg assistant">
-            <Markdown text={streaming} animated />
-          </div>
-        ) : null}
+        {streaming ? <LiveMarkdown live={live} /> : null}
         {/* 换模式的建议长在对话流里（Cursor 同款）：它是对话的一部分，
             不是危险操作；用户看着模型给的理由点「切换」或者不切。 */}
         {modeAsk && onAnswerMode ? (
@@ -1024,27 +1877,23 @@ export function Transcript({
           <Dots label={waitLabel} timed since={waitSince} />
         ) : null}
         </div>
-        {findOpen && armed ? <FindBar box={boxRef} onClose={() => setFindOpen(false)} /> : null}
       </main>
       {/* 删除确认 portal 到 body、遮罩盖整个窗口（和别处的确认框一样）。
-          就地渲染的话它是倒排滚动容器的孩子，列上哪天再挂 transform /
+          就地渲染的话它是滚动容器的孩子，列上哪天再挂 transform /
           contain，fixed 遮罩的包含块就从视口变成滚动区，弹窗偏移错位。 */}
       {confirmDel ? (
         <ConfirmDialog c={confirmDel} portal onClose={() => setConfirmDel(null)} />
       ) : null}
-      {/* 叠在滚动容器外面。倒排 flex 里 sticky + 负边距：WebKit 把按钮
+      {/* 叠在滚动容器外面。滚动流里 sticky + 负边距：WebKit 把按钮
           挤出视口（Mac 上看不见），Chromium 把它压扁（Windows 上不圆）。
           往上翻超过一屏才出现 —— 贴底时它只是噪音。 */}
       {awayFromBottom ? (
         <button
           type="button"
-          className="jump-bottom"
-          title={t("transcript.jumpBottom")}
-          aria-label={t("transcript.jumpBottom")}
-          onClick={() => {
-            stick.current = true;
-            pinBottom();
-          }}
+          className={hasNew ? "jump-bottom has-new" : "jump-bottom"}
+          title={hasNew ? t("transcript.jumpBottomNew") : t("transcript.jumpBottom")}
+          aria-label={hasNew ? t("transcript.jumpBottomNew") : t("transcript.jumpBottom")}
+          onClick={glideToBottom}
         >
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
             <path
@@ -1055,19 +1904,38 @@ export function Transcript({
               strokeLinejoin="round"
             />
           </svg>
+          {hasNew ? <span className="jump-dot" aria-hidden /> : null}
         </button>
       ) : null}
     </div>
   );
+});
+
+/**
+ * 正在流的正文。只有它订阅 store 的正文，流式期间每帧重画的就是这一块
+ * （见 lib/liveText）。
+ *
+ * animated：新长出来的块逐个淡入 —— token 是成撮到的，不淡的话是一坨
+ * 一坨往外蹦。落定成 Row 之后就是普通历史消息，不再带这个开关（见
+ * styles.css 的 .md[data-md-animated]）。
+ */
+function LiveMarkdown({ live }: { live: LiveTextStore }) {
+  const text = useLiveText(live, "text");
+  return text ? (
+    <div className="msg assistant">
+      <Markdown text={text} animated />
+    </div>
+  ) : null;
 }
 
 /**
- * memo：流式输出时 Transcript 每帧重渲染，历史条目不该跟着刷。
+ * memo：跑轮时 items 一帧帧在换（工具参数、输出），历史条目不该跟着刷。
  * items 数组里未变化的元素引用是稳定的（更新走的是替换单个元素），
  * 所以浅比较有效。
  */
 export const Row = memo(function Row({
   item,
+  enter = false,
   onRegenerate,
   regenEnabled,
   hydrate,
@@ -1082,6 +1950,11 @@ export const Row = memo(function Row({
   mutateEnabled,
 }: {
   item: Item;
+  /**
+   * 这条是刚冒出来的（不是水合进来的历史）：挂上时轻轻淡入。只看挂载
+   * 那一刻的值 —— 之后 Transcript 会把它翻回 false，动画不能因此被掐断。
+   */
+  enter?: boolean;
   onRegenerate?: (itemId: string) => void;
   regenEnabled?: boolean;
   /** 贴底 / 查找中：立刻解析 markdown 和工具详情。 */
@@ -1105,6 +1978,8 @@ export const Row = memo(function Row({
   const { t } = useT();
   // 编辑态挂在 Row 上（hooks 不能进 switch 分支），只有文本气泡用它。
   const [editing, setEditing] = useState(false);
+  const [entering] = useState(enter);
+  const enterCls = entering ? " msg-enter" : "";
 
   switch (item.kind) {
     case "user":
@@ -1142,7 +2017,7 @@ export const Row = memo(function Row({
       // 气泡正文为空，界面按 isPlanExecution 画卡）。
       if (item.nudge) {
         return (
-          <div className="user-row">
+          <div className={`user-row${enterCls}`}>
             <BuildCard item={item} />
             <MsgActions
               text={item.text}
@@ -1157,7 +2032,7 @@ export const Row = memo(function Row({
       // 操作按钮排在气泡右下方的流内位置（不用绝对定位：thread-col 的
       // content-visibility 隐含 paint containment，定位出气泡边界会被裁掉）。
       return (
-        <div className="user-row">
+        <div className={`user-row${enterCls}`}>
           <div className="msg user">
             {/* 自己附的图要看得见。不回显的话，发完之后附件条一清空，
                 用户就再也确认不了刚才发出去的是哪张。 */}
@@ -1168,7 +2043,7 @@ export const Row = memo(function Row({
                 ))}
               </div>
             ) : null}
-            <UserText text={item.text} {...(item.files ? { files: item.files } : {})} />
+            <UserBody text={item.text} {...(item.files ? { files: item.files } : {})} />
           </div>
           <MsgActions
             text={item.text}
@@ -1223,11 +2098,17 @@ export const Row = memo(function Row({
     case "tool":
       return <ToolCard tool={item} eager={!!hydrate} />;
     case "error":
-      return <ErrorCard item={item} />;
+      return <ErrorCard item={item} enter={entering} />;
     case "notice":
-      return <div className="msg notice">{item.text}</div>;
+      return <div className={`msg notice${enterCls}`}>{item.text}</div>;
     case "task_notice":
-      return <TaskNoticeCard item={item} />;
+      return entering ? (
+        <div className="msg-enter">
+          <TaskNoticeCard item={item} />
+        </div>
+      ) : (
+        <TaskNoticeCard item={item} />
+      );
     case "compact":
       return (
         <div className="compact-rule" role="separator">
@@ -1245,11 +2126,17 @@ export const Row = memo(function Row({
  * 撑成一大块红。原话是排查的人才需要的，点开再看 —— 而且内核那边已经
  * 只留了说明原因的那一句（见 riot-providers 的 summarize_body）。
  */
-function ErrorCard({ item }: { item: Extract<Item, { kind: "error" }> }) {
+function ErrorCard({
+  item,
+  enter = false,
+}: {
+  item: Extract<Item, { kind: "error" }>;
+  enter?: boolean;
+}) {
   const { t } = useT();
   const [open, setOpen] = useState(false);
   return (
-    <div className="msg error">
+    <div className={enter ? "msg error msg-enter" : "msg error"}>
       <div className="error-line">
         <span className="error-text">{item.text}</span>
         {item.detail ? (
@@ -1708,6 +2595,29 @@ function Dots({
       {label ? <span className="wait-note-text">{label}</span> : null}
       {secs ? <span className="wait-note-time">{secs}</span> : null}
     </div>
+  );
+}
+
+/** 用户消息的正文，太长的先收起（见 lib/turnHeight 的 isLongUserText）。 */
+function UserBody({ text, files }: { text: string; files?: string[] }) {
+  const { t, tn } = useT();
+  const [open, setOpen] = useState(false);
+  const lines = useMemo(() => text.split("\n").length, [text]);
+  const body = <UserText text={text} {...(files ? { files } : {})} />;
+  if (!isLongUserText(text)) return body;
+  return (
+    <>
+      <div className={open ? "user-clamp open" : "user-clamp"}>{body}</div>
+      <button
+        type="button"
+        className="user-clamp-toggle"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+      >
+        {open ? t("transcript.user.collapse") : tn("transcript.user.expand", lines)}
+      </button>
+    </>
   );
 }
 

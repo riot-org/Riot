@@ -117,6 +117,10 @@ export default {
   "app.workbench.planNone": "這個對話還沒有計畫。切到 Plan 模式描述任務，模型會先寫一份計畫放在這裡。",
   "app.workbench.addPanel": "新增面板",
   "app.workbench.closeTab": "關閉 {title}",
+  "app.workbench.unsaved": "未儲存",
+  "app.workbench.unsavedTitle": "「{name}」有未儲存的修改",
+  "app.workbench.unsavedBody": "關閉分頁會丟掉這些修改。",
+  "app.workbench.closeDiscard": "不儲存，關閉",
 
   "app.remote.connecting": "正在連線",
   "app.remote.connectingHost": "正在連線到主機…",

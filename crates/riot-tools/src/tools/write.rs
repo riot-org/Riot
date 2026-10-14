@@ -235,6 +235,8 @@ impl Tool for Write {
             },
         );
 
+        // `[约束]` 「已创建」这个开头前端认（ProcessFold 的 WRITE_CREATED，
+        // 过程组摘要据此分「创建 / 编辑」），改措辞两边一起改。
         let verb = if created { "创建" } else { "覆盖" };
         ToolOutcome::Ok {
             model_content: ToolResultContent::text(format!(

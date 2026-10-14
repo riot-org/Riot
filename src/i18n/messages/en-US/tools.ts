@@ -123,6 +123,7 @@ export default {
   "tools.schedule.resume": "Resume a scheduled task",
   "tools.schedule.delete": "Delete a scheduled task",
   "tools.schedule.manage": "Manage scheduled tasks",
+  "tools.reloadConfig": "Reload app config",
 
   // ── Tool descriptions: subagents ─────────────────────
   "tools.task.sync": "Subagent ({kind}, synchronous): {description}",

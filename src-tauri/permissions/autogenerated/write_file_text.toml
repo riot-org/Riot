@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-write-file-text"
+description = "Enables the write_file_text command without any pre-configured scope."
+commands.allow = ["write_file_text"]
+
+[[permission]]
+identifier = "deny-write-file-text"
+description = "Denies the write_file_text command without any pre-configured scope."
+commands.deny = ["write_file_text"]

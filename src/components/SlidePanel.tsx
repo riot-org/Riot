@@ -11,7 +11,7 @@
  *   不强制重排 —— 尺寸在哪一拍变，过渡就在哪一拍起。
  */
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { type RefObject, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 /** 壳的过渡时长。必须和 styles.css 的 `--dur-panel` 一致 —— 短了的话
  *  内容会在收起动画播完之前就被卸掉，看到的是空壳在滑。 */
@@ -29,6 +29,44 @@ export function usePresence(open: boolean, ms: number = SLIDE_MS + 40): boolean 
     return () => window.clearTimeout(t);
   }, [open, ms]);
   return present || open;
+}
+
+/**
+ * 所在面板的开合动画播完了没有。不在面板里、或者面板没在动，一挂上就是 true。
+ *
+ * 给"挂载那一下很重"的内容用（现在是 MarkdownView：整篇 HTML 一次贴进
+ * DOM）：没播完就先画占位，播完再把几千个节点贴进来。虚拟化渲染的内容
+ * 不需要它 —— 代码预览换成 CodeMirror 之后就拿掉了，见 CodeView。
+ *
+ * `[约束]` 重活不能和开合动画抢同一段主线程。抽屉的 500ms 过渡里一次贴进
+ * 几千上万个节点，排版和绘制正好压在动画中段，抽屉滑到一半顿住。延后到
+ * 播完再做，代价只是占位多显示几百毫秒 —— 那几百毫秒抽屉本来就还没停稳。
+ *
+ * 用 `getAnimations()` 而不是按挂载时刻计时：在已经开着的抽屉里切文件
+ * 时根本没有动画，不该白等 500ms。它会先冲刷待定的样式，所以和壳改尺寸
+ * 同一次提交挂上的内容也能看到刚起步的那条过渡。
+ */
+export function useSlideSettled(ref: RefObject<HTMLElement | null>): boolean {
+  const [settled, setSettled] = useState(false);
+  useLayoutEffect(() => {
+    if (settled) return;
+    const shell = ref.current?.closest(".slide-panel");
+    const running = shell?.getAnimations().filter((a) => a.playState === "running") ?? [];
+    if (running.length === 0) {
+      setSettled(true);
+      return;
+    }
+    let live = true;
+    // 过渡被打断（播到一半又关上 / 又打开）时 finished 会 reject：同样算
+    // 停了 —— 再等下去占位就一直挂着。
+    void Promise.allSettled(running.map((a) => a.finished)).then(() => {
+      if (live) setSettled(true);
+    });
+    return () => {
+      live = false;
+    };
+  }, [ref, settled]);
+  return settled;
 }
 
 export function SlidePanel({

@@ -1,4 +1,4 @@
-import { memo, startTransition, useContext, useEffect, useRef, useState } from "react";
+import { memo, startTransition, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { type BackgroundTaskView, readImage, renderUiText } from "../bridge";
@@ -278,6 +278,25 @@ const PlainToolCard = memo(function PlainToolCard({
   // 对话流里的每次调用只是历史快照 —— 都展开的话，一个十步任务会在
   // 对话里铺十张几乎相同的清单。摘要行说清"几之几、正在干什么"，
   // 点开看的是"那一刻清单长什么样"。
+  /**
+   * 这张卡在眼前从运行中跑完了。只有这种时候状态图标才过渡（转圈 →
+   * 弹出对勾 / 叉）；历史里水合出来的卡一挂上就是终态，动画在那里只是噪音。
+   *
+   * "在眼前"不限于这个实例：跑着的工具多半在折起的直播组里（卡片根本
+   * 没挂载），跑完才还原成普通行、以终态挂上来 —— 所以挂载时还要问一句
+   * 它是不是刚刚还在跑（见 seenRunning）。
+   */
+  if (tool.status === "running") noteToolRunning(tool.id);
+  const [settleOnMount] = useState(
+    () => tool.status !== "running" && seenRunning.has(tool.id),
+  );
+  const sawRunning = useRef(tool.status === "running");
+  if (tool.status === "running") sawRunning.current = true;
+  const settled = (sawRunning.current || settleOnMount) && tool.status !== "running";
+  // 落定动画播过一次就从表里摘掉：之后因为分组变化重挂，不该再弹一次。
+  useEffect(() => {
+    if (tool.status !== "running") seenRunning.delete(tool.id);
+  }, [tool.status, tool.id]);
   const open = userToggle ?? tool.name === "Delete";
   const detail = hasDetail(tool);
   const summary = summarize(tool);
@@ -310,7 +329,17 @@ const PlainToolCard = memo(function PlainToolCard({
   const head = (
     <>
       {/* 运行中转起来 —— 静止的 ◐ 和卡死看起来一模一样 */}
-      <span className={tool.status === "running" ? "tool-icon tool-icon-spin" : "tool-icon"}>
+      {/* key 跟着状态走：跑完时换一个新节点，落定动画从头播一次。 */}
+      <span
+        key={tool.status}
+        className={
+          tool.status === "running"
+            ? "tool-icon tool-icon-spin"
+            : settled
+              ? "tool-icon tool-icon-settle"
+              : "tool-icon"
+        }
+      >
         {icon(tool.status)}
       </span>
       <span className="tool-name">{tool.name}</span>
@@ -360,6 +389,23 @@ const PlainToolCard = memo(function PlainToolCard({
     </div>
   );
 });
+
+/**
+ * 最近被画成"运行中"的工具（卡片或直播组头都算）。跑完时以终态新挂上的
+ * 卡片靠它知道"我刚刚还在跑"，从而播一次落定动画。有上限：在折叠组里
+ * 跑完、始终没被挂成卡片的那些不会被摘，按插入顺序淘汰。
+ */
+const seenRunning = new Set<string>();
+const SEEN_RUNNING_MAX = 200;
+
+export function noteToolRunning(id: string) {
+  if (seenRunning.has(id)) return;
+  seenRunning.add(id);
+  if (seenRunning.size > SEEN_RUNNING_MAX) {
+    const oldest = seenRunning.values().next();
+    if (!oldest.done) seenRunning.delete(oldest.value);
+  }
+}
 
 function icon(s: Tool["status"]): string {
   if (s === "running") return "◐";
@@ -671,13 +717,22 @@ function renderDetail(tool: Tool): React.ReactNode {
       // 确认的是"写了个什么东西"，不是逐行审阅。
       const live = tool.status === "running";
       const from = live ? Math.max(0, lines.length - 30) : 0;
+      // 和 Edit 同一套 diff 画法：新写的文件每一行都是新增，摘要行也写着
+      // 「+N」—— 展开后画成普通代码块的话，两处说法对不上。省略 / 总行数
+      // 那两行是说明，不是文件内容，不染色。
       parts.push(
-        <pre key="w" className="tool-body">
-          {from > 0 ? `${tn("transcript.tool.write.skipped", from)}\n` : ""}
-          {lines.slice(from, from + 30).join("\n")}
-          {!live && lines.length > 30
-            ? `\n${tn("transcript.tool.write.total", lines.length)}`
-            : ""}
+        <pre key="w" className="tool-body tool-diff">
+          {from > 0 ? (
+            <div className="diff-note">{tn("transcript.tool.write.skipped", from)}</div>
+          ) : null}
+          {lines.slice(from, from + 30).map((l, n) => (
+            <div key={from + n} className="add">
+              + {l}
+            </div>
+          ))}
+          {!live && lines.length > 30 ? (
+            <div className="diff-note">{tn("transcript.tool.write.total", lines.length)}</div>
+          ) : null}
         </pre>,
       );
     }
@@ -861,8 +916,33 @@ function ThumbPreview({
   );
 }
 
+/** 查看器缩放范围：相对"适配视口"那一档的倍数。 */
+const ZOOM_MIN = 0.25;
+const ZOOM_MAX = 20;
+/** 按钮 / 键盘每步的倍率。 */
+const ZOOM_STEP = 1.25;
+/** 指针按下后挪过这么多像素才算拖动 —— 不到这个数松手仍按点击处理。 */
+const DRAG_SLOP = 4;
+
+type View = { s: number; x: number; y: number };
+const FIT: View = { s: 1, x: 0, y: 0 };
+
+/**
+ * 以屏幕点 (px, py) 为不动点把缩放改到 next。cx/cy 是图在布局里的
+ * 中心（transform 不影响布局，所以它固定）。缩回 ≤1 时平移归零，
+ * 免得图缩小后飘在角落。
+ */
+function zoomAt(v: View, next: number, px: number, py: number, cx: number, cy: number): View {
+  const s = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, next));
+  if (s <= 1) return { s, x: 0, y: 0 };
+  const k = s / v.s;
+  return { s, x: px - cx - k * (px - cx - v.x), y: py - cy - k * (py - cy - v.y) };
+}
+
 /**
  * 图片查看器:全屏遮罩，图在视口里上下左右居中；超大的缩到视口内。
+ * 滚轮 / 触控板捏合以光标为中心缩放，双击在适配和 2× 之间切换，
+ * 放大后拖动平移；底部一排 − 百分比 + 按钮，键盘 + / - / 0 同样可用。
  *
  * portal 到 body —— 卡片在带 overflow 的滚动容器里，fixed 遮罩留在原地
  * 会被裁掉。导出给聊天区图片和磁盘图片文件的放大查看共用。
@@ -882,11 +962,158 @@ export function ShotViewer({
   // 不会顺手把底下的权限请求也拒了。
   useEscLayer(onClose);
 
+  const [view, setView] = useState<View>(FIT);
+  const [dragging, setDragging] = useState(false);
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const rootRef = useRef<HTMLDivElement>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
+  // 活动指针：一根是拖动，两根是捏合。
+  const pointers = useRef(new Map<number, { x: number; y: number }>());
+  const gesture = useRef<{
+    startX: number;
+    startY: number;
+    view: View;
+    dist: number;
+    moved: boolean;
+  } | null>(null);
+  // 刚拖完的那次 click 不能当"点空白关闭"：从图上拖到遮罩上松手，
+  // click 落在共同祖先（遮罩）上。
+  const suppressClick = useRef(false);
+
+  // 换图回到适配。
+  useEffect(() => setView(FIT), [src]);
+
+  const center = useCallback(() => {
+    const r = imgRef.current?.getBoundingClientRect();
+    const v = viewRef.current;
+    if (!r) return { cx: window.innerWidth / 2, cy: window.innerHeight / 2 };
+    // 量到的是变换后的框，减掉平移就是布局中心（缩放绕中心，不移中心）。
+    return { cx: r.left + r.width / 2 - v.x, cy: r.top + r.height / 2 - v.y };
+  }, []);
+
+  const zoomBy = useCallback(
+    (factor: number, px?: number, py?: number) => {
+      const { cx, cy } = center();
+      setView((v) => zoomAt(v, v.s * factor, px ?? cx, py ?? cy, cx, cy));
+    },
+    [center],
+  );
+
+  // 滚轮要 preventDefault（不然触控板捏合会缩放整个 WebView），React 的
+  // onWheel 是 passive 的，只能挂原生监听。
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? window.innerHeight : 1;
+      // 捏合（ctrlKey）的 delta 很小，系数放大；鼠标滚轮一格约 100。
+      const k = e.ctrlKey ? 0.01 : 0.0015;
+      zoomBy(Math.exp(-e.deltaY * unit * k), e.clientX, e.clientY);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [zoomBy]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === "+" || e.key === "=") zoomBy(ZOOM_STEP);
+      else if (e.key === "-" || e.key === "_") zoomBy(1 / ZOOM_STEP);
+      else if (e.key === "0") setView(FIT);
+      else return;
+      e.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [zoomBy]);
+
+  const startGesture = () => {
+    const pts = [...pointers.current.values()];
+    const mid = pts.reduce((a, p) => ({ x: a.x + p.x / pts.length, y: a.y + p.y / pts.length }), {
+      x: 0,
+      y: 0,
+    });
+    const [a, b] = pts;
+    const dist = a && b ? Math.hypot(a.x - b.x, a.y - b.y) : 0;
+    gesture.current = {
+      startX: mid.x,
+      startY: mid.y,
+      view: viewRef.current,
+      dist,
+      moved: gesture.current?.moved ?? false,
+    };
+  };
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0 || (e.target as HTMLElement).closest("button")) return;
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    e.currentTarget.setPointerCapture(e.pointerId);
+    startGesture();
+  };
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (!pointers.current.has(e.pointerId)) return;
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const g = gesture.current;
+    if (!g) return;
+    const [a, b] = pointers.current.values();
+    if (a && b) {
+      const mx = (a.x + b.x) / 2;
+      const my = (a.y + b.y) / 2;
+      const dist = Math.hypot(a.x - b.x, a.y - b.y);
+      const { cx, cy } = center();
+      const z = zoomAt(g.view, g.view.s * (dist / (g.dist || dist)), g.startX, g.startY, cx, cy);
+      // 捏合中心本身也可能移动：叠加中心位移做平移。
+      setView(z.s > 1 ? { s: z.s, x: z.x + mx - g.startX, y: z.y + my - g.startY } : z);
+      g.moved = true;
+      return;
+    }
+    const dx = e.clientX - g.startX;
+    const dy = e.clientY - g.startY;
+    if (!g.moved && Math.hypot(dx, dy) < DRAG_SLOP) return;
+    g.moved = true;
+    // 适配档没什么可平移的，拖了也只是吞掉这次点击。
+    if (g.view.s <= 1) return;
+    setDragging(true);
+    setView({ s: g.view.s, x: g.view.x + dx, y: g.view.y + dy });
+  };
+
+  const onPointerUp = (e: React.PointerEvent) => {
+    if (!pointers.current.delete(e.pointerId)) return;
+    if (pointers.current.size > 0) {
+      // 捏合松开一指：剩下那根接着拖，从当前状态重新起算。
+      startGesture();
+      return;
+    }
+    if (gesture.current?.moved) suppressClick.current = true;
+    gesture.current = null;
+    setDragging(false);
+  };
+
+  const onDoubleClick = (e: React.MouseEvent) => {
+    if (e.target !== imgRef.current) return;
+    const { cx, cy } = center();
+    setView((v) => (v.s > 1 ? FIT : zoomAt(v, 2, e.clientX, e.clientY, cx, cy)));
+  };
+
+  const zoomed = view.s > 1;
   return createPortal(
-    // 点空白处（遮罩本身）关闭；点图不关，方便拖滚动条。
+    // 点空白处（遮罩本身）关闭；点图不关。
     <div
-      className="shot-viewer"
+      ref={rootRef}
+      className={`shot-viewer shot-viewer-zoomable${zoomed ? " zoomed" : ""}${dragging ? " dragging" : ""}`}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      onDoubleClick={onDoubleClick}
       onClick={(e) => {
+        if (suppressClick.current) {
+          suppressClick.current = false;
+          return;
+        }
         if (e.target === e.currentTarget) onClose();
       }}
     >
@@ -906,7 +1133,42 @@ export function ShotViewer({
           />
         </svg>
       </button>
-      <img src={src} alt={t("transcript.image.original", { name: alt })} />
+      <img
+        ref={imgRef}
+        src={src}
+        alt={t("transcript.image.original", { name: alt })}
+        draggable={false}
+        style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.s})` }}
+      />
+      <div className="shot-viewer-zoombar">
+        <button
+          type="button"
+          onClick={() => zoomBy(1 / ZOOM_STEP)}
+          disabled={view.s <= ZOOM_MIN}
+          aria-label={t("transcript.image.zoomOut")}
+          title={t("transcript.image.zoomOut")}
+        >
+          −
+        </button>
+        <button
+          type="button"
+          className="shot-viewer-zoomlevel"
+          onClick={() => setView(FIT)}
+          aria-label={t("transcript.image.zoomReset")}
+          title={t("transcript.image.zoomReset")}
+        >
+          {Math.round(view.s * 100)}%
+        </button>
+        <button
+          type="button"
+          onClick={() => zoomBy(ZOOM_STEP)}
+          disabled={view.s >= ZOOM_MAX}
+          aria-label={t("transcript.image.zoomIn")}
+          title={t("transcript.image.zoomIn")}
+        >
+          +
+        </button>
+      </div>
     </div>,
     document.body,
   );

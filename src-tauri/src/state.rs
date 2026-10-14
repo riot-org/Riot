@@ -542,6 +542,12 @@ impl AppState {
                             m.last_error = error;
                         }
                         state.emit_sessions_changed();
+                        // 模型这轮开来查数据、渲染截图的页，用户一眼没看过，
+                        // 收掉 —— 每页是一个几十 MB、脚本照跑的 CEF browser。
+                        // 另起任务：关页要等 CDP，别堵着这条通知循环。
+                        if let Some(b) = state.browser_of(&session_id).await {
+                            crate::ipc::spawn(async move { b.close_scratch().await });
+                        }
                         // 这轮结束可能是某个定时任务跑完了：认领、通知、广播。
                         state.finish_schedule_run(&session_id).await;
                     }
@@ -583,6 +589,11 @@ impl AppState {
                         // 永远不来，认领表里的条目就永远挂着。
                         state.0.schedules.lock().await.running.clear();
                         state.emit_sessions_changed();
+                    }
+                    HostNotice::KernelRestarted => {
+                        // 另起任务：reconcile 要发 RPC，而这个循环还得接着收通知。
+                        let s = state.clone();
+                        crate::ipc::spawn(async move { s.reconcile_mcp().await });
                     }
                 }
             }
@@ -995,6 +1006,61 @@ impl AppState {
 
     pub async fn set_config(&self, c: AppConfig) {
         *self.0.config.lock().await = Some(c);
+    }
+
+    /// 把磁盘上的 `config.json` 读进来换掉内存里那份，通知前端。
+    /// `Ok(true)` = 换了，`Ok(false)` = 和内存一致。
+    ///
+    /// 读不懂或校验不过的**不采纳**，内存里的照旧，原因返回给调用方 ——
+    /// 改坏的文件不该让正在用的配置失效。
+    ///
+    /// 只由 ReloadConfig 工具触发（智能体改完文件主动调），不盯文件：
+    /// 绕过设置页改这个文件的就是智能体，让它显式说"改完了"，比宿主
+    /// 猜什么时候该去看要可靠，而且失败原因能当场交回给它。
+    pub async fn adopt_disk_config(&self) -> Result<bool, String> {
+        let path = self.0.config_path.clone();
+        let mut disk = tokio::task::spawn_blocking(move || crate::config::reread_at(&path))
+            .await
+            .map_err(|e| e.to_string())??;
+        normalize_projects(&mut disk.projects);
+        disk.validate().map_err(|e| match e {
+            crate::config::ConfigError::Parse(ui) => format!("校验不过：{ui}"),
+            other => format!("校验不过：{other}"),
+        })?;
+        {
+            let mut g = self.0.config.lock().await;
+            if g.as_ref() == Some(&disk) {
+                return Ok(false);
+            }
+            *g = Some(disk);
+        }
+        tracing::info!("config.json 已按磁盘重新读入");
+        self.emit("config_changed", serde_json::Value::Null);
+        Ok(true)
+    }
+
+    /// ReloadConfig 工具的宿主端：重读配置、对齐 MCP、等连接出结果，
+    /// 返回一段给模型看的状态说明。
+    ///
+    /// 配置没变也照样 reconcile —— 失败的服务器借这次重连（见
+    /// `McpHub::reconcile`），模型改了 `env` 之外的东西（装好了包、
+    /// 用户补了环境变量）之后也能用它重试。
+    pub async fn reload_config_for_agent(&self) -> Result<String, String> {
+        let changed = self.adopt_disk_config().await?;
+        self.reconcile_mcp().await;
+
+        // 等握手出结果再答，不然模型只能看到一排"连接中"。上限（90 次 ×
+        // 0.5 秒）要盖住 `npx -y` 冷启动，又不能比 MCP 握手超时（60 秒）还长。
+        let mut tick = tokio::time::interval(std::time::Duration::from_millis(500));
+        let mut statuses = Vec::new();
+        for _ in 0..90 {
+            tick.tick().await;
+            statuses = self.mcp_statuses().await;
+            if !statuses.iter().any(|x| x.state == "connecting") {
+                break;
+            }
+        }
+        Ok(describe_reload(changed, &statuses))
     }
 
     /// 新建一个绑定 `root` 的会话。
@@ -3274,6 +3340,41 @@ fn sandbox_kind(mode: crate::config::SandboxMode) -> riot_protocol::SandboxKind 
 /// 没有"该被回收却被环撑着"的对象。
 struct HostCalls(AppState);
 
+/// ReloadConfig 的结果说明。读者是模型：失败原因和下一步要说清，
+/// 它看不到设置页。
+fn describe_reload(changed: bool, servers: &[riot_protocol::rpc::McpServerStatus]) -> String {
+    let mut out = String::from(if changed {
+        "已重新读入 config.json，设置页已同步。"
+    } else {
+        "config.json 和当前生效的配置一致，没有需要更新的；失败的 MCP 服务器已重连一次。"
+    });
+    if servers.is_empty() {
+        out.push_str("\n当前没有启用的 MCP 服务器。");
+        return out;
+    }
+    out.push_str("\nMCP 服务器：");
+    for s in servers {
+        let line = match s.state.as_str() {
+            "connected" => format!(
+                "{}：已连接，{} 个工具（下一轮起可用）",
+                s.id,
+                s.tools.len()
+            ),
+            "connecting" => format!(
+                "{}：还在连接（npx 第一次下包会慢），过一会儿再调一次 ReloadConfig 看结果",
+                s.id
+            ),
+            _ => match &s.error {
+                Some(e) => format!("{}：失败，{e}", s.id),
+                None => format!("{}：失败", s.id),
+            },
+        };
+        out.push_str("\n- ");
+        out.push_str(&line);
+    }
+    out
+}
+
 fn host_unavailable(message: impl Into<String>) -> riot_protocol::hostcall::HostResponse {
     riot_protocol::hostcall::HostResponse::Error {
         kind: riot_protocol::hostcall::HostCallErrorKind::Unavailable,
@@ -3485,6 +3586,14 @@ impl crate::kernel::HostCallHandler for HostCalls {
                     },
                 }
             }
+            Req::ConfigReload => match self.0.reload_config_for_agent().await {
+                Ok(text) => R::Text { text },
+                Err(e) => host_unavailable(format!(
+                    "没有采纳 config.json 的修改，当前生效的还是原来的配置。{e}\n\
+                     改好文件再调一次 ReloadConfig。文件留着坏的话，下次启动应用会把它\
+                     挪成 config.json.bak、用默认值启动。"
+                )),
+            },
         }
     }
 }
@@ -3902,6 +4011,65 @@ mod tests {
             "m1",
             "会话换模型不该改新会话的默认"
         );
+    }
+
+    #[tokio::test]
+    async fn 磁盘上改过的配置按需读入() {
+        // 模型用 Edit 往 config.json 里加了一个 MCP 服务器，然后调
+        // ReloadConfig。不读进来的话要重启才生效，而且设置页下一次保存
+        // 会拿内存里的旧配置把它冲掉。
+        let cfg = temp_cfg("disk-edit");
+        crate::config::save_at(&cfg, &cfg_two_models()).expect("写配置");
+        let state = AppState::restore_at(cfg.clone());
+        assert!(state.config().await.mcp_servers.is_empty());
+
+        assert_eq!(state.adopt_disk_config().await, Ok(false), "没改过就不算变化");
+
+        let mut edited = cfg_two_models();
+        edited.mcp_servers = vec![serde_json::from_value(serde_json::json!({
+            "id": "added", "command": "npx", "args": ["-y", "pkg"]
+        }))
+        .expect("服务器配置")];
+        crate::config::save_at(&cfg, &edited).expect("模型写");
+        assert_eq!(state.adopt_disk_config().await, Ok(true));
+        assert_eq!(state.config().await.mcp_servers[0].id, "added");
+
+        #[allow(clippy::disallowed_methods)]
+        std::fs::write(&cfg, "{ 改到一半").expect("写坏");
+        let err = state.adopt_disk_config().await.expect_err("读不懂要报出来");
+        assert!(err.contains("解析失败"), "原因要交回给模型：{err}");
+        assert_eq!(
+            state.config().await.mcp_servers.len(),
+            1,
+            "读不懂的文件不能把内存里完好的配置换掉"
+        );
+        assert!(
+            !cfg.with_extension("json.bak").exists(),
+            "运行中读不懂不是启动时的损坏恢复，不该挪走文件"
+        );
+
+        edited.mcp_servers[0].id = "bad.id".into();
+        crate::config::save_at(&cfg, &edited).expect("写不合规的 id");
+        let err = state.adopt_disk_config().await.expect_err("校验不过要报出来");
+        assert!(err.contains("mcpIdInvalid"), "要说清哪条规则：{err}");
+    }
+
+    #[test]
+    fn 重读结果给模型说清每个服务器() {
+        let s = |id: &str, state: &str, tools: usize| riot_protocol::rpc::McpServerStatus {
+            id: id.into(),
+            state: state.into(),
+            detail: String::new(),
+            error: None,
+            tools: (0..tools).map(|i| format!("mcp__{id}__t{i}")).collect(),
+        };
+        let text = describe_reload(
+            true,
+            &[s("gh", "connected", 3), s("slow", "connecting", 0), s("bad", "failed", 0)],
+        );
+        assert!(text.contains("gh：已连接，3 个工具"), "{text}");
+        assert!(text.contains("slow：还在连接"), "{text}");
+        assert!(text.contains("bad：失败"), "{text}");
     }
 
     #[tokio::test]

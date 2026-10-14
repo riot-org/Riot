@@ -1381,6 +1381,63 @@ async fn read_file_bytes(state: State<'_, AppState>, path: String) -> HostResult
     Ok(ipc::Response::new(bytes))
 }
 
+/// 内容的 SHA-256（小写十六进制）。保存时拿它判断"磁盘上的还是不是
+/// 我打开的那一版"，前端用 `crypto.subtle` 算同一个。
+fn content_sha256(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// 预览里改完保存。返回写进去那份内容的哈希，作为下一次保存的 `base`。
+///
+/// 只改已有的文件，不新建：建文件、挪文件是 agent 和访达的事，编辑器
+/// 只在"打开了一个文件、改了它"这个语义里。范围见
+/// [`preview::resolve_writable`]（比读窄）。
+///
+/// `[约束]` 写之前对 `base` 核一遍磁盘内容。用户开着文件改的时候，agent
+/// 可能已经把同一个文件改了 —— 不核的话这一下保存会把 agent 的改动静默
+/// 抹掉。对不上报 `host.file.changedOnDisk`，前端据此让用户选"载入磁盘
+/// 版本"还是"仍然覆盖"（覆盖就是拿当前磁盘的哈希再调一次）。核和写之间
+/// 还有一个很小的窗口，但那要 agent 恰好在这几毫秒里落盘，代价也只是
+/// 回到不核时的样子。
+///
+/// 原地写（截断再写）而不是写临时文件再 rename：rename 换掉的是 inode，
+/// 文件的权限位、扩展属性、指向它的硬链接会跟着丢。
+// 豁免理由：宿主层，写的就是用户点开的那个真实文件；不在黄金回放的确定性范围里。
+#[allow(clippy::disallowed_methods)]
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn write_file_text(
+    state: State<'_, AppState>,
+    path: String,
+    text: String,
+    base: String,
+) -> HostResult<String> {
+    let path = preview::resolve_writable(&state, &path).await?;
+    let meta = tokio::fs::metadata(&path)
+        .await
+        .map_err(|e| ui_error!("host.file.readFailed"; e))?;
+    if !meta.is_file() {
+        return Err(ui_error!("host.file.notFile").into());
+    }
+    if text.len() as u64 > MAX_PREVIEW_FILE {
+        let (size, max) = (text.len() as u64 / (1024 * 1024), MAX_PREVIEW_FILE / (1024 * 1024));
+        return Err(ui_error!("host.file.tooLarge", size = size, max = max).into());
+    }
+    let current = tokio::fs::read(&path)
+        .await
+        .map_err(|e| ui_error!("host.file.readFailed"; e))?;
+    if content_sha256(&current) != base {
+        return Err(ui_error!("host.file.changedOnDisk").into());
+    }
+    tokio::fs::write(&path, text.as_bytes())
+        .await
+        .map_err(|e| ui_error!("host.file.writeFailed"; e))?;
+    Ok(content_sha256(text.as_bytes()))
+}
+
 /// 把一个目录加进项目列表（验证它存在、可 canonicalize），返回规范化的根。
 ///
 /// 只是登记，不创建会话 —— 项目和会话是两层：项目是侧边栏的分组，
@@ -1870,6 +1927,7 @@ pub fn run() {
             term_busy,
             read_image,
             read_file_bytes,
+            write_file_text,
             clipboard_paths,
             get_config,
             app_version,
@@ -2007,6 +2065,25 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 前端的 `lib/sha256.ts` 和这里必须算出同一个值，否则每次保存都会被
+    /// 当成"文件在你编辑期间被改过了"拒掉。两边用同一组向量
+    /// （见 sha256.test.ts）。
+    #[test]
+    fn 保存用的内容哈希和前端一致() {
+        assert_eq!(
+            content_sha256(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            content_sha256(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(
+            content_sha256("厦门钨业 PE 17.4\r\n\u{FEFF}".as_bytes()),
+            "5ce6d16e8ce1ba7b610d9fc4eca9a5b1d2d5056b23dabeaef5fddaafba6828e7"
+        );
+    }
 
     /// 排查指引里写的是 `RIOT_LOG`（`browser::mod` 那句"打开
     /// `RIOT_LOG=debug` 就能看到"），实现却只读 `RUST_LOG` —— 照着注释

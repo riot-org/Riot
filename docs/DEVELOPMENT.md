@@ -40,6 +40,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt
 pnpm typecheck
 pnpm lint
+pnpm test                       # 前端单测（vitest）：事件→条目、快照对账、增量解析、流式切块
 
 # 改了 riot-protocol 里的类型之后必须重新生成，CI 会检查是否同步
 pnpm gen
@@ -75,7 +76,7 @@ cargo run -p riot-host --no-default-features --bin riot-server
 
 ## 浏览器 profile
 
-浏览器进程全应用只有一个，所有会话共用，profile（cookie、localStorage）在配置目录旁的 `browser-profile/`，跨会话、跨重启保留 —— 在一个会话里登录过的站点，别的会话直接是登录态。想回到干净状态就退出应用后删掉那个目录。每个会话仍然有自己的标签页，互不可见。
+浏览器进程全应用只有一个，所有会话共用，profile（cookie、localStorage）在配置目录旁的 `browser-profile/`，跨会话、跨重启保留 —— 在一个会话里登录过的站点，别的会话直接是登录态。想回到干净状态就退出应用后删掉那个目录。每个会话仍然有自己的标签页，互不可见。模型在面板关着时开的页算临时页，一轮结束就关掉；面板开着时开的、上过屏的、或模型用 `show: true` 打开、调过 ShowBrowser 的页留到会话删除。
 
 ## 打包
 

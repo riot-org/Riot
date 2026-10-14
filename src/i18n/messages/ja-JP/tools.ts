@@ -122,6 +122,7 @@ export default {
   "tools.schedule.resume": "スケジュールタスクを再開",
   "tools.schedule.delete": "スケジュールタスクを削除",
   "tools.schedule.manage": "スケジュールタスクを管理",
+  "tools.reloadConfig": "アプリ設定を再読み込み",
 
   // ── ツール説明：サブエージェント ─────────────────────
   // {kind} は explore / general-purpose などの識別子。翻訳しない。

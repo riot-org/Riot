@@ -2,11 +2,12 @@ import { memo, useEffect, useRef, useState } from "react";
 
 import type { Item } from "../hooks/useSession";
 import { t, tn, useT } from "../i18n";
+import { type LiveTextStore, useLiveText } from "../lib/liveText";
 import { PLAN_TOOL } from "../lib/plan";
 import { Chevron } from "./Chevron";
 import { Markdown } from "./Markdown";
 import { SmoothFold } from "./SmoothFold";
-import { hasImage, summarize, ToolCard, ToolThumb } from "./ToolCard";
+import { diffStat, hasImage, noteToolRunning, summarize, ToolCard, ToolThumb } from "./ToolCard";
 
 /** 正在流的那段思考的计时（见 useSession 的 thinkingClock）。`end` = 已转去写正文。 */
 export type ThinkClock = { start: number; end?: number };
@@ -42,26 +43,21 @@ export type Block =
   | { kind: "fold"; id: string; items: FoldItem[]; live: boolean };
 
 /**
- * 不折叠的工具：编辑类卡片是用户要看的工作产物 —— 折进组里等于把
- * 成果藏起来。卡片本身默认收着，摘要行带「+N −M」（见 ToolCard）。
- */
-/**
- * Task 也不折：子 agent 的卡片是一条"标题 · 模型 · 正在做什么"的直播行，
+ * 不折叠的工具。
+ *
+ * 编辑类（Edit / Write / Delete）**折**，照 Claude 桌面端：组头写「编辑
+ * 2 个文件」并挂整组的「+N −M」（见 GroupStat），成果的量级一眼可见。
+ * 早先它们单独成卡，连改同一个文件八次就是八行「Edit make_dance2.py」
+ * 竖着排下去，把一段过程切成几截；逐条要看就展开，整体要看有改动面板。
+ *
+ * Task 不折：子 agent 的卡片是一条"标题 · 模型 · 正在做什么"的直播行，
  * 还是打开它会话的入口（照 Cursor，子 agent 列表始终可见）。折进
  * "N 步"里用户就找不到它了。
  *
  * CreatePlan 同理：计划卡是打开计划面板的入口，也是"这一轮产出了什么"
  * 的答案 —— 规划轮里它前面往往是几十步只读侦察，折进去就没了。
  */
-const KEEP_VISIBLE = new Set([
-  "Edit",
-  "Write",
-  "Delete",
-  "MultiEdit",
-  "NotebookEdit",
-  "Task",
-  PLAN_TOOL,
-]);
+const KEEP_VISIBLE = new Set(["Task", PLAN_TOOL]);
 
 function foldable(it: Item): it is FoldItem {
   if (it.kind === "thinking") return true;
@@ -89,6 +85,30 @@ function foldable(it: Item): it is FoldItem {
  * 单条的段落等轮到正文或轮次结束时自然还原成普通一行（组头和单行
  * 都是一行高，这次还原不跳）。
  */
+/**
+ * 用户展开过的过程组（按组 id，即首条的 id）。
+ *
+ * 两个用处，都是为了"正在看的东西别在眼前变形"：
+ * - 组的展开状态活过重挂载（切会话回来、虚拟化换真身）。
+ * - 尾部那组生成中只有一条时也画成组（直播），落定后本该还原成普通行
+ *   —— 但用户已经点开在看的，就留着组的样子。还原等于换掉整个组件：
+ *   组头那一行没了、展开状态丢了，正读着的思考突然跳走。
+ */
+const openFolds = new Set<string>();
+const OPEN_FOLDS_MAX = 200;
+
+function rememberFold(id: string, open: boolean) {
+  if (!open) {
+    openFolds.delete(id);
+    return;
+  }
+  openFolds.add(id);
+  if (openFolds.size > OPEN_FOLDS_MAX) {
+    const oldest = openFolds.values().next();
+    if (!oldest.done) openFolds.delete(oldest.value);
+  }
+}
+
 export function groupBlocks(items: Item[], liveTail = false): Block[] {
   const blocks: Block[] = [];
   let run: FoldItem[] = [];
@@ -96,8 +116,11 @@ export function groupBlocks(items: Item[], liveTail = false): Block[] {
     const first = run[0];
     if (!first) return;
     const live = tail && liveTail;
-    if (run.length >= 2 || live) blocks.push({ kind: "fold", id: first.id, items: run, live });
-    else blocks.push({ kind: "row", item: first });
+    if (run.length >= 2 || live || openFolds.has(first.id)) {
+      blocks.push({ kind: "fold", id: first.id, items: run, live });
+    } else {
+      blocks.push({ kind: "row", item: first });
+    }
     run = [];
   };
   for (const it of items) {
@@ -113,18 +136,76 @@ export function groupBlocks(items: Item[], liveTail = false): Block[] {
 }
 
 /**
- * 折叠头的一句话摘要：按类别数数，读过的文件点名。
- * 只写"14 步"没有信息量 —— 用户扫一眼要能知道这段过程干了什么。
+ * 摘要里的动作类别。待办不在里面：它是记账，不是这段过程干的活。
+ * 文件类按**文件**数（改同一个文件八次是「编辑 1 个文件」），别的按次数。
  */
-function foldSummary(items: FoldItem[]): string {
-  const readNames: string[] = [];
-  let reads = 0;
-  let searches = 0;
-  let cmds = 0;
-  let tasks = 0;
-  let web = 0;
-  let browser = 0;
-  let other = 0;
+type FoldKind =
+  | "readFiles"
+  | "created"
+  | "edited"
+  | "deleted"
+  | "searches"
+  | "commands"
+  | "web"
+  | "tools";
+
+const FILE_KINDS = new Set<FoldKind>(["readFiles", "created", "edited", "deleted"]);
+
+// eslint-disable-next-line no-restricted-syntax -- 内核 Write 结果的原文（与 write.rs 对齐），不是界面文案
+const WRITE_CREATED = "已创建";
+
+function foldKind(it: Extract<FoldItem, { kind: "tool" }>): FoldKind {
+  switch (it.name) {
+    case "Read":
+      return "readFiles";
+    case "Write":
+      // 新建还是覆盖只有结果里说了：结构化的 `created` 在 ui_payload 里，
+      // 到不了前端（见 lib/plan.ts 同一处说明），只能认内核 Write 的结果
+      // 原文（riot-tools 的 write.rs）。还没结果（在跑、失败）就当编辑 ——
+      // 宁可少报一个"新建"。
+      return it.result?.startsWith(WRITE_CREATED) ? "created" : "edited";
+    case "Edit":
+    case "MultiEdit":
+    case "NotebookEdit":
+      return "edited";
+    case "Delete":
+      return "deleted";
+    case "Grep":
+    case "Glob":
+    case "LS":
+      return "searches";
+    case "Bash":
+      return "commands";
+    case "WebSearch":
+    case "WebFetch":
+      return "web";
+    default:
+      return "tools";
+  }
+}
+
+function pathOf(it: Extract<FoldItem, { kind: "tool" }>): string {
+  const i = it.input as Record<string, unknown> | null;
+  const p = i?.path ?? i?.file_path ?? i?.notebook_path;
+  return typeof p === "string" ? p : "";
+}
+
+/**
+ * 折叠头的一句话摘要：一串动作短语，颗粒度照 Claude 桌面端（「Ran a
+ * command, edited 2 files, read 2 files」）—— 读、建、改、删文件，搜索、
+ * 命令、联网，别的（MCP、浏览器、子任务……）一律算「调用工具」。
+ *
+ * `[取舍]` 不按 MCP 服务器点名、不写文件名。早先点名，一个组头能拉出五六
+ * 段（「调用 fuyao-a-share 5 次，调用 fuyao-a-share-index 2 次，……」），
+ * 比组里的内容还难扫；要细节就展开。也不写「其他」—— 那等于没说 ——
+ * 和总步数（思考算不进动作，总数和分类对不上）。
+ *
+ * 短语按每类第一次出现的先后排：读起来就是这段过程做事的顺序。
+ */
+export function foldSummary(items: FoldItem[]): string {
+  /** 类别 → 次数（非文件类）或文件集合（文件类）。Map 保留首次出现的先后。 */
+  const seen = new Map<FoldKind, { n: number; files: Set<string> }>();
+  let todos = false;
   let thinkMs = 0;
 
   for (const it of items) {
@@ -132,50 +213,23 @@ function foldSummary(items: FoldItem[]): string {
       thinkMs += it.durationMs ?? 0;
       continue;
     }
-    const input = it.input as Record<string, unknown>;
-    const str = (k: string) => (typeof input?.[k] === "string" ? (input[k] as string) : "");
-    switch (it.name) {
-      case "Read": {
-        reads++;
-        const base = (str("path") || str("file_path")).split("/").pop() ?? "";
-        if (base && !readNames.includes(base)) readNames.push(base);
-        break;
-      }
-      case "Grep":
-      case "Glob":
-      case "LS":
-        searches++;
-        break;
-      case "Bash":
-        cmds++;
-        break;
-      case "Task":
-        tasks++;
-        break;
-      case "WebSearch":
-      case "WebFetch":
-        web++;
-        break;
-      default:
-        // ShowBrowser 名字上没有 Browser 前缀，但它就是浏览器那一路的一步。
-        if (it.name.startsWith("Browser") || it.name === "ShowBrowser") browser++;
-        else other++;
+    if (it.name === "TodoWrite") {
+      todos = true;
+      continue;
     }
+    const k = foldKind(it);
+    const slot = seen.get(k) ?? { n: 0, files: new Set<string>() };
+    slot.n++;
+    // 拿不到路径的（参数还没流完）按调用算一个，别让它凭空消失。
+    slot.files.add(pathOf(it) || it.id);
+    seen.set(k, slot);
   }
 
-  const parts: string[] = [];
-  const first = readNames[0];
-  if (reads > 0) {
-    if (!first) parts.push(tn("transcript.fold.readFiles", reads));
-    else if (readNames.length === 1) parts.push(t("transcript.fold.readOne", { name: first }));
-    else parts.push(tn("transcript.fold.readMore", readNames.length, { name: first }));
-  }
-  if (searches) parts.push(tn("transcript.fold.searches", searches));
-  if (cmds) parts.push(tn("transcript.fold.commands", cmds));
-  if (tasks) parts.push(tn("transcript.fold.subtasks", tasks));
-  if (web) parts.push(tn("transcript.fold.web", web));
-  if (browser) parts.push(tn("transcript.fold.browser", browser));
-  if (other) parts.push(tn("transcript.fold.other", other));
+  const parts = [...seen].map(([k, v]) =>
+    tn(`transcript.fold.${k}`, FILE_KINDS.has(k) ? v.files.size : v.n),
+  );
+  // 只更新了待办（没干别的活）时才提它，否则它只是在组头上占地方。
+  if (parts.length === 0 && todos) parts.push(t("transcript.fold.todos"));
   // 全是思考没有工具时，摘要落到思考本身：想了多久。量不到时长（旧会话）
   // 就只说是思考。
   if (parts.length === 0) {
@@ -183,7 +237,34 @@ function foldSummary(items: FoldItem[]): string {
       ? t("transcript.fold.thinkingOnly", { dur: formatDuration(thinkMs) })
       : t("transcript.thinking.label");
   }
-  return parts.join(" · ");
+  // 英文短语是小写动词开头，拼好后句首大写；中日韩没有大小写，不受影响。
+  const line = parts.join(t("transcript.fold.sep"));
+  return line.charAt(0).toUpperCase() + line.slice(1);
+}
+
+/** 整组的增删行数（各条编辑的「+N −M」相加）。没有编辑回 null。 */
+export function foldStat(items: FoldItem[]): { added: number; removed: number } | null {
+  let added = 0;
+  let removed = 0;
+  let any = false;
+  for (const it of items) {
+    if (it.kind !== "tool" || it.status === "error") continue;
+    const st = diffStat(it);
+    if (!st) continue;
+    any = true;
+    added += st.added;
+    removed += st.removed;
+  }
+  return any ? { added, removed } : null;
+}
+
+/**
+ * 正在流的思考：只有它订阅思考文字（见 lib/liveText）。挂在直播组的组尾，
+ * 没有直播组可挂时 Transcript 单独放一块。
+ */
+export function LiveThinking({ live, clock }: { live: LiveTextStore; clock: ThinkClock | null }) {
+  const text = useLiveText(live, "thinking");
+  return text ? <ThinkingBlock text={text} live clock={clock} /> : null;
 }
 
 /**
@@ -197,7 +278,7 @@ function foldSummary(items: FoldItem[]): string {
  */
 function liveActivity(
   items: FoldItem[],
-  thinkingText?: string,
+  thinking: boolean,
 ): { label: string; detail: string; thinking: boolean } | null {
   for (let i = items.length - 1; i >= 0; i--) {
     const it = items[i];
@@ -205,7 +286,7 @@ function liveActivity(
       return { label: it.name, detail: summarize(it).replace(/\s+/g, " ").trim(), thinking: false };
     }
   }
-  if (thinkingText) return { label: t("transcript.thinking.live"), detail: "", thinking: true };
+  if (thinking) return { label: t("transcript.thinking.live"), detail: "", thinking: true };
   return null;
 }
 
@@ -246,22 +327,33 @@ function GroupThumbs({ items }: { items: FoldItem[] }) {
  */
 export const ProcessGroup = memo(
   function ProcessGroup({
+    id,
     items,
     live = false,
-    thinkingText,
+    thinkingLive,
     thinkingClock,
   }: {
+    /** 组的身份（见 groupBlocks）。展开状态按它记，活过重挂载。 */
+    id: string;
     items: FoldItem[];
     /** 尾部直播组：这段过程还在进行，组头显示当前动作。 */
     live?: boolean;
-    /** 正在流式输出、还没落成条目的思考。直播在组头，展开时排在组尾。 */
-    thinkingText?: string;
+    /**
+     * 正在流式输出、还没落成条目的思考（给了就是有）。组头只认"在思考"，
+     * 展开时排在组尾的那块自己订阅文字 —— 组不跟着每帧重画（见 lib/liveText）。
+     */
+    thinkingLive?: LiveTextStore;
     /** 那段思考的计时，组头显示「思考中… 12 秒」。 */
     thinkingClock?: ThinkClock | null;
   }) {
     const { tn } = useT();
-    const [open, setOpen] = useState(false);
+    const [open, setOpenRaw] = useState(() => openFolds.has(id));
+    const setOpen = (v: boolean) => {
+      setOpenRaw(v);
+      rememberFold(id, v);
+    };
     const summary = foldSummary(items);
+    const stat = foldStat(items);
     // 失败数常驻头部但**弱化** —— 探索里的中途失败（grep 没命中、
     // 试错命令）大多被后续步骤自愈，不值得一块刺眼的红。真要紧的
     // 是"以失败收尾"：最后一步炸了，多半意味着模型接下来要认输，
@@ -269,7 +361,13 @@ export const ProcessGroup = memo(
     const fails = items.filter((it) => it.kind === "tool" && it.status === "error").length;
     const last = items[items.length - 1];
     const endedFail = !live && last?.kind === "tool" && last.status === "error";
-    const act = live ? liveActivity(items, thinkingText) : null;
+    const act = live ? liveActivity(items, !!thinkingLive) : null;
+    // 折着的组里卡片没挂载，跑着的工具由组头替它们登记（见 noteToolRunning）。
+    for (const it of items) if (it.kind === "tool" && it.status === "running") noteToolRunning(it.id);
+    /** 直播过、现在落定了：摘要那一行从组头的直播文字上轻轻接过来。 */
+    const wasLive = useRef(live);
+    if (live) wasLive.current = true;
+    const settledCls = !live && wasLive.current ? " fold-label-settle" : "";
 
     return (
       <div className={live ? "fold-block live" : "fold-block"}>
@@ -284,7 +382,6 @@ export const ProcessGroup = memo(
             onClick={() => setOpen(!open)}
             aria-expanded={open}
           >
-            <Chevron open={open} />
             {live ? (
               <span className="fold-live-icon" aria-hidden>
                 ◐
@@ -301,16 +398,22 @@ export const ProcessGroup = memo(
                 {act.thinking && thinkingClock ? <LiveElapsed clock={thinkingClock} /> : null}
               </>
             ) : (
-              <span className="fold-label" title={summary}>
+              <span className={`fold-label${settledCls}`} title={summary}>
                 {summary}
               </span>
             )}
-            <span className="fold-count">{tn("transcript.steps", items.length)}</span>
+            {stat ? (
+              <span className="change-stat">
+                <span className="add">+{stat.added}</span>
+                {stat.removed > 0 ? <span className="del"> −{stat.removed}</span> : null}
+              </span>
+            ) : null}
             {fails > 0 ? (
               <span className={endedFail ? "fold-fail fold-fail-final" : "fold-fail"}>
                 {tn("transcript.fold.failed", fails)}
               </span>
             ) : null}
+            <Chevron open={open} />
           </button>
           <GroupThumbs items={items} />
         </div>
@@ -323,9 +426,7 @@ export const ProcessGroup = memo(
                 <ToolCard key={it.id} tool={it} />
               ),
             )}
-            {thinkingText ? (
-              <ThinkingBlock text={thinkingText} live clock={thinkingClock ?? null} />
-            ) : null}
+            {thinkingLive ? <LiveThinking live={thinkingLive} clock={thinkingClock ?? null} /> : null}
           </div>
         </SmoothFold>
       </div>
@@ -334,8 +435,9 @@ export const ProcessGroup = memo(
   // items 每次分组都是新数组，浅比较必然失败；逐元素比引用 ——
   // useSession 更新条目走的是整条替换，引用相等就是没变。
   (a, b) =>
+    a.id === b.id &&
     a.live === b.live &&
-    a.thinkingText === b.thinkingText &&
+    a.thinkingLive === b.thinkingLive &&
     a.thinkingClock === b.thinkingClock &&
     a.items.length === b.items.length &&
     a.items.every((it, i) => it === b.items[i]),
@@ -429,8 +531,8 @@ export function ThinkingBlock({
           setOpen(next);
           rememberThink(keyRef.current, next);
         }}
+        aria-expanded={open}
       >
-        <Chevron open={open} />
         <span className={thinkingNow ? "think-label shimmer" : "think-label"}>
           {thinkingNow ? t("transcript.thinking.live") : t("transcript.thinking.label")}
         </span>
@@ -439,6 +541,7 @@ export function ThinkingBlock({
         ) : durationMs ? (
           <span className="think-time">{formatDuration(durationMs)}</span>
         ) : null}
+        <Chevron open={open} />
       </button>
       <SmoothFold open={open}>
         <div className="think-body">

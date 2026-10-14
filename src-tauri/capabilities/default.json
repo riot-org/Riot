@@ -8,6 +8,7 @@
   "permissions": [
     "core:default",
     "core:window:allow-set-title",
+    "core:window:allow-set-fullscreen",
     "core:window:allow-start-dragging",
     "dialog:default",
     "opener:default",
@@ -89,6 +90,7 @@
     "allow-term-busy",
     "allow-read-image",
     "allow-read-file-bytes",
+    "allow-write-file-text",
     "allow-clipboard-paths",
     "allow-mcp-status",
     "allow-mcp-restart",

@@ -138,7 +138,8 @@ export function Sidebar(props: SidebarProps) {
           title={t("app.sidebar.collapseTitle")}
           aria-label={t("app.sidebar.collapse")}
         >
-          <SidebarToggleIcon />
+          {/* 这颗键住在展开着的侧栏里，所以总是"开"的样子；收起后顶栏那颗是空的。 */}
+          <SidebarToggleIcon on />
         </button>
       </div>
 

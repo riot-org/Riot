@@ -120,7 +120,7 @@ export function SubagentPanel({
               b.kind === "row" ? (
                 <Row key={b.item.id} item={b.item} hydrate />
               ) : (
-                <ProcessGroup key={b.id} items={b.items} live={b.live} />
+                <ProcessGroup key={b.id} id={b.id} items={b.items} live={b.live} />
               ),
             )}
             {running && items.length === 0 ? (

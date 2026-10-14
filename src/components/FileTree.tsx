@@ -494,7 +494,7 @@ export function FileTree({
               <div
                 key={r.key}
                 className={r.note === "error" ? "tree-note error" : "tree-note"}
-                style={{ paddingLeft: indent(r.depth) }}
+                style={rowStyle(r.depth)}
               >
                 {r.note === "loading"
                   ? t("panels.fileTree.loading")
@@ -511,7 +511,7 @@ export function FileTree({
                 aria-expanded={r.isDir ? r.open : undefined}
                 aria-selected={r.rel === selectedRel}
                 className={rowClass(r.rel === selectedRel, r.rel === cursor)}
-                style={{ paddingLeft: indent(r.depth) }}
+                style={rowStyle(r.depth)}
                 data-rel={r.rel}
                 title={r.rel}
                 onPointerDown={(e) => dragRow(e, r.rel)}
@@ -543,9 +543,23 @@ export function FileTree({
   );
 }
 
-/** 每层缩进的像素。根层留出一点左边距。 */
-function indent(depth: number): number {
-  return 6 + depth * 14;
+/**
+ * 每层缩进 10px（照 Claude 桌面端量的）。抽屉横向空间紧，14px 一层的话
+ * 五六层深的文件名就被挤成省略号。
+ *
+ * `[约束]` 引导线按这组数画（styles.css 的 `.tree-row::before`）：竖线落在
+ * 每一级父目录箭头的中心上，x = 根层左边距 4 + 图标槛半宽 9 + 层数 × 10。
+ * 改这里的任何一个数，那边的 `left` / 渐变周期要跟着改。
+ */
+const INDENT_BASE = 4;
+const INDENT_STEP = 10;
+
+function rowStyle(depth: number): React.CSSProperties {
+  return {
+    paddingLeft: INDENT_BASE + depth * INDENT_STEP,
+    // 引导线的条数 = 这一行有几层祖先。
+    ["--depth" as string]: depth,
+  };
 }
 
 function rowClass(selected: boolean, cursor: boolean): string {
@@ -584,27 +598,25 @@ function ClearIcon() {
   );
 }
 
-/** "从磁盘打开"：一个文件夹，右下角带出一支箭头（往外走 = 出项目）。 */
+/**
+ * 从磁盘打开：一个翻开的文件夹（后片带页签，前片斜着打开）—— 系统和
+ * 编辑器里"打开…"的通用画法。早先画的是文件夹加一支往外指的箭头（本意是
+ * "去项目外面找"），读起来却像"导出 / 移出"，和 ⌘O 的意思正好反着。
+ */
 function DiskOpenIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
       <path
-        d="M1.5 4a1 1 0 011-1h3l1.5 1.5h6a1 1 0 011 1V8"
+        d="M2 12.5V3.5a1 1 0 011-1h2.8l1.4 1.5h5.3a1 1 0 011 1v1.5"
         stroke="currentColor"
         strokeWidth="1.2"
         strokeLinecap="round"
+        strokeLinejoin="round"
       />
       <path
-        d="M1.5 4v8a1 1 0 001 1H8"
+        d="M2 12.5l1.9-5.1a1 1 0 01.94-.65h9.1a.6.6 0 01.56.81l-1.75 4.3a1 1 0 01-.93.64H2z"
         stroke="currentColor"
         strokeWidth="1.2"
-        strokeLinecap="round"
-      />
-      <path
-        d="M10.5 13.5h3.5v-3.5M14 13.5L10 9.5"
-        stroke="currentColor"
-        strokeWidth="1.2"
-        strokeLinecap="round"
         strokeLinejoin="round"
       />
     </svg>

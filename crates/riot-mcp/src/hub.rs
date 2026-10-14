@@ -94,8 +94,15 @@ impl McpHub {
     }
 
     /// 让运行中的服务器集合对齐 `specs`：新增的启动、消失的停掉、
-    /// 变了的重启、没变的不动（包括 Failed 的 —— 重试走 [`Self::restart`]，
-    /// 每次 reconcile 都自动重试的话，一个配错的服务器会无限重启风暴）。
+    /// 变了的重启、没变且活着的不动。
+    ///
+    /// 没变但已经失败 / 断开的**重连一次**。失败的原因常在 spec 之外：
+    /// `npx` 第一次下包超时、环境变量后来才在别处补上、代理刚配好 ——
+    /// 用户修好之后点保存，期待的就是重连。不重连的话只剩重启应用这条路。
+    ///
+    /// `[约束]` 只能由用户动作触发（保存设置、装卸插件、内核重启后的
+    /// 对齐），不能挂在定时器上：每次 reconcile 都重试一个配错的服务器，
+    /// 放进循环里就是无限重启风暴。
     pub async fn reconcile(&self, specs: Vec<ServerSpec>) {
         let mut map = self.servers.lock().await;
 
@@ -114,6 +121,7 @@ impl McpHub {
         for spec in specs {
             if let Some(existing) = map.get(&spec.id)
                 && existing.spec == spec
+                && !is_down(&existing.state).await
             {
                 continue;
             }
@@ -271,6 +279,16 @@ impl McpHub {
         for (_, h) in map.drain() {
             shutdown_handle(h).await;
         }
+    }
+}
+
+/// 失败了，或者连上过但进程 / 连接已经没了。正在连的不算 —— 打断它
+/// 只会让慢服务器永远连不上。
+async fn is_down(state: &Mutex<ServerState>) -> bool {
+    match &*state.lock().await {
+        ServerState::Connecting => false,
+        ServerState::Ready { client, .. } => !client.is_alive(),
+        ServerState::Failed { .. } => true,
     }
 }
 
@@ -446,9 +464,8 @@ mod tests {
             .expect("echo 在测试机器上总有")
     }
 
-    /// 直接塞一个已就绪的服务器进枢纽，跳过 spawn + 握手。
-    async fn insert_ready(hub: &McpHub, id: &str, client: Arc<Client>, tools: Vec<ToolDef>) {
-        let spec = ServerSpec {
+    fn echo_spec(id: &str) -> ServerSpec {
+        ServerSpec {
             id: id.to_owned(),
             transport: McpTransport::Stdio {
                 command: "echo".into(),
@@ -456,7 +473,16 @@ mod tests {
                 env: vec![],
                 cwd: None,
             },
-        };
+        }
+    }
+
+    async fn state_of(hub: &McpHub, id: &str) -> Arc<Mutex<ServerState>> {
+        Arc::clone(&hub.servers.lock().await[id].state)
+    }
+
+    /// 直接塞一个已就绪的服务器进枢纽，跳过 spawn + 握手。
+    async fn insert_ready(hub: &McpHub, id: &str, client: Arc<Client>, tools: Vec<ToolDef>) {
+        let spec = echo_spec(id);
         hub.servers.lock().await.insert(
             id.to_owned(),
             Handle {
@@ -563,6 +589,46 @@ mod tests {
             .expect("reconcile 被卡住的服务器按住了");
 
         refreshing.abort();
+    }
+
+    #[tokio::test]
+    async fn 配置没变但失败了的服务器保存时重连() {
+        // 第一次 `npx` 下包超时、缺的变量后来补上了 —— spec 一个字没变，
+        // 用户点保存就是想让它再连一次。不重连的话只能重启应用。
+        let hub = McpHub::new();
+        hub.servers.lock().await.insert(
+            "flaky".into(),
+            Handle {
+                spec: echo_spec("flaky"),
+                state: Arc::new(Mutex::new(ServerState::Failed {
+                    error: ui_error!("kernel.mcp.stopped"),
+                })),
+                cancel: CancellationToken::new(),
+            },
+        );
+        let before = state_of(&hub, "flaky").await;
+
+        hub.reconcile(vec![echo_spec("flaky")]).await;
+
+        assert!(
+            !Arc::ptr_eq(&before, &state_of(&hub, "flaky").await),
+            "失败的服务器应该被换成一次新的连接"
+        );
+        hub.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn 配置没变且连着的服务器不动() {
+        // 改一个无关设置就把所有服务器重启，用户会看到工具清单闪断。
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let client = hanging_client(tx).await;
+        let hub = McpHub::new();
+        insert_ready(&hub, "steady", client, vec![tool_def("t")]).await;
+        let before = state_of(&hub, "steady").await;
+
+        hub.reconcile(vec![echo_spec("steady")]).await;
+
+        assert!(Arc::ptr_eq(&before, &state_of(&hub, "steady").await));
     }
 
     #[tokio::test]

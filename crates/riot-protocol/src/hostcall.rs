@@ -71,6 +71,12 @@ pub enum HostRequest {
         session_id: SessionId,
         call: ScheduleCall,
     },
+
+    /// 重读 `config.json` 并对齐 MCP。配置是应用级的，不带会话。
+    /// 应答是给模型看的一段状态说明（[`HostResponse::Text`]），读不懂 /
+    /// 校验不过回 [`HostResponse::Error`]，原因在 message 里。
+    #[serde(rename = "config.reload")]
+    ConfigReload,
 }
 
 /// [`crate::schedule::ScheduleAccess`] 各方法的序列化形状,一一对应。
@@ -219,6 +225,16 @@ mod tests {
         let line = serde_json::to_string(&req).expect("序列化");
         let back: HostRequest = serde_json::from_str(&line).expect("往返");
         assert_eq!(back, req, "跨进程往返不能丢信息");
+    }
+
+    #[test]
+    fn 不带参数的请求经信封往返() {
+        // 内核发出去的信封里 params 是 null，宿主照原样拼回来再解析。
+        let v = serde_json::to_value(HostRequest::ConfigReload).expect("序列化");
+        assert_eq!(v["method"], "config.reload");
+        let envelope = serde_json::json!({ "method": v.get("method"), "params": v.get("params") });
+        let back: HostRequest = serde_json::from_value(envelope).expect("宿主能解析");
+        assert_eq!(back, HostRequest::ConfigReload);
     }
 
     #[test]

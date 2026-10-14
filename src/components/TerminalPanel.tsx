@@ -17,6 +17,7 @@ import {
   termWrite,
 } from "../bridge";
 import { type ConfirmRequest, ConfirmDialog } from "./ConfirmDialog";
+import { TerminalIcon } from "./icons";
 import { t as msg, useT } from "../i18n";
 import { basename } from "../pathDisplay";
 import { type Theme, getTheme, useTheme } from "../theme";
@@ -572,7 +573,7 @@ export function TerminalPanel({
                 {tab.exited ? t("panels.terminal.badge.exited") : t("panels.terminal.badge.agent")}
               </span>
             ) : (
-              <TermIcon />
+              <TerminalIcon size={12} />
             )}
             <span className="term-tab-title">{tab.title}</span>
             {/* span 而不是嵌套 button —— button 套 button 是非法 HTML，
@@ -859,20 +860,6 @@ const THEMES: Record<Theme, ITheme> = {
 };
 
 /* ── 图标 ───────────────────────────────────── */
-
-function TermIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden>
-      <path
-        d="M3 4.5l3.5 3.5L3 11.5M8.5 12H13"
-        stroke="currentColor"
-        strokeWidth="1.4"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
 
 function PlusIcon() {
   return (

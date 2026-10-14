@@ -269,7 +269,7 @@ export default {
   "settings.permission.clamp.max": "已調整為最大值 {value}",
   "settings.permission.clamp.min": "已調整為最小值 {value}",
   "settings.permission.timeout": "等待授權的時間",
-  "settings.permission.timeout.desc": "彈窗多久沒人回應就放棄，逾時視為拒絕。範圍 {min}–{max} 秒。",
+  "settings.permission.timeout.desc": "彈窗多久沒人回應就放棄，逾時視為拒絕。範圍 {min}–{max} 秒。模型的提問不受此限，會一直等你回答。",
   "settings.permission.timeout.aria": "等待授權的時間（秒）",
   "settings.permission.unit.seconds": "秒",
   "settings.permission.turns": "單輪最大步數",

@@ -6,9 +6,10 @@
 //! 链接按"当前文件所在目录"解析成新预览标签，window 级兜底把外部
 //! 链接转交系统浏览器 —— 纯 HTML 输出正好落在这两层防线里。
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useT } from "../i18n";
+import { useSlideSettled } from "./SlidePanel";
 
 /** 超过这个字节数截断渲染。整页 DOM 一次性挂几 MB 文本会卡渲染。 */
 const RENDER_MAX = 1024 * 1024;
@@ -92,6 +93,10 @@ export default function MarkdownView({ buf, path }: { buf: ArrayBuffer; path: st
   /** 渲染好的一份。截断提示和 HTML 一起换 —— 分成两个 state 的话，重读
    *  时提示先跟着新字节翻转、正文还是旧的。null = 还没渲染出来。 */
   const [doc, setDoc] = useState<{ html: string; truncated: boolean } | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  // 解析在 Worker 里，抽屉滑着也照算；只有贴 HTML 这一步等抽屉停稳
+  // （见 useSlideSettled）—— 长文档几千个节点的排版是主线程的活。
+  const settled = useSlideSettled(rootRef);
 
   useEffect(() => {
     let stale = false;
@@ -111,11 +116,11 @@ export default function MarkdownView({ buf, path }: { buf: ArrayBuffer; path: st
   }, [buf, path]);
 
   return (
-    <div className="markdown-doc">
+    <div ref={rootRef} className="markdown-doc">
       {doc?.truncated ? (
         <div className="code-view-note">{t("transcript.preview.tooLarge", { size: "1 MB" })}</div>
       ) : null}
-      {doc === null ? (
+      {doc === null || !settled ? (
         <div className="preview-panel-state">{t("transcript.preview.rendering")}</div>
       ) : (
         // micromark 默认转义原始 HTML（allowDangerousHtml 未开），

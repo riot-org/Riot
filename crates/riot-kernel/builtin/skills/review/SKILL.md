@@ -8,12 +8,16 @@ description: 审查一批改动时用。缺陷优先：找静默的错答案、�
 ## 先定范围
 
 ```bash
-git diff                        # 未提交的
-git log --oneline main..HEAD    # 这条分支有哪些提交
-git diff --stat main...HEAD     # 相对基线的全部改动
+BASE=$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null) \
+  || BASE=$(git rev-parse --verify -q origin/main >/dev/null && echo origin/main || echo origin/master)
+
+git diff                          # 未提交的
+git log --oneline "$BASE"..HEAD   # 这条分支有哪些提交
+git diff --stat "$BASE"...HEAD    # 相对基线的全部改动
 ```
 
-基线分支不一定叫 main，先看 `git remote show origin` 里的 HEAD 指向。
+`origin/HEAD` 在有些克隆里没设置，所以开头带了回退。
+
 用户说「审一下」时通常指整条分支，不只是未提交的那点。
 
 ## diff 只是入口，不是全貌

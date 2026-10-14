@@ -117,6 +117,10 @@ export default {
   "app.workbench.planNone": "이 대화에는 아직 계획이 없습니다. Plan 모드로 전환해 작업을 설명하면 모델이 먼저 여기에 계획을 씁니다.",
   "app.workbench.addPanel": "패널 추가",
   "app.workbench.closeTab": "{title} 닫기",
+  "app.workbench.unsaved": "저장 안 됨",
+  "app.workbench.unsavedTitle": "“{name}”에 저장하지 않은 변경이 있습니다",
+  "app.workbench.unsavedBody": "탭을 닫으면 변경 내용이 사라집니다.",
+  "app.workbench.closeDiscard": "저장하지 않고 닫기",
 
   "app.remote.connecting": "연결하는 중",
   "app.remote.connectingHost": "호스트에 연결하는 중…",

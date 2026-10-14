@@ -1,0 +1,1699 @@
+import { Fragment, useEffect, useId, useRef, useState } from "react";
+
+import {
+  type BackgroundTaskView,
+  clipboardPaths,
+  compactSession,
+  type ConfigStatus,
+  decodePickFromComposer,
+  decodePlainFromComposer,
+  decodeRefFromComposer,
+  existingDirs,
+  hasActiveKey,
+  host,
+  type ImageInput,
+  type Nudge,
+  type PermissionMode,
+  pickFiles,
+  type ProviderConfig,
+  readImage,
+  searchFiles,
+  setConfig as saveConfig,
+  setPermissionMode,
+  setSessionModel,
+  setSessionMultitask,
+  type SlashCommand,
+  slashCommands,
+  renderUiText,
+  slashExpand,
+  subscribeDragDrop,
+  turnNudge,
+} from "../../bridge";
+import { type QueuedItem, type WithdrawnPrompt } from "../../hooks/useSession";
+import { t, useT } from "../../i18n";
+import {
+  SLASH_SUBMIT_RE,
+  type Seg,
+  promoteLeadingCmd,
+  promptToSegs,
+  segsText,
+  segsToPrompt,
+  isLongPaste,
+} from "../../lib/promptText";
+import {
+  DEFAULT_COMPACT_THRESHOLD,
+  WINDOW_PRESETS,
+  compactThresholdForWindow,
+  fmtTokens,
+} from "../../lib/contextWindow";
+import { type ChipSeg, isChipSeg } from "../../lib/chips";
+import { registerFileDrop } from "../../lib/fileDrag";
+import {
+  IMAGE_EXT,
+  MAX_SHOTS,
+  PASTE_KEY,
+  type Shot,
+  hasAttachment,
+  mergeShots,
+  toShot,
+} from "../../lib/shots";
+import {
+  asDirRef,
+  basename,
+  isDirRef,
+  joinRoot,
+  looksAbsPath,
+  parentOf,
+} from "../../pathDisplay";
+import {
+  caretToEnd,
+  dropQueryAtCaret,
+  guardChipDeletes,
+  handleChipKey,
+  IME_TAIL_MS,
+  insertChipAtCaret,
+  insertLineBreak,
+  normalizePads,
+  queryAtCaret,
+  readEditor,
+  writeEditor,
+} from "../../lib/chipEditor";
+import { mergeSampling } from "../../lib/sampling";
+import { ENTER_TRANSCRIPT_EVENT } from "../../lib/transcriptNav";
+import { FileIcon } from "../FileIcon";
+import { openFilePreview } from "../FilePreview";
+import { ContextRing } from "../ContextRing";
+import { ArrowUpIcon, ForkIcon, PlusIcon, StopIcon } from "../icons";
+import {
+  ModeMenu,
+  Picker,
+  type PickerSection,
+  type WorkMode,
+  isExecPermissionMode,
+  modelLabel,
+} from "../pickers";
+import { BackgroundTasksPanel } from "../TaskPanel";
+import { ShotViewer } from "../ToolCard";
+
+import {
+  type PermissionPick,
+  drafts,
+  execModeCache,
+  modeCache,
+  multitaskCache,
+  shotsCache,
+} from "./state";
+import { BuildButton } from "./BuildButton";
+import { QueuePanel } from "./QueuePanel";
+
+/** 块后面默认跟的那一个空格：块和正文之间本来就该有一格，不让用户自己敲。 */
+const SPACE: Seg = { kind: "text", value: " " };
+
+/** 斜杠菜单的分组：技能一组，其余（内置 / 项目 / 全局命令）一组。标题文案见 `slashGroupLabel`。 */
+function slashGroup(c: SlashCommand): "skill" | "command" {
+  return c.source === "skill" ? "skill" : "command";
+}
+
+function slashGroupLabel(g: ReturnType<typeof slashGroup>): string {
+  return g === "skill" ? t("composer.slash.group.skills") : t("composer.slash.group.commands");
+}
+
+export function ComposerDock({
+  sessionId,
+  workspace,
+  workspaceMissing,
+  onMissingWorkspace,
+  busy,
+  config,
+  onConfig,
+  sessionProvider,
+  sessionModel,
+  onSessionEndpoint,
+  initialMode,
+  hostMode,
+  initialMultitask = false,
+  tokens,
+  queued,
+  onQueueDelete,
+  onQueueEdit,
+  onQueueSendNow,
+  tasks = [],
+  onTaskCancel,
+  onSend,
+  onStop,
+  withdrawn,
+  onWithdrawnRestored,
+  onOpenSettings,
+  permissionPick = null,
+  onPermissionChange,
+  insertText,
+  onInserted,
+  armed = true,
+  planReady = false,
+  onBuildAvailable,
+}: {
+  sessionId: string;
+  /** 会话的项目根。斜杠命令要按它找项目级 commands/。 */
+  workspace: string;
+  workspaceMissing?: boolean;
+  onMissingWorkspace?: () => void;
+  busy: boolean;
+  config: ConfigStatus;
+  onConfig: (s: ConfigStatus) => void;
+  /** 这个会话正在用的服务方 / 模型。空 = 还没钉过，显示时回退全局默认。 */
+  sessionProvider: string;
+  sessionModel: string;
+  onSessionEndpoint: (provider: string, model: string) => void;
+  /** 宿主侧这个会话的当前模式，不是全局默认值。 */
+  initialMode: PermissionMode;
+  /** 宿主主动切的模式（批准计划）。null = 没发生过。 */
+  hostMode: PermissionMode | null;
+  /** 宿主侧这个会话的多任务开关。 */
+  initialMultitask?: boolean;
+  tokens: { input: number; output: number; context: number };
+  /** 排队面板：跑轮中发的、还没注入对话的插话。 */
+  queued: QueuedItem[];
+  onQueueDelete: (id: string) => void;
+  onQueueEdit: (
+    id: string,
+  ) => Promise<{ text: string; images: ImageInput[]; refs: string[] } | null>;
+  onQueueSendNow: (id: string) => void;
+  /** 后台任务面板：这个会话里在跑 / 刚跑完的子 agent。 */
+  tasks?: BackgroundTaskView[];
+  onTaskCancel?: (agentId: string) => void;
+  /** 返回 false = 没发出去（hook 拦了、模型没配好），输入要放回输入框。
+   *  `nudge` 只有「构建」/「并行构建」两个键传，普通发送不传。 */
+  onSend: (t: string, images: ImageInput[], refs: string[], nudge?: Nudge) => Promise<boolean>;
+  onStop: () => void;
+  /** 被撤回的提问（模型没开口就停了）。放回输入框，然后 `onWithdrawnRestored`。 */
+  withdrawn: WithdrawnPrompt | null;
+  onWithdrawnRestored: () => void;
+  onOpenSettings: () => void;
+  /** 会话设置弹窗里选的权限档。null = 没选过。真值仍归这里管：
+   *  规划模式下它只改"批准后按哪档执行"，不打断规划。 */
+  permissionPick?: PermissionPick | null;
+  /** 生效中的权限档变了（含宿主侧改的）。App 靠它给顶栏标记和弹窗喂当前值。 */
+  onPermissionChange?: (m: PermissionMode) => void;
+  /** 外部要塞进来的一段文字（终端选中的输出）。null = 没有。 */
+  insertText?: string | null;
+  onInserted?: () => void;
+  /** 前台才接全局拖放 / 粘贴。隐藏的保活实例不能跟前台抢。 */
+  armed?: boolean;
+  /**
+   * 对话里已经有一份写好的计划（CreatePlan 落定了）。规划模式 + 空闲 +
+   * 输入框没字时，发送键换成「构建」（Cursor 同款）；占位提示也跟着改。
+   */
+  planReady?: boolean;
+  /** 「构建」键此刻在不在（计划面板底部的提示按它写）。 */
+  onBuildAvailable?: (on: boolean) => void;
+}) {
+  const { t } = useT();
+  // 编辑区是**非受控**的：内容住在 DOM 里，这些 state 只是它的投影。
+  // 受控写法（每次输入都回写 innerHTML）会在每一次按键后重置光标，
+  // 中文输入法更是直接不能用。
+  const [draft, setDraftRaw] = useState(() => segsText(drafts.get(sessionId) ?? []));
+  const [mode, setMode] = useState<PermissionMode>(
+    () => modeCache.get(sessionId) ?? initialMode,
+  );
+  /**
+   * 生效中的权限档。mode 是权限档时就是它；mode 是 plan 时是进规划前那
+   * 一档 —— 批准计划后按它动手，权限标记和会话设置里显示的也是它。
+   */
+  const [execMode, setExecMode] = useState<PermissionMode>(
+    () =>
+      execModeCache.get(sessionId) ??
+      (isExecPermissionMode(initialMode) ? initialMode : "default"),
+  );
+  // mode 落在权限档上时它就是执行档；进 plan 后停在进来前那一档。
+  useEffect(() => {
+    if (!isExecPermissionMode(mode)) return;
+    setExecMode(mode);
+    execModeCache.set(sessionId, mode);
+  }, [mode, sessionId]);
+  const permChangeRef = useRef(onPermissionChange);
+  permChangeRef.current = onPermissionChange;
+  useEffect(() => {
+    permChangeRef.current?.(execMode);
+  }, [execMode]);
+  const [multitask, setMultitask] = useState<boolean>(
+    () => multitaskCache.get(sessionId) ?? initialMultitask,
+  );
+  /**
+   * 点过「转到后台」、还没看到模型响应。
+   *
+   * 这个状态不是装饰：提醒注入在**下一批工具结果就位**的那一刻，模型
+   * 正在跑的这批工具（可能是一次几十秒的搜索）跑完之前界面上什么都不会
+   * 变。没有它，用户看到的就是"点了没反应"，然后再点一次 —— 于是两条
+   * 提醒排进去，模型分叉两个一样的子 agent。
+   */
+  const [handoffPending, setHandoffPending] = useState(false);
+  // 轮次结束就复位（无论是被分叉走的还是自己跑完的）：下一轮再点得能点。
+  useEffect(() => {
+    if (!busy) setHandoffPending(false);
+  }, [busy]);
+  useEffect(() => setHandoffPending(false), [sessionId]);
+  /** 「转到后台」：把手头的活交给后台子 agent。落空（轮子恰好结束）就算了。 */
+  const handoff = () => {
+    setHandoffPending(true);
+    void turnNudge(sessionId, "start_multitasking").then(
+      // 落空 = 轮子恰好在这一瞬结束。不弹提示：busy 马上就 false 了，
+      // 按钮自己会消失，此时说"没排上"只是噪音。
+      (queued) => {
+        if (!queued) setHandoffPending(false);
+      },
+      () => setHandoffPending(false),
+    );
+  };
+  /** 第几次切模式。失败回滚要靠它认出"这是过期的那次"，见 applyMode。 */
+  const modeSeq = useRef(0);
+
+  // 宿主主动切换（批准计划时用户选的执行档）→ 界面跟上。
+  // 回写 setPermissionMode 是为了把模式落进会话索引（幂等 —— 宿主
+  // 内存里已经是这个值了，这一步只补持久化）。
+  useEffect(() => {
+    if (!hostMode) return;
+    setMode(hostMode);
+    modeCache.set(sessionId, hostMode);
+    void setPermissionMode(sessionId, hostMode).catch(() => {});
+  }, [hostMode, sessionId]);
+  /** 这个会话可用的斜杠命令 + 技能。每次挂载拉一次（用户加了 .md 切一下会话就有）。 */
+  const [commands, setCommands] = useState<SlashCommand[]>([]);
+  /** 补全菜单里高亮到第几条。 */
+  const [slashPick, setSlashPick] = useState(0);
+  /** `@` 引用的候选文件。 */
+  const [fileHits, setFileHits] = useState<string[]>([]);
+  const [filePick, setFilePick] = useState(0);
+  /** 光标前那个没敲完的 `@查询`。undefined = 不在引用语境里。 */
+  const [mentionQuery, setMentionQuery] = useState<string | undefined>(undefined);
+  /** 斜杠命令的执行反馈（压缩中、展开失败）。 */
+  const [slashNote, setSlashNote] = useState("");
+  /** 待发的图。发出去就清空。挂载时从模块级缓存恢复（见 shotsCache）。 */
+  const [shots, setShots] = useState<Shot[]>(() => shotsCache.get(sessionId) ?? []);
+  const shotsLive = useRef(shots);
+  shotsLive.current = shots;
+  /** 输入框里点开的待发图。和对话流共用 ShotViewer。 */
+  const [viewShot, setViewShot] = useState<Shot | null>(null);
+
+  // 写通到模块级缓存。挂在 effect 而不是每个 setShots 调用点：
+  // 调用点有五六处（粘贴、拖放、删除、发送、失败回滚），漏一处
+  // 就是一个静默丢图的洞。
+  useEffect(() => {
+    if (shots.length) shotsCache.set(sessionId, shots);
+    else shotsCache.delete(sessionId);
+  }, [sessionId, shots]);
+  /**
+   * 编辑区里的块（按出现顺序）。发出去就清空。
+   *
+   * `@wechat.html` 是给解析器看的写法，让用户对着它编辑（删一半、光标
+   * 插在中间）只会把引用弄坏。块是一个整体：点 ✕ 或退格整个删掉。
+   *
+   * `[约束]` 三种块合在一个 state 里，"输入框算不算空"才只有一个判据。
+   * 拆成 refs/elems/cmdName 三份时这个判断在五处各写一遍，加第四种块漏
+   * 一处就是"只放了一个块的输入框被当成空的" —— 占位符不让开、发送键
+   * 点不动，而用户明明看见自己放了东西进去。
+   */
+  const [chips, setChips] = useState<ChipSeg[]>([]);
+  /** 光标处还没敲完的 `/查询`（由 sync 算出来，和 `@` 一样认光标处那一段）。 */
+  const [slashAtCaret, setSlashAtCaret] = useState<string | undefined>(undefined);
+  /** 拖/选进来失败的那一条。附件是"扔进去就走"的操作，不报的话用户以为成了。 */
+  const [dropError, setDropError] = useState("");
+  const [dragging, setDragging] = useState(false);
+  /** 从文件树拖过来的那一项此刻悬在输入框上（应用内拖拽，不是系统拖放）。 */
+  const [treeOver, setTreeOver] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
+  // 中文 IME：确认候选/上屏英文时，keydown(Enter) 常在 compositionend 之后到达，
+  // 此时 nativeEvent.isComposing 已是 false，会被误当成发送。用 ref 盖住这一拍。
+  const imeRef = useRef(false);
+  // 上一次 compositionend 的时刻。贴块的原生删除要按这个时间窗判归属
+  //（见 chipEditor 的 IME_TAIL_MS）—— imeRef 那个 setTimeout(0) 盖不住它。
+  const imeEndAt = useRef(-Infinity);
+
+  /** 引用块挑出来的路径。发送时当附件递给宿主。 */
+  const refs = chips.flatMap((s) => (s.kind === "ref" ? [s.value] : []));
+  /**
+   * 已经落成色块的那条**命令**（可执行 / 可展开的那种）。
+   *
+   * 命令一条消息只能有一个、必须在头部：内置的当场执行，可展开的把整条
+   * 消息换成模板展开的结果，两条模板不可能同时"是这条消息"。普通技能不
+   * 受这个限制 —— 它只是把 `/名字` 原样放进正文让模型按需加载，一句话里
+   * 点名几个技能、放在哪里都成立，和文件引用一样是自由的块。
+   */
+  const runnable = (c: SlashCommand | undefined): boolean =>
+    c !== undefined && (c.source === "builtin" || c.expandInline);
+  const runnableName = (name: string) => runnable(commands.find((c) => c.name === name));
+  const cmdName = chips.find((s) => s.kind === "cmd" && runnableName(s.value))?.value ?? null;
+  /** 编辑区里有东西吗。占位提示看它 —— 图在编辑区外面，不算。 */
+  const hasInput = draft.trim().length > 0 || chips.length > 0;
+  /** 能发出去吗。只附了图也是一条消息（"看这个截图"就是这么发的）。 */
+  const canSend = hasInput || shots.length > 0;
+
+  const cfg = config.config;
+  // 空 = 老会话还没钉过，显示时回退全局默认。发轮也是同一条线。
+  const sessionProviderId = sessionProvider || cfg.activeProvider;
+  const sessionModelId = sessionModel || cfg.activeModel;
+  const activeProvider =
+    cfg.providers.find((p) => p.id === sessionProviderId) ?? cfg.providers[0] ?? null;
+  const hasKey = hasActiveKey(config, activeProvider?.id ?? sessionProviderId);
+
+  // 内联切换：只改**这个会话**的 provider/model。全局 active_* 是新会话
+  // 的默认，写进去的话 A 换模型 B 的输入框跟着跳。切 provider 时若当前
+  // 模型不属于新家，跳到新家的第一个模型。
+  const switchProvider = (p: ProviderConfig) => {
+    if (p.id === sessionProviderId) return;
+    const nextModel = p.models.some((m) => m.id === sessionModelId)
+      ? sessionModelId
+      : (p.models[0]?.id ?? "");
+    void setSessionModel(sessionId, p.id, nextModel)
+      .then(() => onSessionEndpoint(p.id, nextModel))
+      .catch(() => {});
+  };
+  const switchModel = (m: string) => {
+    if (m === sessionModelId && activeProvider?.id === sessionProviderId) return;
+    // 菜单里列的是当前会话服务方（含 providers[0] 兜底）的模型，所以
+    // provider 要一起写。只写 model 的话，服务方为空时会留下
+    // 「模型有值、provider 是空 id」—— keyStatus 按空 id 查不到，
+    // 表现为 key 已保存、横幅却说没配。
+    const provider = activeProvider?.id ?? sessionProviderId;
+    void setSessionModel(sessionId, provider, m)
+      .then(() => onSessionEndpoint(provider, m))
+      .catch(() => {});
+  };
+
+  // 当前模型的上下文窗口。改它改的是这个模型的压缩时机，写回 ModelConfig
+  // 持久化 —— 窗口是模型的固有属性，不是这次对话的临时偏好，下次选中它
+  // 还该是这个值。
+  const activeModelCfg = activeProvider?.models.find((m) => m.id === sessionModelId);
+  const switchWindow = (raw: string) => {
+    if (!activeProvider || !activeModelCfg) return;
+    const next = raw ? Number(raw) : undefined;
+    if (next === activeModelCfg.contextWindow) return;
+    const models = activeProvider.models.map((m) => {
+      if (m.id !== activeModelCfg.id) return m;
+      // 选「跟随设置」要把键**删掉**而不是写 undefined：配置会被序列化
+      // 发给宿主，显式的 null 在那边是"填了个空窗口"，不是"没填"。
+      const { contextWindow: _cleared, ...rest } = m;
+      return next === undefined ? rest : { ...rest, contextWindow: next };
+    });
+    void saveConfig({
+      ...cfg,
+      providers: cfg.providers.map((p) => (p.id === activeProvider.id ? { ...p, models } : p)),
+    })
+      .then(onConfig)
+      .catch(() => {});
+  };
+
+  // 这一轮实际会在哪儿触发压缩。和宿主侧同一条规则：填了窗口按窗口推，
+  // 没填用设置里的全局值。占用环拿它当分母 —— 环满就是"下一轮要压了"。
+  const compactAt = activeModelCfg?.contextWindow
+    ? compactThresholdForWindow(
+        activeModelCfg.contextWindow,
+        // 模型上选了「模型默认」就是不发上限，别再让服务方那层漏下来。
+        mergeSampling(activeModelCfg.sampling ?? {}, activeProvider?.sampling ?? {})
+          .maxOutputTokens ?? undefined,
+      )
+    : (cfg.compactThresholdTokens ?? DEFAULT_COMPACT_THRESHOLD);
+
+  const windowSection: PickerSection | undefined = activeModelCfg
+    ? {
+        title: t("composer.contextWindow"),
+        items: [
+          {
+            id: "",
+            label: t("composer.contextWindow.followSettings"),
+            active: !activeModelCfg.contextWindow,
+            note: fmtTokens(cfg.compactThresholdTokens ?? DEFAULT_COMPACT_THRESHOLD),
+          },
+          // 在设置里填过的非档位值（比如 256000）也要列出来，否则用户打开
+          // 菜单会看到一项都没亮 —— 像是那个设置没生效。
+          ...[
+            ...new Set([
+              ...WINDOW_PRESETS,
+              ...(activeModelCfg.contextWindow ? [activeModelCfg.contextWindow] : []),
+            ]),
+          ]
+            .sort((a, b) => a - b)
+            .map((w) => ({
+              id: String(w),
+              label: fmtTokens(w),
+              active: activeModelCfg.contextWindow === w,
+            })),
+        ],
+        onPick: switchWindow,
+      }
+    : undefined;
+
+  // 技能也在这份清单里 —— 宿主那边把命令和技能并成了一条发现管道
+  // （`slash::discover`）。这里曾经自己拉一次 skillsList 再合并，那是
+  // 两个真相：优先级规则（内置 > 命令 > 技能）在两处各写一遍，改一边
+  // 就会不一致。
+  useEffect(() => {
+    let alive = true;
+    void slashCommands(workspace)
+      .then((cmds) => {
+        if (alive) setCommands(cmds);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [workspace]);
+
+  /** 把编辑区当前的内容读进 state（每次输入、每次光标移动后调）。 */
+  const sync = () => {
+    const el = ref.current;
+    if (!el) return;
+    // 守卫字符先归位：原生删除/剪切可能吃掉守卫或留下孤儿。IME 组字中
+    // 不动 DOM —— normalize 合并文本节点会打断组字。
+    if (!imeRef.current) normalizePads(el);
+    let segs = readEditor(el);
+    const known = new Set(commands.map((c) => c.name));
+    const exclusive = new Set(commands.filter(runnable).map((c) => c.name));
+    const promoted = promoteLeadingCmd(segs, known, exclusive);
+    if (promoted) {
+      writeEditor(el, promoted);
+      caretToEnd(el);
+      segs = promoted;
+    }
+    const text = segsText(segs);
+    const chipSegs = segs.filter(isChipSeg);
+    setDraftRaw(text);
+    setChips(chipSegs);
+    setSlashAtCaret(queryAtCaret(el, "/"));
+    setMentionQuery(queryAtCaret(el, "@"));
+    // 删光内容后浏览器常留一个 `<br>`，读出来是个 "\n"。当成有内容的话，
+    // 占位提示不再出现、草稿缓存里也会存下一堆看不见的空行。
+    if (text.trim() || chipSegs.length) drafts.set(sessionId, segs);
+    else drafts.delete(sessionId);
+  };
+
+  // 原生监听只挂一次，但 sync 每次渲染都是新闭包 —— 经 ref 取最新的。
+  const syncRef = useRef(sync);
+  syncRef.current = sync;
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    return guardChipDeletes(
+      el,
+      () => imeRef.current || performance.now() - imeEndAt.current < IME_TAIL_MS,
+      () => syncRef.current(),
+    );
+  }, []);
+
+  /** 程序化改写编辑区内容（清空、回滚、撤回排队项）。 */
+  const setContent = (segs: Seg[]) => {
+    const el = ref.current;
+    if (!el) return;
+    writeEditor(el, segs);
+    caretToEnd(el);
+    sync();
+  };
+
+  // 终端选中的那段输出：追加到现有草稿后面，不是替换。
+  //
+  // 包在代码围栏里 —— 报错栈里的尖括号和缩进不这么处理会被 markdown
+  // 吃掉一半。追加完把焦点放回输入框，用户接着就能在前面补一句
+  // "这个报错怎么回事"，那才是他按下那个键的目的。
+  const insertedRef = useRef(onInserted);
+  insertedRef.current = onInserted;
+  useEffect(() => {
+    if (!insertText) return;
+    const el = ref.current;
+    if (!el) return;
+    const cur = readEditor(el);
+    // 浏览器取件走的是这条通道，但它不是一段要围栏的文本，而是一个元素 ——
+    // 渲染成色块，接在现有内容后面。
+    const pick = decodePickFromComposer(insertText);
+    // 文件树"添加到对话"：和 `@` 菜单选中同一种引用块。已经挂着同一个
+    // 文件就不重复挂 —— 连点两次不该出两个一样的块。
+    const fileRef = decodeRefFromComposer(insertText);
+    if (pick) {
+      setContent([...cur, { kind: "elem", value: pick.selector, label: pick.description }, SPACE]);
+    } else if (fileRef) {
+      if (!cur.some((s) => s.kind === "ref" && s.value === fileRef)) {
+        setContent([...cur, { kind: "ref", value: fileRef }, SPACE]);
+      }
+    } else {
+      const prefix = segsText(cur).trim() ? "\n\n" : "";
+      const plain = decodePlainFromComposer(insertText);
+      // 定时任务开场白原样插入。终端选中那类才包代码围栏（报错栈里的
+      // 尖括号/缩进不这么处理会被 markdown 吃掉）。
+      const value =
+        plain != null ? `${prefix}${plain}` : `${prefix}\`\`\`\n${insertText}\n\`\`\`\n`;
+      setContent([...cur, { kind: "text", value }]);
+    }
+    el.focus();
+    caretToEnd(el);
+    insertedRef.current?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [insertText]);
+
+  // 切会话：编辑区是非受控的，组件复用时内容不会自己跟着换。
+  // 顺带把焦点放进去 —— contenteditable 不吃 autoFocus（React 只对
+  // 表单元素生效），少了这一步切完会话得先点一下才能打字。
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    writeEditor(el, drafts.get(sessionId) ?? []);
+    if (armed) {
+      el.focus();
+      caretToEnd(el);
+    }
+    sync();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
+
+  // 保活的会话切回来：编辑区没重挂，得自己把焦点要回来。
+  useEffect(() => {
+    if (!armed) return;
+    ref.current?.focus();
+  }, [armed]);
+
+  // `/` 菜单和 `@` 一样认**光标处**那段没敲完的 token（行首或空白之后才
+  // 触发，`[块]/co` 不出、`[块] /co` 出）。敲了空格 token 就断了，菜单自然
+  // 收起 —— `/compact 参数` 是在写参数，菜单只会挡住视线。
+  // 已经有一个命令块时不再列命令（一条消息只能有一个，见 cmdName），技能
+  // 照常可选。
+  const slashQuery = slashAtCaret;
+  const matches =
+    slashQuery === undefined
+      ? []
+      : commands
+          .filter((c) => c.name.toLowerCase().includes(slashQuery.toLowerCase()))
+          .filter((c) => !(cmdName && runnable(c)))
+          // 技能和命令分两组（菜单里按组画标题，Cursor 同款），组内前缀匹配
+          // 排在包含匹配前面（敲 `co` 时 `compact` 该在最上面）。
+          .sort((a, b) => {
+            const q = slashQuery.toLowerCase();
+            const ag = slashGroup(a) === "skill" ? 0 : 1;
+            const bg = slashGroup(b) === "skill" ? 0 : 1;
+            const ap = a.name.toLowerCase().startsWith(q) ? 0 : 1;
+            const bp = b.name.toLowerCase().startsWith(q) ? 0 : 1;
+            return ag - bg || ap - bp || a.name.localeCompare(b.name);
+          })
+          .slice(0, 10);
+  const pick = Math.min(slashPick, Math.max(matches.length - 1, 0));
+
+  /**
+   * 选中一条命令/技能，把光标处的 `/查询` 换成色块。
+   *
+   * 技能就地插入，和 `@` 选文件一个动作。命令归位到**头部**（一条消息只能
+   * 有一个，见 cmdName）：旧命令块被顶掉，正文和其余的块（文件、技能、
+   * 页面元素）原样跟在后面，光标落到末尾接着写参数。
+   */
+  const chooseSlash = (c: SlashCommand) => {
+    const el = ref.current;
+    if (!el) return;
+    el.focus();
+    if (!runnable(c)) {
+      insertChipAtCaret(el, { kind: "cmd", value: c.name }, "/");
+    } else {
+      dropQueryAtCaret("/");
+      const rest = readEditor(el).filter((s) => !(s.kind === "cmd" && runnableName(s.value)));
+      // 剩下的只有空白（查询就是全部内容）就不留：命令块后面那一格由
+      // SPACE 补，再跟一段空白会多出一个空格。
+      const body = rest.some((s) => s.kind !== "text" || s.value.trim()) ? rest : [];
+      const first = body[0];
+      if (first?.kind === "text") body[0] = { kind: "text", value: first.value.replace(/^\s+/, "") };
+      setContent([{ kind: "cmd", value: c.name }, SPACE, ...body]);
+    }
+    setSlashPick(0);
+    sync();
+  };
+
+  // `@` 文件引用：认的是**光标处**那个没敲完的 token（由 sync 算出来），
+  // 所以在句子中间插引用也能用。
+  useEffect(() => {
+    if (mentionQuery === undefined) {
+      setFileHits([]);
+      return;
+    }
+    // 防抖：每敲一个字都问一次宿主，大仓库上菜单会跳。
+    let alive = true;
+    const t = setTimeout(() => {
+      void searchFiles(sessionId, mentionQuery)
+        .then((r) => alive && setFileHits(r))
+        .catch(() => {});
+    }, 60);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [mentionQuery, sessionId]);
+
+  const fileMatches = mentionQuery === undefined ? [] : fileHits;
+  const fpick = Math.min(filePick, Math.max(fileMatches.length - 1, 0));
+
+  /**
+   * 此刻开着哪个补全菜单。两个不会同时开：`/` 要求整条草稿就是命令，
+   * `@` 认的是光标处那一段。
+   */
+  const menuKind = matches.length > 0 ? "slash" : fileMatches.length > 0 ? "file" : null;
+  /** 键盘高亮落在第几条。读屏靠 aria-activedescendant 跟着它走。 */
+  const menuPick = menuKind === "slash" ? pick : fpick;
+  /**
+   * 菜单和选项的 id。
+   *
+   * 必须按实例取（`useId`）而不是写死一个常量：KEEP_CHATS 同时保活着
+   * 四个 Composer，写死的话 DOM 里就有四个同 id 的 listbox，
+   * aria-activedescendant 指过去落在哪一个全看运气。
+   */
+  const uid = useId().replace(/[^a-zA-Z0-9]/g, "");
+  const menuId = `composer-menu-${uid}`;
+  const optionId = (i: number) => `${menuId}-o${i}`;
+
+  // 键盘高亮跟着滚：命令菜单两行一条，十条装不进 max-height，↓ 到看不见的
+  // 那条时得把它带进视野。nearest 只在越界时滚，鼠标扫过不会跳。
+  useEffect(() => {
+    if (!menuKind) return;
+    document.getElementById(optionId(menuPick))?.scrollIntoView({ block: "nearest" });
+    // optionId 是纯函数，只依赖 menuId。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [menuKind, menuPick, menuId]);
+  /** 输入框的可及名。`data-placeholder` 只是 CSS 伪元素，读屏取不到。 */
+  const placeholder = busy
+    ? t("composer.placeholder.busy")
+    : planReady && mode === "plan"
+      ? t("composer.placeholder.plan")
+      : t("composer.placeholder");
+
+  /** 选中一个文件：把光标处的 `@查询` 换成一个块，就地插在句子里。 */
+  const chooseFile = (p: string) => {
+    const el = ref.current;
+    if (!el) return;
+    el.focus();
+    insertChipAtCaret(el, { kind: "ref", value: p }, "@");
+    setFilePick(0);
+    sync();
+  };
+
+  const submit = () => {
+    const text = draft.trim();
+    // 只附了图/只挂了块、什么都没打也算一条消息 —— "看这个截图"、
+    // "看看这个文件"都是这么发的（见 canSend）。
+    // busy 不拦：模型干活时发的消息进排队面板，内核在安全点注入。
+    if (!canSend || !hasKey || !sessionModelId) return;
+
+    // 斜杠命令：内置的当场执行，能展开的展开成 prompt 再走正常发送。
+    //
+    // 普通技能**不**当命令跑（`expandInline` 为假）—— 只把名字发给模型，
+    // 由它用 Skill 工具按需加载正文。展开了就等于把几 KB 正文塞进用户可见
+    // 的消息，渐进披露白做。写了 disable-model-invocation 的技能例外：
+    // 模型的清单里没有它，不展开谁都跑不了。判据由宿主给，见 slash.rs。
+    //
+    // 认不出的 `/xxx` 原样发出去 —— 用户可能真想跟模型说这个词。
+    const sentSegsNow = ref.current ? readEditor(ref.current) : [];
+    // 只认可执行 / 可展开的那一个命令块；技能块是正文的一部分（见 cmdName）。
+    const cmdSeg = sentSegsNow.find((s) => s.kind === "cmd" && runnableName(s.value));
+    const cmd = cmdSeg
+      ? commands.find((c) => c.name === cmdSeg.value)
+      : (() => {
+          const slash = SLASH_SUBMIT_RE.exec(text);
+          return slash ? commands.find((c) => c.name === slash[1]) : undefined;
+        })();
+    if (cmd && runnable(cmd)) {
+      // 参数 = 命令块之外的文字，技能块按 `/名字` 原位放回去。
+      const args = cmdSeg
+        ? sentSegsNow
+            .filter((s) => s !== cmdSeg)
+            .map((s) => (s.kind === "text" ? s.value : s.kind === "cmd" ? `/${s.value}` : ""))
+            .join("")
+            .trim()
+        : (SLASH_SUBMIT_RE.exec(text)?.[2] ?? "");
+      // 命令块之外的块整个交给 runSlash：失败时要原样放回，成功时元素块
+      // 还得接进正文（展开结果里没有它们的位置）。
+      const sentChips = sentSegsNow.filter((s) => isChipSeg(s) && s.kind !== "cmd");
+      setContent([]);
+      setShots([]);
+      void runSlash(cmd, args, sentChips);
+      return;
+    }
+
+    // 乐观清空，被拒了再放回来。清空是为了让"发出去了"这件事立刻可见；
+    // 而拒绝路径上宿主既没收下消息、界面也撤掉了气泡 —— 不放回的话，
+    // 用户刚打的那段字在两头都不存在了。
+    const sent = shots;
+    const sentSegs = ref.current ? readEditor(ref.current) : [];
+    const sentRefs = refs;
+    // 发出去的是**带标记**的文本：块在原位留下 `@路径`（见 segsToPrompt）。
+    const prompt = segsToPrompt(sentSegs).trim();
+    setContent([]);
+    setShots([]);
+    void onSend(
+      prompt,
+      sent.map(({ mediaType, data }) => ({ mediaType, data })),
+      sentRefs,
+    ).then((ok) => {
+      if (ok) return;
+      // 连块带字整段放回去（等待期间新打的接在后面）。
+      const cur = ref.current ? readEditor(ref.current) : [];
+      setContent([...sentSegs, ...cur]);
+      setShots((prev) => [...sent, ...prev]);
+    });
+  };
+
+  /**
+   * 执行一条斜杠命令。
+   *
+   * 自定义命令展开成 prompt 后**当普通消息发出去** —— 模型看到的和
+   * 对话流里显示的是同一段文字。藏起原文只会让"模型为什么这么答"
+   * 变得无从追溯（切回会话时更是只剩展开结果）。
+   */
+  const runSlash = async (cmd: SlashCommand, args: string, sentChips: ChipSeg[] = []) => {
+    if (cmd.source === "builtin") {
+      if (cmd.name === "compact") {
+        // 进行中的提示在对话流里（「正在压缩上下文…」），这里不再横幅重复一遍。
+        try {
+          await compactSession(sessionId);
+        } catch (e) {
+          setSlashNote(String(e));
+        }
+      }
+      return;
+    }
+    // 失败时把 `/命令 参数` 和块原样放回去：展开出来的 prompt 是
+    // 派生物，用户手里那行才是他打的东西。
+    const restore = () => {
+      const cur = ref.current ? readEditor(ref.current) : [];
+      const back = sentChips.filter(
+        (c) => !cur.some((s) => s.kind === c.kind && s.value === c.value),
+      );
+      setContent([
+        { kind: "cmd", value: cmd.name },
+        { kind: "text", value: args ? ` ${args}` : "" },
+        ...back,
+        ...cur,
+      ]);
+    };
+    const sentRefs = sentChips.flatMap((s) => (s.kind === "ref" ? [s.value] : []));
+    try {
+      const prompt = await slashExpand(sessionId, cmd.name, args);
+      if (!prompt) {
+        setSlashNote(t("composer.slash.expandFailed", { name: `/${cmd.name}` }));
+        restore();
+        return;
+      }
+      // 元素块接在展开结果后面。文件引用有 refs 附件那条通道，元素块没有 ——
+      // 不写进正文的话，用户明明把绿块留在了输入框里，模型却看不见它。
+      const elems = sentChips.filter((s) => s.kind === "elem");
+      const body = elems.length
+        ? `${prompt}\n\n${elems.map((e) => segsToPrompt([e])).join("\n")}`
+        : prompt;
+      if (!(await onSend(body, [], sentRefs))) restore();
+    } catch (e) {
+      setSlashNote(String(e));
+      restore();
+    }
+  };
+
+  /**
+   * 把一条已经离开输入框的消息放回来（撤回的提问、撤回来改的排队插话）。
+   * 原有草稿接在它后面，谁都不丢。
+   */
+  const putBack = (
+    input: { text: string; images: ImageInput[]; refs: string[] },
+    imageLabel: string,
+  ) => {
+    const cur = ref.current ? readEditor(ref.current) : [];
+    const held = cur.flatMap((s) => (s.kind === "ref" ? [s.value] : []));
+    const gap: Seg[] = segsText(cur).trim() ? [{ kind: "text", value: "\n" }] : [];
+    setContent([...promptToSegs(input.text, input.refs, held), ...gap, ...cur]);
+    if (input.images.length > 0) {
+      setShots((prev) => [
+        ...prev,
+        ...input.images.map((img, i) => ({
+          id: `back-${Date.now()}-${i}`,
+          name: `${imageLabel} ${i + 1}`,
+          mediaType: img.mediaType,
+          data: img.data,
+        })),
+      ]);
+    }
+    ref.current?.focus();
+  };
+
+  /** 把一条排队插话撤回输入框改。 */
+  const editQueued = async (id: string) => {
+    const input = await onQueueEdit(id);
+    if (!input) return;
+    putBack(input, t("composer.queue.imageLabel"));
+  };
+
+  // 撤回的提问回到输入框：模型一个字都没给出就被停了，那句话从没被
+  // 回答过 —— 用户按停止的意思是"我重说一遍"，而不是"扔掉我刚打的字"。
+  //
+  // `[约束]` 按 id 记账防重入。撤回往往正好把会话清空，输入框那一刻
+  // 从对话区挪回首屏 —— 那是一次**重挂载**，StrictMode 会把挂载时的
+  // effect 跑两遍，不挡的话用户看到自己那句话被放回来两份。
+  const restoredRef = useRef(onWithdrawnRestored);
+  restoredRef.current = onWithdrawnRestored;
+  const restoredId = useRef<string | null>(null);
+  useEffect(() => {
+    if (!withdrawn || restoredId.current === withdrawn.id) return;
+    restoredId.current = withdrawn.id;
+    putBack(withdrawn, t("composer.withdrawn.imageLabel"));
+    restoredRef.current();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [withdrawn]);
+
+  /**
+   * 收下一批图。
+   *
+   * 在前端先缩一遍:粘一张 Retina 截图动辄五六 MB，原样发过去要么撞服务方的
+   * 单图上限，要么白烧一大截上下文 —— 而模型看布局用不到那个分辨率。
+   */
+  const addShots = async (items: { data: string; mediaType: string; name: string }[]) => {
+    const { shots, extra } = await mergeShots(shotsLive.current, items);
+    if (extra) {
+      setDropError(t("composer.attach.tooMany", { max: MAX_SHOTS, extra }));
+    }
+    setShots(shots);
+  };
+
+  /** webview 给的 `File`（剪贴板里只有像素的那种）:图片收下，其它的说清为什么不收。 */
+  const takeFiles = async (files: File[]) => {
+    const images = files.filter((f) => f.type.startsWith("image/"));
+    const rest = files.filter((f) => !f.type.startsWith("image/"));
+
+    if (images.length) {
+      const read = await Promise.all(images.map(toShot));
+      await addShots(read);
+    }
+    if (rest.length) {
+      // 走到这里说明系统没给出路径（`File` 对象自己是没有的）。非图片文件
+      // 只能靠路径进对话 —— 引用块认的就是路径。
+      setDropError(
+        t("composer.attach.notImage", { name: rest[0]?.name ?? t("composer.attach.thisFile") }),
+      );
+    }
+  };
+
+  /** 拖进来或从对话框选的路径:图片读成内容，其它的变成引用块。 */
+  const takePaths = async (paths: string[]) => {
+    const images = paths.filter((p) => IMAGE_EXT.test(p));
+    const files = paths.filter((p) => !IMAGE_EXT.test(p));
+
+    if (images.length) {
+      const read = await Promise.all(
+        images.map((p) => readImage(p).catch((e: unknown) => String(e))),
+      );
+      const ok = read.filter((r): r is Awaited<ReturnType<typeof readImage>> =>
+        typeof r !== "string",
+      );
+      await addShots(ok);
+      const failed = read.filter((r): r is string => typeof r === "string");
+      if (failed.length) setDropError(failed[0] ?? "");
+    }
+
+    // 非图片文件走和 `@` 一样的引用块：都是"用户点名了这个文件"，
+    // 没道理一个变成块、另一个变成一串裸路径。项目内的收成相对路径，
+    // 块上只显示文件名，长路径不会把输入框撑变形。
+    // 目录路径补上结尾 `/`：图标、发出去的 `@路径/`、气泡回读都靠它
+    // 和文件区分（见 `isDirRef`），否则粘贴一个文件夹也会画成文件图标。
+    if (files.length) {
+      const el = ref.current;
+      if (el) {
+        el.focus();
+        // 光标未必在输入框里 —— 拖放和粘贴发生时焦点常在别处，甚至正
+        // 选着对话流里的一段文字。不校正的话块会插到那段选区上去。
+        const sel = window.getSelection();
+        const inside =
+          sel && sel.rangeCount > 0 && el.contains(sel.getRangeAt(0).startContainer);
+        if (!inside) caretToEnd(el);
+        const dirs = await existingDirs(files).catch(() => new Set<string>());
+        for (const p of files) {
+          // 两种分隔符都认:Windows 上拖进来的是 `C:\proj\a.md`。
+          const inWs = p.startsWith(`${workspace}/`) || p.startsWith(`${workspace}\\`);
+          const value = inWs ? p.slice(workspace.length + 1) : p;
+          insertChipAtCaret(el, {
+            kind: "ref",
+            value: dirs.has(p) ? asDirRef(value) : value,
+          });
+        }
+        sync();
+      }
+    }
+  };
+
+  /**
+   * 收下剪贴板里的附件。返回是否真的收下了。
+   *
+   * 先问宿主要磁盘路径:拿得到就和拖放走同一条路，非图片文件也能变成
+   * 引用块。拿不到（剪贴板里只有像素的截图、或非 macOS）再退回 webview
+   * 给的 `File`。两样都没有就还给调用方按文字处理。
+   */
+  const pasteFiles = async (files: File[]): Promise<boolean> => {
+    const paths = await clipboardPaths().catch(() => []);
+    if (paths.length) {
+      await takePaths(paths);
+      return true;
+    }
+    if (files.length) {
+      await takeFiles(files);
+      return true;
+    }
+    return false;
+  };
+
+  // 拖到窗口任何地方都算数。只认输入框那一小条的话用户得先瞄准，而窗口
+  // 大半面积是对话流 —— 拖偏了什么都不会发生，还以为这个功能没做。
+  //
+  // 处理函数放 ref 里:订阅只在挂载时建一次，而 takePaths 每次渲染都是
+  // 新的闭包，直接进依赖数组会让拖放订阅跟着输入框的每一次输入重建。
+  const dropRef = useRef(takePaths);
+  dropRef.current = takePaths;
+  const filesRef = useRef(takeFiles);
+  filesRef.current = takeFiles;
+  useEffect(() => {
+    if (!armed) {
+      setDragging(false);
+      return;
+    }
+    return subscribeDragDrop((e) => {
+      if (e.kind === "leave") {
+        setDragging(false);
+        return;
+      }
+      if (e.kind === "enter") {
+        // 没有路径的拖拽（拖一段文字、拖网页里的图）不亮落点提示 ——
+        // 亮了却接不住是更糟的反馈。
+        setDragging(e.paths.length > 0);
+        return;
+      }
+      if (e.kind !== "drop") return;
+      setDragging(false);
+      if (e.paths.length) {
+        void dropRef.current(e.paths);
+      } else if (e.files.length) {
+        // 网页版：拖进来的是这台设备上的 File，没有宿主机路径。图片直接
+        // 读内容；别的由 takeFiles 说清为什么收不了。
+        void filesRef.current(e.files);
+      } else {
+        setDropError(t("composer.attach.noDiskFile", { key: PASTE_KEY }));
+      }
+    });
+    // `t` 是模块级函数、身份稳定（见 i18n 的 useT），列进来只为满足 lint。
+  }, [armed, t]);
+
+  /** 网页版的「+」：浏览器自己的文件选择器，只收图片（见 pickAttachments）。 */
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const onFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = "";
+    if (files.length) void takeFiles(files);
+  };
+
+  /**
+   * 「+」按钮：桌面弹系统对话框拿路径；浏览器里没有宿主机的路径可拿，
+   * 改用 <input type=file> 直接读内容 —— 只对图片有意义，非图片文件的
+   * 内容要进对话只能靠宿主按路径读，网页上请用 @ 引用。
+   */
+  const pickAttachments = () => {
+    if (host.nativePaths) {
+      void pickFiles().then(takePaths).catch(() => {});
+      return;
+    }
+    fileInputRef.current?.click();
+  };
+
+  // 从文件树拖过来的那条。走的是自己那套 pointer 拖拽（原因见 lib/fileDrag），
+  // 但收件和系统拖放共用 takePaths —— 给的都是绝对路径，图片进附件、其余
+  // 变引用块这套分流没道理按来源写两遍。
+  //
+  // 落点只圈输入框这一块，不像系统拖放那样整窗都算：拖到对话流上是另一种
+  // 意图（用户多半在瞄准输入框但手滑了）还是没意图，说不清的时候不接更好。
+  useEffect(() => {
+    const el = formRef.current;
+    if (!armed || !el) {
+      setTreeOver(false);
+      return;
+    }
+    return registerFileDrop({
+      el,
+      onOver: setTreeOver,
+      onDrop: (item) => {
+        setTreeOver(false);
+        void dropRef.current([item.abs]);
+      },
+    });
+  }, [armed]);
+
+  // 焦点不在输入框时 ⌘V 也算数 —— 在 Finder 里复制完文件回到窗口，第一
+  // 反应是直接粘，不会先去点一下输入框。
+  //
+  // 别处的可编辑元素（终端、设置里的输入框）不抢:那是人家的内容。
+  const pasteRef = useRef(pasteFiles);
+  pasteRef.current = pasteFiles;
+  useEffect(() => {
+    if (!armed) return;
+    const onPaste = (e: ClipboardEvent) => {
+      const t = e.target;
+      if (t instanceof Element && t.closest("input, textarea, [contenteditable='true']")) return;
+      if (!hasAttachment(e.clipboardData)) return;
+      e.preventDefault();
+      void pasteRef.current(Array.from(e.clipboardData?.files ?? []));
+    };
+    document.addEventListener("paste", onPaste);
+    return () => document.removeEventListener("paste", onPaste);
+  }, [armed]);
+
+  const applyMode = (m: PermissionMode) => {
+    const prev = mode;
+    const seq = ++modeSeq.current;
+    setMode(m);
+    modeCache.set(sessionId, m);
+    // 失败必须回滚到宿主的真实值。这里显示的是"它会不会问我"，
+    // 显示成放行而实际在问只是啰嗦，反过来则是用户以为有人把关。
+    setPermissionMode(sessionId, m).catch(() => {
+      // 只认最后一次点击的结果。快速点 A→B→C 时，B 的失败可能晚于 C 的
+      // 成功到达 —— 照单回滚的话界面退回 A，而宿主上是 C，正好落在
+      // 上面说的"用户以为有人把关"那一侧。过期的失败静默丢掉：界面停在
+      // C 至少和最后一次意图一致，真错了下一条 mode_changed 事件会纠正。
+      if (seq !== modeSeq.current) return;
+      setMode(prev);
+      modeCache.set(sessionId, prev);
+    });
+  };
+
+  /**
+   * 会话设置里选了权限档。无人值守的二次确认在弹窗那边做过了。
+   * 规划中只换"批准后按哪档执行"，不把人从规划里踢出去 —— 宿主此刻
+   * 仍是 plan，等批准计划时用户挑的档位会走 hostMode 回来。
+   */
+  const pickPermission = (m: PermissionMode) => {
+    if (mode === "plan") {
+      setExecMode(m);
+      execModeCache.set(sessionId, m);
+      return;
+    }
+    applyMode(m);
+  };
+  const pickPermRef = useRef(pickPermission);
+  pickPermRef.current = pickPermission;
+  // 挂载时已经在的那一次不算：Chat 被保活淘汰再挂回来，弹窗早关了，
+  // 那次选择早已落地 —— 再应用一遍会把之后宿主侧改过的档位顶掉。
+  const seenPick = useRef(permissionPick?.seq ?? 0);
+  useEffect(() => {
+    if (!permissionPick || permissionPick.seq === seenPick.current) return;
+    seenPick.current = permissionPick.seq;
+    pickPermRef.current(permissionPick.mode);
+  }, [permissionPick]);
+
+  /** 开/关多任务。与规划模式互斥；宿主是权威，失败回滚显示。 */
+  const changeMultitask = (on: boolean) => {
+    if (on && mode === "plan") {
+      applyMode(execMode);
+    }
+    const prev = multitask;
+    setMultitask(on);
+    multitaskCache.set(sessionId, on);
+    setSessionMultitask(sessionId, on).catch(() => {
+      setMultitask(prev);
+      multitaskCache.set(sessionId, prev);
+    });
+  };
+
+  /** 三选一的工作方式。plan 住在宿主的 PermissionMode 里，多任务是独立开关。 */
+  const workMode: WorkMode = mode === "plan" ? "plan" : multitask ? "multitask" : "agent";
+  const changeWorkMode = (w: WorkMode) => {
+    if (w === workMode) return;
+    if (w === "plan") {
+      if (multitask) {
+        setMultitask(false);
+        multitaskCache.set(sessionId, false);
+        void setSessionMultitask(sessionId, false).catch(() => {});
+      }
+      applyMode("plan");
+      return;
+    }
+    if (w === "multitask") {
+      changeMultitask(true);
+      return;
+    }
+    // 回到普通 agent：从哪种方式退出就收哪一头。
+    if (mode === "plan") applyMode(execMode);
+    if (multitask) changeMultitask(false);
+  };
+
+  /** 「构建」点过、这一轮还没开起来。防连点：连点两次就是两轮构建。 */
+  const [building, setBuilding] = useState(false);
+  useEffect(() => {
+    if (busy) setBuilding(false);
+  }, [busy]);
+  /** 发送键的位置上放「构建」的条件：有计划、在规划模式、空闲、输入框没字。
+   *  打了字就是在提意见，发送键回来。 */
+  const showBuild = planReady && mode === "plan" && !busy && !canSend;
+  const buildAvailRef = useRef(onBuildAvailable);
+  buildAvailRef.current = onBuildAvailable;
+  // 提示要说的是"点构建"这个动作有没有，打字期间键暂时让位不算没有。
+  const buildOffered = planReady && mode === "plan" && !busy;
+  useEffect(() => {
+    buildAvailRef.current?.(buildOffered);
+  }, [buildOffered]);
+
+  /**
+   * 「构建」/「并行构建」（Cursor 的 Build / Build in Parallel）。
+   *
+   * 顺序不能反：先把权限模式从规划切回进规划前那一档（并行还要开多任务），
+   * **等宿主确认**，再发那一轮 —— 宿主在 submit 那一刻打包 TurnConfig，
+   * 切模式的 IPC 若还在路上，这一轮就还按规划跑，模型收到「开始构建」
+   * 却一个文件都改不了。
+   *
+   * 消息正文是给人看的一句短话；真正的指示由内核按 `nudge` 附在后面
+   * （读回计划文件、落成待办、动手）。没发出去就把模式切回去 —— 界面上
+   * 不能留下一个"已经是 agent 了"的假象。
+   */
+  const buildPlan = async (parallel: boolean) => {
+    if (building || !showBuild) return;
+    setBuilding(true);
+    const target = execMode;
+    setMode(target);
+    modeCache.set(sessionId, target);
+    if (parallel) {
+      setMultitask(true);
+      multitaskCache.set(sessionId, true);
+    }
+    const rollback = () => {
+      setMode("plan");
+      modeCache.set(sessionId, "plan");
+      void setPermissionMode(sessionId, "plan").catch(() => {});
+      if (parallel) {
+        setMultitask(false);
+        multitaskCache.set(sessionId, false);
+        void setSessionMultitask(sessionId, false).catch(() => {});
+      }
+    };
+    try {
+      await setPermissionMode(sessionId, target);
+      if (parallel) await setSessionMultitask(sessionId, true);
+      const ok = await onSend(
+        t("composer.build.message"),
+        [],
+        [],
+        parallel ? "build_in_parallel" : "build_plan",
+      );
+      if (!ok) rollback();
+    } catch {
+      rollback();
+    } finally {
+      setBuilding(false);
+    }
+  };
+
+  return (
+    <div className="composer-wrap">
+      {/* 落点提示铺满整个窗口 —— 因为落点确实是整个窗口，提示只圈住输入框
+          会让人以为必须拖到那一条上。 */}
+      {dragging ? (
+        <div className="drop-veil" aria-hidden>
+          <div className="drop-veil-card">{t("composer.drop.hint")}</div>
+        </div>
+      ) : null}
+
+      {workspaceMissing ? (
+        <button className="key-banner" onClick={onMissingWorkspace}>
+          {t("composer.banner.workspaceMissing")}
+        </button>
+      ) : null}
+
+      {/* 三种"还不能发消息"要分开说。都写成"还没有 API key"的话，
+          一个服务方都没有的新用户会去找那个根本不存在的 key 输入框。 */}
+      {cfg.providers.length === 0 ? (
+        <button className="key-banner" onClick={onOpenSettings}>
+          {t("composer.banner.noProvider")}
+        </button>
+      ) : !hasKey ? (
+        <button className="key-banner" onClick={onOpenSettings}>
+          {t("composer.banner.noKey", {
+            provider: activeProvider?.name ?? t("composer.banner.currentProvider"),
+          })}
+        </button>
+      ) : !sessionModelId ? (
+        <button className="key-banner" onClick={onOpenSettings}>
+          {t("composer.banner.noModel", {
+            provider: activeProvider?.name ?? t("composer.banner.currentProvider"),
+          })}
+        </button>
+      ) : null}
+
+      {dropError ? (
+        <button
+          className="key-banner"
+          onClick={() => setDropError("")}
+          title={t("composer.banner.dismiss")}
+        >
+          {dropError}
+        </button>
+      ) : null}
+
+      {slashNote ? (
+        <button
+          className="key-banner"
+          onClick={() => setSlashNote("")}
+          title={t("composer.banner.dismiss")}
+        >
+          {slashNote}
+        </button>
+      ) : null}
+
+      {tasks.length > 0 ? (
+        <BackgroundTasksPanel tasks={tasks} onCancel={(id) => onTaskCancel?.(id)} />
+      ) : null}
+
+      {queued.length > 0 ? <QueuePanel queued={queued} onEdit={(id) => void editQueued(id)} onSendNow={onQueueSendNow} onDelete={onQueueDelete} /> : null}
+
+      {/* 菜单是 listbox、条目是 option：键盘操作（↑↓/Tab/Enter/Esc）本来就
+          做全了，缺的只是让读屏知道"这是一组候选、当前落在第几条" ——
+          没有这层语义，屏幕上高亮在动，读屏那边一片安静。焦点始终在
+          编辑区，所以当前项靠它的 aria-activedescendant 指过来。 */}
+      {matches.length > 0 ? (
+        <div className="slash-menu" role="listbox" id={menuId} aria-label={t("composer.slash.menuLabel")}>
+          {matches.map((c, i) => {
+            // 分组标题（Cursor 同款）：matches 已按组排好，组一换就画一个。
+            const group = slashGroup(c);
+            const prev = matches[i - 1];
+            const head = !prev || slashGroup(prev) !== group;
+            return (
+              <Fragment key={c.name}>
+                {head ? (
+                  <div className={i === 0 ? "slash-group" : "slash-group slash-group-next"} role="presentation">
+                    {slashGroupLabel(group)}
+                  </div>
+                ) : null}
+                <button
+                  type="button"
+                  id={optionId(i)}
+                  role="option"
+                  aria-selected={i === pick}
+                  className={i === pick ? "slash-item slash-cmd active" : "slash-item slash-cmd"}
+                  // mousedown 而不是 click：click 之前 textarea 先失焦，
+                  // 焦点一跑菜单就关了，点击落空。
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    chooseSlash(c);
+                  }}
+                  onMouseEnter={() => setSlashPick(i)}
+                >
+                  {/* 名字一行、说明一行。名字不画成色块：候选是"还没选"的
+                      东西，画成块会和输入框里已经选定的命令混在一起。 */}
+                  <span className="slash-cmd-head">
+                    <span className="slash-cmd-name">/{c.name}</span>
+                    {c.argumentHint ? <span className="slash-hint">{c.argumentHint}</span> : null}
+                  </span>
+                  <span className="slash-desc">
+                    {c.descriptionText ? renderUiText(c.descriptionText) : c.description}
+                  </span>
+                </button>
+              </Fragment>
+            );
+          })}
+        </div>
+      ) : null}
+
+      {/* 和上面那个菜单共用一个 id：两者互斥（这个分支要求 matches 为空），
+          同一时刻只有一个在 DOM 里。 */}
+      {fileMatches.length > 0 && matches.length === 0 ? (
+        <div className="slash-menu" role="listbox" id={menuId} aria-label={t("composer.mention.menuLabel")}>
+          {fileMatches.map((p, i) => {
+            // 文件名在前、目录在后：一屏候选里先扫到的是名字。类型图标 +
+            // 名字 + 灰色目录（Cursor 的 @ 菜单同款）—— 候选是"还没选"的
+            // 东西，画成色块会和输入框里已经选定的引用混在一起。
+            const dir = parentOf(p);
+            return (
+              <button
+                type="button"
+                key={p}
+                id={optionId(i)}
+                role="option"
+                aria-selected={i === fpick}
+                className={i === fpick ? "slash-item slash-file active" : "slash-item slash-file"}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  chooseFile(p);
+                }}
+                onMouseEnter={() => setFilePick(i)}
+              >
+                <FileIcon path={p} />
+                <span className="slash-file-name">{basename(p)}</span>
+                {dir !== p ? <span className="slash-desc slash-file-dir">{dir}</span> : null}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+
+      <form
+        ref={formRef}
+        className={dragging || treeOver ? "composer dragging" : "composer"}
+        onSubmit={(e) => {
+          e.preventDefault();
+          submit();
+        }}
+      >
+        {shots.length ? (
+          <div className="attachments">
+            {shots.map((s) => (
+              <div className="attachment" key={s.id} title={s.name}>
+                <button
+                  type="button"
+                  className="attachment-view"
+                  onClick={() => setViewShot(s)}
+                  aria-label={t("composer.attach.view", { name: s.name })}
+                >
+                  <img src={`data:${s.mediaType};base64,${s.data}`} alt={s.name} />
+                </button>
+                <button
+                  type="button"
+                  className="attachment-remove"
+                  onClick={() => setShots((prev) => prev.filter((x) => x.id !== s.id))}
+                  aria-label={t("common.remove")}
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {viewShot ? (
+          <ShotViewer
+            src={`data:${viewShot.mediaType};base64,${viewShot.data}`}
+            alt={viewShot.name}
+            onClose={() => setViewShot(null)}
+          />
+        ) : null}
+
+        {/* 引用块住在编辑区里、和文字同一行，所以这里没有单独的块列表。 */}
+        <div
+          ref={ref}
+          className={hasInput ? "composer-input" : "composer-input empty"}
+          contentEditable
+          suppressContentEditableWarning
+          role="textbox"
+          aria-multiline="true"
+          aria-label={placeholder}
+          data-placeholder={placeholder}
+          aria-expanded={menuKind !== null}
+          aria-controls={menuKind ? menuId : undefined}
+          aria-activedescendant={menuKind ? optionId(menuPick) : undefined}
+          onInput={sync}
+          // 光标挪动也要重算 `@查询` —— 用户可能把光标移回句子中间的
+          // 一个半截 @ 上继续挑文件。
+          onKeyUp={sync}
+          onMouseUp={sync}
+          onBlur={sync}
+          // 点文件块打开预览抽屉（和气泡里的块一样）。mousedown 已经把光标
+          // 放到了块的一侧，预览在 click 上开，两件事互不影响。目录没有
+          // 单文件内容可预览，不响应。
+          onClick={(e) => {
+            // 粘贴块点一下还原成文字，好改其中几行。
+            const pasted = (e.target as HTMLElement).closest?.(".chip[data-chip='paste']");
+            if (pasted instanceof HTMLElement && ref.current?.contains(pasted)) {
+              pasted.replaceWith(document.createTextNode(pasted.dataset["value"] ?? ""));
+              sync();
+              return;
+            }
+            const chip = (e.target as HTMLElement).closest?.(".chip[data-chip='ref']");
+            const path = chip instanceof HTMLElement ? chip.dataset["value"] : undefined;
+            if (!path || isDirRef(path)) return;
+            openFilePreview(looksAbsPath(path) ? path : joinRoot(workspace, path));
+          }}
+          // 粘贴板里的图和文件直接收下。这是"看这个截图"最常用的发法 ——
+          // 截完图 ⌘V 就完事，不用先存盘再选文件；在 Finder 里复制的文件
+          // 同理，粘进来就是一个引用块。
+          onPaste={(e) => {
+            const files = Array.from(e.clipboardData.files);
+            const text = e.clipboardData.getData("text/plain");
+            // 富文本粘贴一律降级成纯文本：contenteditable 默认会把网页的
+            // 样式、图片、甚至整个表格结构原样塞进来。
+            e.preventDefault();
+            if (hasAttachment(e.clipboardData)) {
+              // 问宿主要路径是一次 IPC，所以只在"看着像附件"时才走这条 ——
+              // 每敲一次 ⌘V 都异步一下，粘长文本时会看见一帧空白。
+              void pasteFiles(files).then((took) => {
+                // 只是一段以 / 开头的普通文字（比如一行 shell 命令），
+                // 按纯文本粘贴，别把它吃掉。
+                if (took) return;
+                ref.current?.focus();
+                document.execCommand("insertText", false, text);
+                sync();
+              });
+              return;
+            }
+            // 一大段（日志、报错、整个文件）收成一个粘贴块：铺进来的话输入框
+            // 被撑满，前后自己写的那句话反而找不着。发出去原样展开。
+            if (isLongPaste(text) && ref.current) {
+              insertChipAtCaret(ref.current, { kind: "paste", value: text });
+              sync();
+              return;
+            }
+            document.execCommand("insertText", false, text);
+            sync();
+          }}
+          onCompositionStart={() => {
+            imeRef.current = true;
+          }}
+          onCompositionEnd={() => {
+            imeEndAt.current = performance.now();
+            // compositionend 与确认用的 Enter 可能跨到下一个宏任务，
+            // microtask 不够，用 setTimeout(0) 盖住这一拍。
+            setTimeout(() => {
+              imeRef.current = false;
+            }, 0);
+            sync();
+          }}
+          onKeyDown={(e) => {
+            const el = ref.current;
+            // 三个条件缺一不可，尤其 229：删掉最后一个拼音字母的那一记退格由
+            // 输入法消费 —— WebKit 先结束组字（compositionend），**再**派发这次
+            // keydown，此时 isComposing 已是 false，而 imeRef 的 setTimeout(0)
+            // 也常常正好在两条 IPC 消息之间翻掉。放过去就是"光标贴着块删拼音，
+            // 块没了"。keyCode 229 是 WebKit 给"已被输入法处理"的键打的唯一标记。
+            const imeKey = e.nativeEvent.isComposing || e.keyCode === 229 || imeRef.current;
+            if (el && !imeKey) {
+              // 色块当原子：退格一次整块删掉，方向键整块跳过。
+              // 交给浏览器的话，WebKit 会先把光标塞进块里（或先选中再删）。
+              // 贴着块的那一下换行同理，原因见 insertLineBreak。
+              const lineBreak = e.key === "Enter" && e.shiftKey;
+              if (handleChipKey(e, el) || (lineBreak && insertLineBreak(el))) {
+                e.preventDefault();
+                sync();
+                return;
+              }
+            }
+
+            // 补全菜单开着时，方向键和 Tab/Enter 归它用。
+            const menu = menuKind;
+            if (menu && !imeKey) {
+              const len = menu === "slash" ? matches.length : fileMatches.length;
+              const move = menu === "slash" ? setSlashPick : setFilePick;
+              if (e.key === "ArrowDown") {
+                e.preventDefault();
+                move((p) => (p + 1) % len);
+                return;
+              }
+              if (e.key === "ArrowUp") {
+                e.preventDefault();
+                move((p) => (p - 1 + len) % len);
+                return;
+              }
+              if (e.key === "Escape") {
+                e.preventDefault();
+                // 正文还在，只把光标前那段 `/查询` / `@查询` 抹掉收起菜单。
+                dropQueryAtCaret(menu === "slash" ? "/" : "@");
+                sync();
+                return;
+              }
+              if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+                e.preventDefault();
+                if (menu === "slash") {
+                  const c = matches[pick];
+                  if (c) chooseSlash(c);
+                } else {
+                  const f = fileMatches[fpick];
+                  if (f) chooseFile(f);
+                }
+                return;
+              }
+            }
+            // 空输入时 Esc 中断当前轮 —— 想停不必去够那个停止按钮。
+            // 有草稿时 Esc 留给"清空/退出引用"这类局部撤销，不误伤。
+            if (e.key === "Escape" && busy && !draft.trim() && !imeKey) {
+              e.preventDefault();
+              onStop();
+              return;
+            }
+            // 空输入框里按 ↑：进到对话里，从最后一条消息开始逐条往上看
+            // （见 Transcript 的键盘导航，Esc 回来）。
+            if (
+              e.key === "ArrowUp" &&
+              !imeKey &&
+              !e.shiftKey &&
+              !e.altKey &&
+              !e.metaKey &&
+              !e.ctrlKey &&
+              !draft.trim() &&
+              chips.length === 0
+            ) {
+              const box = ref.current?.closest(".chat-pane")?.querySelector(".transcript");
+              if (box) {
+                e.preventDefault();
+                box.dispatchEvent(new Event(ENTER_TRANSCRIPT_EVENT));
+                return;
+              }
+            }
+            // 敲空格且整段正好是一条已知命令：收成色块，别留下 `/compact ` 纯文字。
+            if (e.key === " " && !imeKey) {
+              const typed = slashQuery;
+              const exact = typed ? commands.find((c) => c.name === typed) : undefined;
+              if (exact) {
+                e.preventDefault();
+                chooseSlash(exact);
+                return;
+              }
+            }
+            if (e.key === "Enter" && !e.shiftKey && !imeKey) {
+              e.preventDefault();
+              submit();
+            }
+          }}
+        />
+
+        <div className="composer-bar">
+          <div className="composer-tools">
+            <button
+              type="button"
+              className="composer-icon"
+              onClick={pickAttachments}
+              title={host.nativePaths ? t("composer.attach.title") : t("composer.attach.title.web")}
+              aria-label={t("composer.attach.title")}
+            >
+              <PlusIcon />
+            </button>
+            {host.nativePaths ? null : (
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                hidden
+                onChange={onFileInput}
+              />
+            )}
+            <ModeMenu value={workMode} onChange={changeWorkMode} />
+            {/* 窄列藏起来：三个 pill 并排是挤的源头，换服务方/模型去设置里也能做。 */}
+            <div className="composer-picks">
+              <Picker
+                title={t("composer.provider.switch")}
+                label={activeProvider?.name ?? t("composer.provider.pick")}
+                items={cfg.providers.map((p) => ({
+                  id: p.id,
+                  label: p.name,
+                  active: p.id === sessionProviderId,
+                  ...(config.keyStatus[p.id]
+                    ? {}
+                    : { note: t("composer.provider.noKey"), warn: true }),
+                }))}
+                onPick={(id) => {
+                  const p = cfg.providers.find((x) => x.id === id);
+                  if (p) switchProvider(p);
+                }}
+              />
+              <Picker
+                title={t("composer.model.switch")}
+                label={modelLabel(activeProvider, sessionModelId) || t("composer.model.pick")}
+                items={(activeProvider?.models ?? []).map((m) => ({
+                  id: m.id,
+                  // 有显示名就用它。菜单里那一列越短越好读，模型 ID 常常很长。
+                  label: m.name?.trim() || m.id,
+                  active: m.id === sessionModelId,
+                  ...(m.vision ? { vision: true } : {}),
+                  ...(m.contextWindow ? { note: fmtTokens(m.contextWindow) } : {}),
+                }))}
+                {...(windowSection ? { section: windowSection } : {})}
+                emptyHint={t("composer.model.empty")}
+                onEmpty={onOpenSettings}
+                onPick={switchModel}
+              />
+            </div>
+          </div>
+          <div className="composer-actions">
+            {tokens.input + tokens.output > 0 ? (
+              <ContextRing
+                used={tokens.context}
+                threshold={compactAt}
+                totals={{ input: tokens.input, output: tokens.output }}
+                {...(activeModelCfg?.contextWindow
+                  ? { window: activeModelCfg.contextWindow }
+                  : {})}
+              />
+            ) : null}
+            {/* 停止常驻：只要在忙就显示，不再被"打了字"的发送按钮顶掉 ——
+                想中止不必先清空输入。有草稿时它和发送并排，各司其职。 */}
+            {/* 转到后台（Cursor 的 Start Multitasking）：只在跑轮时有意义 ——
+                它是对正在进行的工作说"你去后台接着干，对话腾出来"。挨着
+                停止键：两个都是"我不想再在这里等了"，一个停、一个挪。 */}
+            {busy ? (
+              <button
+                type="button"
+                className={`pill handoff-pill${handoffPending ? " pending" : ""}`}
+                onClick={handoff}
+                disabled={handoffPending}
+                title={
+                  handoffPending ? t("composer.handoff.pendingTitle") : t("composer.handoff.title")
+                }
+              >
+                <span className="handoff-icon" aria-hidden>
+                  <ForkIcon />
+                </span>
+                {handoffPending ? t("composer.handoff.pending") : t("composer.handoff")}
+              </button>
+            ) : null}
+            {busy ? (
+              <button
+                type="button"
+                className="send stop"
+                onClick={onStop}
+                title={t("composer.stop.title")}
+                aria-label={t("common.stop")}
+              >
+                <StopIcon />
+              </button>
+            ) : null}
+            {/* 计划写好、还在规划模式、输入框没字：发送键的位置换成「构建」
+                （Cursor 同款）。打字就是在提意见，发送键回来。 */}
+            {showBuild ? (
+              <BuildButton
+                disabled={building || !hasKey || !sessionModelId}
+                onBuild={() => void buildPlan(false)}
+                onBuildParallel={() => void buildPlan(true)}
+              />
+            ) : !busy || canSend ? (
+              <button
+                type="submit"
+                className="send"
+                disabled={!canSend || !hasKey || !sessionModelId}
+                title={
+                  busy
+                    ? t("composer.send.queueTitle")
+                    : sessionModelId
+                      ? t("composer.send")
+                      : t("composer.send.pickModel")
+                }
+                aria-label={
+                  busy
+                    ? t("composer.send.queue")
+                    : sessionModelId
+                      ? t("composer.send")
+                      : t("composer.send.pickModel")
+                }
+              >
+                <ArrowUpIcon />
+              </button>
+            ) : null}
+          </div>
+        </div>
+      </form>
+    </div>
+  );
+}
+

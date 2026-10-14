@@ -83,6 +83,10 @@ struct NavigateInput {
     /// 本地开发服务器用 `http://localhost:...`，不要改成 https。
     /// 本地 HTML 用 `file:///绝对路径`，也可以直接给本机绝对路径。
     url: String,
+    /// 这一页是不是给用户看的。用户让你打开、演示、给他看某个页面时填
+    /// true（会打开浏览器面板）；只是你自己查数据、渲染、截图、验证时填
+    /// false（用户看不到，本轮结束后关闭）。
+    show: bool,
 }
 
 /// 不需要参数的工具共用。
@@ -124,9 +128,15 @@ impl Tool for BrowserNavigate {
              costs a fraction of a browser session. Come here when you need the page \
              *rendered* or *interactive*.\n\
              \n\
-             The user does NOT see any of this. Nothing in this group opens the browser \
-             panel. If you want the user to look at the page, call {SHOW_BROWSER} after \
-             navigating."
+             `show` is required — decide who the page is for:\n\
+             - `true`: the user asked to open / show / demo a page (\"打开 xxx\", \"open \
+             the dev server\", \"let me see it\"). The browser panel opens and the page \
+             stays open.\n\
+             - `false`: you are only looking something up, rendering, screenshotting or \
+             verifying for yourself. The user does not see it, and the page is closed \
+             when your turn ends — finish what you need within this turn.\n\
+             No other tool in this group opens the panel. To show a page you opened with \
+             `show: false` after all, call {SHOW_BROWSER}."
         )
     }
 
@@ -165,8 +175,17 @@ impl Tool for BrowserNavigate {
             .and_then(|v| v.as_str())
             .unwrap_or_default();
         weburl::normalize_for_browser(raw)
-            .map(|_| ())
-            .map_err(|e| ValidationError::rejected(format!("{e}")))
+            .map_err(|e| ValidationError::rejected(format!("{e}")))?;
+        // `[约束]` 不给默认值。缺省成 false 就回到老样子：用户说「打开 xxx」，
+        // 模型打开了却没给他看，轮一结束页还被收掉。逼它每次都想一下是给
+        // 谁看的 —— 那一刻用户的原话就在眼前，最容易判断对。
+        if !input.get("show").is_some_and(serde_json::Value::is_boolean) {
+            return Err(ValidationError::rejected(
+                "缺少 `show`（true/false）。用户要看这一页（让你打开、演示、给他看）\
+                 填 true；只是你自己查数据、渲染、截图、验证填 false。",
+            ));
+        }
+        Ok(())
     }
 
     fn check_permissions(
@@ -195,10 +214,22 @@ impl Tool for BrowserNavigate {
             Ok(u) => u,
             Err(e) => return ToolOutcome::failed(format!("无法打开这个地址：{e}")),
         };
-        match ctx.browser.navigate(u.as_str()).await {
-            Ok(()) => ToolOutcome::ok_text(format!("已打开 {u}")),
-            Err(e) => ToolOutcome::failed(unavailable_hint(&e)),
+        let show = input
+            .get("show")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if let Err(e) = ctx.browser.navigate(u.as_str()).await {
+            return ToolOutcome::failed(unavailable_hint(&e));
         }
+        if !show {
+            return ToolOutcome::ok_text(format!(
+                "已打开 {u}。用户看不到这一页，本轮结束后关闭。"
+            ));
+        }
+        // 同 ShowBrowser：面板等前端收到这条结果才打开，轮次可能先一步结束，
+        // 这里先把页占住。失败无所谓 —— 刚导航成功，浏览器是活的。
+        let _ = ctx.browser.browse(Nav::KeepTab).await;
+        ToolOutcome::ok_text(format!("已打开 {u}，浏览器面板已展示给用户。"))
     }
 }
 
@@ -4328,7 +4359,7 @@ mod tests {
     async fn 本地_http_地址可以导航且不升级协议() {
         let b = Arc::new(FakeBrowser::default());
         let ctx = ctx_browser(Arc::clone(&b), FakeVision::Direct, Arc::new(NullFs));
-        let input = serde_json::json!({ "url": "http://localhost:8765/wechat.html" });
+        let input = serde_json::json!({ "url": "http://localhost:8765/wechat.html", "show": false });
 
         BrowserNavigate
             .validate_input(&input, &ctx)
@@ -4358,6 +4389,37 @@ mod tests {
         );
     }
 
+    /// `show` 必须明说，缺了或者给的不是布尔都要打回去，而且要说清怎么选。
+    ///
+    /// 盯着的是"用户说打开 xxx，模型打开了却没给他看"：缺省成 false 就是
+    /// 那个老毛病，轮一结束页还会被当临时页收掉。
+    #[tokio::test]
+    async fn 导航必须说清给不给用户看() {
+        let ctx = ctx_browser(
+            Arc::new(FakeBrowser::default()),
+            FakeVision::Direct,
+            Arc::new(NullFs),
+        );
+        for input in [
+            serde_json::json!({ "url": "https://example.com" }),
+            serde_json::json!({ "url": "https://example.com", "show": "yes" }),
+        ] {
+            let err = BrowserNavigate
+                .validate_input(&input, &ctx)
+                .await
+                .expect_err("没说清给谁看就不该放行");
+            let msg = format!("{err:?}");
+            assert!(msg.contains("show") && msg.contains("true"), "要说清怎么选：{msg}");
+        }
+        for show in [true, false] {
+            let input = serde_json::json!({ "url": "https://example.com", "show": show });
+            BrowserNavigate
+                .validate_input(&input, &ctx)
+                .await
+                .expect("说清了就放行");
+        }
+    }
+
     /// 本地 HTML 必须能进到宿主。模型预览静态页几乎总是走 `file://`。
     #[tokio::test]
     async fn 本地_file_地址可以导航() {
@@ -4375,7 +4437,7 @@ mod tests {
 
         let b = Arc::new(FakeBrowser::default());
         let ctx = ctx_browser(Arc::clone(&b), FakeVision::Direct, Arc::new(NullFs));
-        let input = serde_json::json!({ "url": FILE_URL });
+        let input = serde_json::json!({ "url": FILE_URL, "show": false });
 
         BrowserNavigate
             .validate_input(&input, &ctx)

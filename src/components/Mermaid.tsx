@@ -1,10 +1,9 @@
-import { useEffect, useId, useState } from "react";
-import { createPortal } from "react-dom";
+import { useEffect, useId, useMemo, useState } from "react";
 
 import { useTimedFlag } from "../hooks/useTimedFlag";
 import { type MessageKey, useT } from "../i18n";
 import { type Theme, useTheme } from "../theme";
-import { useEscLayer } from "./Modal";
+import { ShotViewer } from "./ToolCard";
 
 /**
  * 把 ```mermaid 围栏画成图。
@@ -430,15 +429,37 @@ function kindOf(src: string): MessageKey {
   return "transcript.mermaid.flowchart";
 }
 
+/**
+ * 画好的图，按「主题 + 源码」记。
+ *
+ * `[约束]` 不能每次挂载都重画。保活的对话被挤出（切过四个以上会话）再切回
+ * 来是整份重挂，图先以「渲染中」那一行（四十来像素）占位，两三百毫秒后
+ * 换成几百像素的图 —— 贴底的对话那一帧离底几百像素、scrollTop 还被引擎
+ * 挪一下，用户手指这时碰一下触控板，跟随就交了出去，停在半截。图还要
+ * 异步加载 mermaid 库，越早落地越好。命中缓存时第一帧就是最终尺寸。
+ */
+const svgCache = new Map<string, string>();
+const SVG_CACHE_MAX = 60;
+
+function cacheSvg(key: string, svg: string) {
+  svgCache.delete(key);
+  svgCache.set(key, svg);
+  if (svgCache.size > SVG_CACHE_MAX) {
+    const oldest = svgCache.keys().next();
+    if (!oldest.done) svgCache.delete(oldest.value);
+  }
+}
+
 export function MermaidBlock({ source }: { source: string }) {
   const { t } = useT();
   const theme = useTheme();
   const uid = useId().replace(/[^a-zA-Z0-9]/g, "");
-  const [svg, setSvg] = useState<string | null>(null);
+  const cacheKey = `${theme}\u0000${source.trim()}`;
+  const [svg, setSvg] = useState<string | null>(() => svgCache.get(cacheKey) ?? null);
   const [failed, setFailed] = useState(false);
   // 首个渲染结果落地前既不显示源码也不显示空白 —— mermaid 库首次加载
   // 要一两秒，这期间闪现源码再切成图，对话流会跳一下。
-  const [settled, setSettled] = useState(false);
+  const [settled, setSettled] = useState(() => svgCache.has(cacheKey));
   const [copied, flashCopied] = useTimedFlag<"idle" | "ok" | "fail">("idle", 1500);
   const [viewer, setViewer] = useState(false);
 
@@ -447,6 +468,14 @@ export function MermaidBlock({ source }: { source: string }) {
     if (!src) {
       setSvg(null);
       setFailed(false);
+      return;
+    }
+    // 画过的直接拿（见 svgCache）。
+    const hit = svgCache.get(cacheKey);
+    if (hit) {
+      setSvg(hit);
+      setFailed(false);
+      setSettled(true);
       return;
     }
     let alive = true;
@@ -461,6 +490,7 @@ export function MermaidBlock({ source }: { source: string }) {
         })
         .then((out) => {
           if (!alive) return;
+          cacheSvg(cacheKey, out.svg);
           setSvg(out.svg);
           setFailed(false);
           setSettled(true);
@@ -476,7 +506,7 @@ export function MermaidBlock({ source }: { source: string }) {
       alive = false;
       window.clearTimeout(timer);
     };
-  }, [source, uid, theme]);
+  }, [source, uid, theme, cacheKey]);
 
   const label = t(kindOf(source));
 
@@ -513,7 +543,7 @@ export function MermaidBlock({ source }: { source: string }) {
               : t("transcript.mermaid.copySource")}
         </button>
         {viewer ? (
-          <MermaidViewer svg={svg} label={label} onClose={() => setViewer(false)} />
+          <MermaidViewer svg={svg} theme={theme} label={label} onClose={() => setViewer(false)} />
         ) : null}
       </div>
     );
@@ -542,55 +572,76 @@ export function MermaidBlock({ source }: { source: string }) {
 }
 
 /**
- * 全屏图查看器。portal 到 body —— 卡片在带 overflow 的滚动容器里，
- * fixed 遮罩留在原地会被裁掉。遮罩样式复用 ShotViewer 的 .shot-viewer。
+ * 全屏看图：和图片预览是同一个查看器（ShotViewer）—— 滚轮 / 捏合缩放、
+ * 拖动、双击复位、Esc 和点空白关闭，两边手感一致。
+ *
+ * 查看器吃的是图片地址，所以把画好的 SVG 转成一张独立的 SVG 图片（见
+ * svgImage）。
  */
 function MermaidViewer({
   svg,
+  theme,
   label,
   onClose,
 }: {
   svg: string;
+  theme: Theme;
   label: string;
   onClose: () => void;
 }) {
-  const { t } = useT();
-  // Esc 走公共栈 —— 查看器开在权限卡之上时，Esc 只关查看器
-  useEscLayer(onClose);
+  const src = useMemo(() => svgImage(svg, theme), [svg, theme]);
+  return <ShotViewer src={src} alt={label} onClose={onClose} />;
+}
 
-  return createPortal(
-    <div
-      className="shot-viewer"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <button
-        className="shot-viewer-close"
-        onClick={onClose}
-        type="button"
-        aria-label={t("common.close")}
-      >
-        <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
-          <path
-            d="M2 2l8 8M10 2L2 10"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-          />
-        </svg>
-      </button>
-      <div
-        className="mermaid-viewer-body"
-        role="img"
-        aria-label={t("transcript.image.zoomed", { name: label })}
-        onClick={(e) => {
-          if (e.target === e.currentTarget) onClose();
-        }}
-        dangerouslySetInnerHTML={{ __html: svg }}
-      />
-    </div>,
-    document.body,
-  );
+/** 图四周留的边（SVG 坐标单位）。 */
+const IMAGE_PAD = 20;
+/** 转成图片时的目标宽度：小图放大到这么宽（最多放大三倍），大图原样。 */
+const IMAGE_WIDTH = 1600;
+
+/**
+ * 页面里的 SVG → 一张自足的 SVG 图片（data URL）。
+ *
+ * 当 `<img>` 用的 SVG 读不到页面的样式，所以要把页面替它做的事补进去：
+ * - 画布底色烤进图里（对话里是 .md-mermaid 的底；浅色主题的深色字放在
+ *   查看器的暗遮罩上会看不见）；四周留一圈边。
+ * - 节点文字框"宁可溢出不被裁"（同 .md-mermaid foreignObject）。
+ * - 写明宽高：mermaid 输出的是 width="100%" + 内联 max-width，当图片用就
+ *   没有固有尺寸，会按 300×150 画。宽度给到 IMAGE_WIDTH，查看器按窗口缩，
+ *   矢量图放多大都清楚。
+ *
+ * 走 HTML 解析 + XMLSerializer 而不是 DOMParser 的 XML 模式：节点标签是
+ * foreignObject 里的 HTML（`<br>` 这类不闭合的标签），按 XML 解析直接报错；
+ * 序列化时会自动补成合法的 XHTML。
+ */
+function svgImage(svg: string, theme: Theme): string {
+  const host = document.createElement("div");
+  host.innerHTML = svg;
+  const root = host.querySelector("svg");
+  if (!root) return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+  const ns = "http://www.w3.org/2000/svg";
+  const vb = (root.getAttribute("viewBox") ?? "").trim().split(/[\s,]+/).map(Number);
+  if (vb.length === 4 && vb.every(Number.isFinite)) {
+    const [x = 0, y = 0, w = 0, h = 0] = vb;
+    const bx = x - IMAGE_PAD;
+    const by = y - IMAGE_PAD;
+    const bw = w + IMAGE_PAD * 2;
+    const bh = h + IMAGE_PAD * 2;
+    const k = Math.min(3, Math.max(1, IMAGE_WIDTH / bw));
+    root.setAttribute("viewBox", `${bx} ${by} ${bw} ${bh}`);
+    root.setAttribute("width", String(Math.round(bw * k)));
+    root.setAttribute("height", String(Math.round(bh * k)));
+    root.removeAttribute("style");
+    const bg = document.createElementNS(ns, "rect");
+    bg.setAttribute("x", String(bx));
+    bg.setAttribute("y", String(by));
+    bg.setAttribute("width", String(bw));
+    bg.setAttribute("height", String(bh));
+    bg.setAttribute("fill", token(theme, "--bg-side"));
+    root.insertBefore(bg, root.firstChild);
+  }
+  const style = document.createElementNS(ns, "style");
+  style.textContent = "foreignObject { overflow: visible; }";
+  root.insertBefore(style, root.firstChild);
+  root.setAttribute("xmlns", ns);
+  return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(new XMLSerializer().serializeToString(root));
 }

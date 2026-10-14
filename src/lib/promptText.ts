@@ -21,13 +21,24 @@ export type Seg =
   | { kind: "cmd"; value: string }
   // 浏览器"取件"点中的页面元素：`value` 是 CSS 选择器（发给模型的），
   // `label` 是给用户看的短描述（色块上显示的）。发出去时只留选择器。
-  | { kind: "elem"; value: string; label: string };
+  | { kind: "elem"; value: string; label: string }
+  // 粘贴进来的一大段文字（日志、报错、整个文件）：收成一块，不铺满输入框。
+  // `value` 就是原文，发出去原样展开（见 segsToPrompt）。
+  | { kind: "paste"; value: string };
 
 /** 斜杠名：字母数字、中文、冒号命名空间。名字里不含 `/`，免得把 /usr/bin 认成命令。 */
 export const SLASH_CH = String.raw`[\w\p{L}\p{N}:-]`;
 export const SLASH_LEAD_RE = new RegExp(`^/(${SLASH_CH}+)(\\s)([\\s\\S]*)$`, "u");
 export const SLASH_SUBMIT_RE = new RegExp(`^/(${SLASH_CH}+)\\s*([\\s\\S]*)$`, "u");
 export const SLASH_HEAD_RE = new RegExp(`^/(${SLASH_CH}+)(?=\\s|$)`, "u");
+
+/** 粘贴这么多就收成一个粘贴块（见 Seg 的 `paste`）：20 行或 2000 字。 */
+export function isLongPaste(text: string): boolean {
+  if (text.length >= 2000) return true;
+  let lines = 1;
+  for (let i = text.indexOf("\n"); i >= 0 && lines < 20; i = text.indexOf("\n", i + 1)) lines++;
+  return lines >= 20;
+}
 
 /** 段落序列里的纯文字部分（补全菜单、空判断用）。 */
 export function segsText(segs: Seg[]): string {
@@ -47,6 +58,7 @@ export function segsToPrompt(segs: Seg[]): string {
     .map((s, i) => {
       if (s.kind === "text") return s.value;
       if (s.kind === "cmd") return `/${s.value}`;
+      if (s.kind === "paste") return s.value;
       // 元素色块:发出去带一个可回认的标记 —— 气泡里据此重新画成同一个
       // 绿色色块（见 Transcript 的 ELEM_MARK_RE）。选择器用反引号裹（选择器
       // 里不会有反引号，最稳），友好描述用【】裹（先滤掉【】和反引号免得

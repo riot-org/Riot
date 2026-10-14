@@ -796,6 +796,16 @@ export function readFileBytes(path: string): Promise<ArrayBuffer> {
 }
 
 /**
+ * 预览编辑器的保存。`base` 是打开（或上次保存）时那份内容的 SHA-256
+ * （见 lib/sha256）；磁盘上已经不是那一版时宿主拒绝写入，抛
+ * `host.file.changedOnDisk` —— 调用方让用户选载入磁盘版本还是覆盖。
+ * 只能改项目 / 会话目录里已有的文件。返回写进去那份的哈希，下次保存当 `base`。
+ */
+export function writeFileText(path: string, text: string, base: string): Promise<string> {
+  return invoke<string>("write_file_text", { path, text, base }, T_SLOW);
+}
+
+/**
  * 弹系统的文件选择框，返回绝对路径。
  *
  * 只回路径不回内容:选中的非图片文件在输入框里变成 `@` 引用块，内容由
@@ -1911,6 +1921,14 @@ export function subscribeSessionsChanges(cb: () => void): () => void {
   return listenGlobal<unknown>("sessions_changed", () => cb());
 }
 
+/**
+ * 订阅"config.json 被应用之外的东西改了、宿主已重新读入"。收到后
+ * getConfig —— 不跟上的话，设置页下一次保存会把那份外部修改冲掉。
+ */
+export function subscribeConfigChanges(cb: () => void): () => void {
+  return listenGlobal<unknown>("config_changed", () => cb());
+}
+
 /** 全局事件订阅的公共形状：同步返回退订函数，订阅本身异步落地。 */
 function listenGlobal<T>(event: string, cb: (payload: T) => void): () => void {
   let stopped = false;
@@ -2193,6 +2211,26 @@ export function subscribeFullscreen(cb: (full: boolean) => void): () => void {
     stopped = true;
     unlisten?.();
   };
+}
+
+/**
+ * 把窗口切进 / 切出系统全屏，返回切之前是不是已经全屏。浏览器里不管
+ * （返回 null）—— 那里走页面自己的 requestFullscreen。
+ *
+ * 给视频全屏用（见 MediaControls 的 useVideoFullscreen）：桌面版不用
+ * WebKit 的元素全屏，窗口全屏 + 页面里把播放器铺满，和 Electron 一样。
+ */
+export async function setWindowFullscreen(on: boolean): Promise<boolean | null> {
+  if (!host.nativeWindow) return null;
+  try {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    const win = getCurrentWindow();
+    const was = await win.isFullscreen();
+    if (was !== on) await win.setFullscreen(on);
+    return was;
+  } catch {
+    return null;
+  }
 }
 
 /**

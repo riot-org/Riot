@@ -118,6 +118,10 @@ export default {
   "app.workbench.planNone": "这个会话还没有计划。切到 Plan 模式描述任务，模型会先写一份计划放在这里。",
   "app.workbench.addPanel": "添加面板",
   "app.workbench.closeTab": "关闭 {title}",
+  "app.workbench.unsaved": "未保存",
+  "app.workbench.unsavedTitle": "“{name}”有未保存的修改",
+  "app.workbench.unsavedBody": "关闭标签会丢掉这些修改。",
+  "app.workbench.closeDiscard": "不保存，关闭",
 
   "app.remote.connecting": "正在连接",
   "app.remote.connectingHost": "正在连接宿主…",

@@ -191,6 +191,13 @@ pub async fn dispatch(
             },
             Err(e) => Err(e.to_ui()),
         },
+        "write_file_text" => ok(crate::write_file_text(
+            st,
+            a.take("path")?,
+            a.take("text")?,
+            a.take("base")?,
+        )
+        .await),
         "probe_dirs" => val(crate::probe_dirs(a.take("paths")?)),
         "path_exists" => val(crate::path_exists(a.take("path")?)),
         // 宿主机的剪贴板和远端用户无关（见模块说明）。

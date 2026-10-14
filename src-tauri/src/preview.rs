@@ -43,8 +43,8 @@ use riot_protocol::{UiError, ui_error};
 use crate::fence::Fence;
 use crate::state::AppState;
 
-/// 预览围栏的根集合。目录不存在的会在 [`resolve`] 里被跳过。
-async fn roots(state: &AppState) -> Vec<PathBuf> {
+/// 项目根 + 会话根。读和写两道围栏共用的那一部分。
+async fn workspace_roots(state: &AppState) -> Vec<PathBuf> {
     let config = state.config().await;
     let mut out: Vec<PathBuf> = config.projects.iter().map(PathBuf::from).collect();
 
@@ -57,6 +57,14 @@ async fn roots(state: &AppState) -> Vec<PathBuf> {
             .into_iter()
             .map(|s| PathBuf::from(s.root)),
     );
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|p| seen.insert(p.clone()));
+    out
+}
+
+/// 预览围栏的根集合。目录不存在的会在 [`resolve`] 里被跳过。
+async fn roots(state: &AppState) -> Vec<PathBuf> {
+    let mut out = workspace_roots(state).await;
 
     if let Some(data) = crate::config::config_path().parent() {
         out.push(data.to_path_buf());
@@ -115,6 +123,18 @@ fn temp_dirs() -> Vec<PathBuf> {
 pub async fn resolve(state: &AppState, requested: &str) -> Result<PathBuf, UiError> {
     resolve_in(&roots(state).await, requested)
         .ok_or_else(|| ui_error!("host.preview.outOfScope", path = requested))
+}
+
+/// 把前端传来的路径解析成一个允许**写**的绝对路径（预览里改完保存）。
+///
+/// `[约束]` 写的围栏比读的窄，只认项目根和会话根。读围栏里的另外几处
+/// 是为"点开看看"放的：常用文件夹（拖进来的图）、应用数据目录（截图、
+/// 报告工件）、临时目录（agent 的中间产物）。写不需要它们，而写原语一旦
+/// 被 webview 里的代码拿去用，后果比读重得多 —— 应用数据目录里就躺着
+/// `config.json`（MCP 命令、API key 都在里面）。
+pub async fn resolve_writable(state: &AppState, requested: &str) -> Result<PathBuf, UiError> {
+    resolve_in(&workspace_roots(state).await, requested)
+        .ok_or_else(|| ui_error!("host.file.writeOutOfScope", path = requested))
 }
 
 /// 在一组根里挨个试。哪些根，见 [`roots`]。

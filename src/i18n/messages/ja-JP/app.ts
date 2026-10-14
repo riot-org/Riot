@@ -117,6 +117,10 @@ export default {
   "app.workbench.planNone": "この会話にはまだ計画がありません。Plan モードに切り替えてタスクを説明すると、モデルが先にここへ計画を書きます。",
   "app.workbench.addPanel": "パネルを追加",
   "app.workbench.closeTab": "{title} を閉じる",
+  "app.workbench.unsaved": "未保存",
+  "app.workbench.unsavedTitle": "「{name}」に未保存の変更があります",
+  "app.workbench.unsavedBody": "タブを閉じると変更は失われます。",
+  "app.workbench.closeDiscard": "保存せずに閉じる",
 
   "app.remote.connecting": "接続中",
   "app.remote.connectingHost": "ホストに接続中…",

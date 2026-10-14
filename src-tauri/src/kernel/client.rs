@@ -111,6 +111,10 @@ pub enum HostNotice {
     /// 重启后的内核是一张白纸,带着旧标记会把 turn.submit 发到一个
     /// 不存在的会话上。
     KernelGone,
+    /// 内核死过一次、新进程已经起来了。宿主要把 MCP 清单、用户环境变量
+    /// 这些"启动时推一次"的东西重新推过去 —— 新内核里它们都是空的，
+    /// 不补的话 MCP 工具要等到用户下次保存设置或重启应用才回来。
+    KernelRestarted,
 }
 
 pub struct KernelClient {
@@ -172,6 +176,7 @@ impl KernelClient {
         if guard.is_some() && !self.dead.load(Ordering::SeqCst) {
             return Ok(());
         }
+        let restarting = guard.is_some();
         if let Some(old) = guard.take() {
             // 崩溃路径:进程已经没了,但进程组里可能还有它 spawn 的子进程,
             // 无条件清一遍(kill_now 对空组是无害的 ESRCH)。
@@ -214,6 +219,9 @@ impl KernelClient {
         *self.handle.write().expect("handle 锁") = Some(kernel.handle());
         *guard = Some(kernel);
         tracing::info!(exe = %self.exe.display(), "内核进程已启动");
+        if restarting {
+            let _ = self.host_tx.send(HostNotice::KernelRestarted);
+        }
         Ok(())
     }
 

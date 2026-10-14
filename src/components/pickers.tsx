@@ -9,7 +9,7 @@ import type { PermissionMode, ProviderConfig } from "../bridge";
 import { type MessageKey, useT } from "../i18n";
 import { Chevron } from "./Chevron";
 import { ConfirmDialog, type ConfirmRequest } from "./ConfirmDialog";
-import { AgentModeIcon, EyeIcon, MultitaskIcon, PlanModeIcon } from "./icons";
+import { AgentModeIcon, EyeIcon, MenuPickCheck, MultitaskIcon, PlanModeIcon } from "./icons";
 
 /** 权限档名的词典键。渲染时 `t()`，不缓存翻译结果。 */
 export const MODE_LABEL_KEY: Record<string, MessageKey> = {
@@ -114,29 +114,6 @@ export function useDropdown(open: boolean, setOpen: (v: boolean) => void) {
   };
 
   return { rootRef, onKeyDown };
-}
-
-function MenuPickCheck({ active }: { active: boolean }) {
-  return (
-    <svg
-      className={active ? "menu-pick-check" : "menu-pick-check menu-pick-check--empty"}
-      width="12"
-      height="12"
-      viewBox="0 0 12 12"
-      aria-hidden
-    >
-      {active ? (
-        <path
-          d="M2.25 6.1 4.65 8.5 9.75 3.5"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      ) : null}
-    </svg>
-  );
 }
 
 function ModeMenuItem({

@@ -17,9 +17,9 @@ import { PermissionMenu } from "./pickers";
 export const IS_MAC = host.nativeWindow && navigator.userAgent.includes("Mac");
 import {
   GearIcon,
-  PanelBottomIcon,
   PanelRightIcon,
   SidebarToggleIcon,
+  TerminalIcon,
 } from "./icons";
 
 /** 右键 / "…" 菜单。全局单实例，点哪开哪 —— 免得每行都挂一份状态。 */
@@ -186,8 +186,9 @@ export function WindowControls({
         disabled={!terminalEnabled}
         title={terminalEnabled ? t("app.win.terminalTitle") : t("app.win.terminalNeedSession")}
         aria-label={t("app.win.terminal")}
+        aria-pressed={terminalOpen}
       >
-        <PanelBottomIcon />
+        <TerminalIcon />
       </button>
       <button
         className={drawerOpen ? "tb-btn active" : "tb-btn"}
@@ -195,8 +196,9 @@ export function WindowControls({
         disabled={!drawerEnabled}
         title={drawerEnabled ? t("app.win.drawer") : t("app.topbar.needSession")}
         aria-label={t("app.win.drawer")}
+        aria-pressed={drawerOpen}
       >
-        <PanelRightIcon />
+        <PanelRightIcon on={drawerOpen} />
       </button>
     </div>
   );

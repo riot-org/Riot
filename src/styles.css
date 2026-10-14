@@ -90,6 +90,12 @@
      --bg-input（≈4.7:1，输入框的 placeholder 就压在上面），其次是菜单
      --bg-nav；浅色里同样按最灰的输入条和菜单算（数字见浅色块）。 */
   --text-faint: #94949f;
+  /* 过程行（过程组头、思考头、组里的工具行）悬停 / 展开时提亮到的那一档：
+     --text-faint 和 --text 的正中。照 Claude 桌面端量的 —— 收起时和
+     --text-faint 同级，悬停 / 展开亮到大约中点，一眼看得出"这行能点、
+     这行开着"；提到 --text-dim 那一档几乎看不出变化。用 color-mix 写，
+     浅色主题跟着 --text / --text-faint 自己算，不用另配。 */
+  --text-raised: color-mix(in srgb, var(--text) 50%, var(--text-faint));
   /* 语义色：每个语义一个基色 + 深底配套（-soft 文字 / -bg 底 / -border 描边）。
      Tailwind 色和 Apple 系统色以前混着用，同屏三种绿 —— 已收敛到这一组，
      新代码不要再引进别的绿/黄/红。 */
@@ -2075,6 +2081,30 @@ html[data-host='web'] body {
   opacity: 1;
 }
 
+/* 改了没存：关闭键的位置常驻一个圆点（不悬停也看得见），悬停 / 键盘
+   聚焦到关闭键时换回 ×。 */
+.wb-tab.unsaved .wb-tab-close {
+  opacity: 0.85;
+}
+
+.wb-tab-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.wb-tab.unsaved .wb-tab-close svg,
+.wb-tab.unsaved .wb-tab-close:hover .wb-tab-dot,
+.wb-tab.unsaved .wb-tab-close:focus-visible .wb-tab-dot {
+  display: none;
+}
+
+.wb-tab.unsaved .wb-tab-close:hover svg,
+.wb-tab.unsaved .wb-tab-close:focus-visible svg {
+  display: block;
+}
+
 /* 抽屉的空状态：一列可添加的面板（Codex 同款）。空状态本身就是
    "添加面板"的菜单，不是一句"这里空空如也"。 */
 .wb-empty {
@@ -2729,8 +2759,7 @@ html[data-host='web'] body {
   cursor: pointer;
 }
 
-/* 对话流外壳：给「回到底部」当定位根。倒排滚动容器里 sticky
-   钉不住圆钮（见 .jump-bottom），按钮必须叠在滚动层外面。 */
+/* 对话流外壳：给「回到底部」当定位根。按钮叠在滚动层外面，不随内容滚。 */
 .transcript-shell {
   flex: 1;
   min-height: 0;
@@ -2743,31 +2772,27 @@ html[data-host='web'] body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  /* 对话流自己滚到顶/底不弹。不要写在孩子上 —— 思考块 / 折叠层
-     必须把剩余滚量交回来，否则指针停在那些块上等于锁死。 */
+  /* 对话流自己滚到顶/底不弹。不要写在孩子上 —— 代码块、工具输出、思考块
+     滚到头时要靠浏览器原生把下一次手势交给外层；子层写了
+     overscroll-behavior:none，WebKit 就不再往外传，指针停在那些块上页面
+     就滚不动。子层滚到头的轻微回弹是 macOS 原生行为，和 Safari 里一样。 */
   overscroll-behavior: none;
-  /* 垂直间距在 .thread-col 上，不在这：倒排容器把滚动"远端"翻到了
-     顶部，而 WebKit 不把滚动容器远端的 padding 计入可滚动区域 ——
-     写在这里的 padding-top 滚到顶时会被吞掉，首条消息贴着顶边。
+  /* 垂直间距在 .thread-col 上，不在这：WebKit 不把滚动容器远端的
+     padding 计入可滚动区域，写在这里的 padding-bottom 滚到底时会被吞掉。
      子元素自己的 padding 是它盒子的一部分，怎么都吞不掉。 */
   padding: 0 var(--chat-gutter);
-  /* 倒排滚动容器（学 Codex 桌面端）：滚动原点挪到底部，scrollTop
-     贴底为 0、向上翻为负，浏览器保持的是"距底距离"。两个结构性红利：
-     贴底跟随免费（流式追加时 0 恒指底部，不用每帧去追）；视口上方的
-     行懒水合长高（content-visibility 估高落地、LazyMarkdown 换真身）
-     只撑大 scrollHeight，画面纹丝不动 —— "第一次上翻会跳"从机制上
-     消失。消息 DOM 顺序不用反转：thread-col 内部仍是正序，倒排只为
-     翻转滚动坐标系。代价是镜像问题 —— 翻历史时下方流式长高会顶画面，
-     由 Transcript 的锚点补偿拉回（见 captureAnchor）。 */
+  /* 正排滚动容器。早先是 column-reverse 倒排（学 Codex 桌面端），翻历史时
+     下方流式长高要每帧写 scrollTop 补偿，和 WKWebView 的原生滚动打架，
+     生成中翻历史一直抖。取舍的完整说明见 Transcript.tsx 文件头。 */
   display: flex;
-  flex-direction: column-reverse;
+  flex-direction: column;
   /* 关掉浏览器滚动锚定：滚动语义（贴底 stick / 锚点补偿）由
      Transcript.tsx 全权接管，原生锚定插手只会打架。WKWebView 要到
      Safari 27 才支持 overflow-anchor，这行是给未来和其它引擎表态。 */
   overflow-anchor: none;
 }
 
-/* 回到底部：绝对钉在外壳下缘，不进倒排滚动流。 */
+/* 回到底部：绝对钉在外壳下缘，不进滚动流。 */
 .jump-bottom {
   position: absolute;
   left: 50%;
@@ -2798,8 +2823,80 @@ html[data-host='web'] body {
   border-color: var(--accent);
 }
 
-/* ⌘F 查找条：sticky 钉在滚动视口上缘，高度 0 不占流。倒排容器里
-   它是最后一个子元素（视觉顶部），sticky top 才吸得住。 */
+/* 出现时从下面浮上来一点，不是凭空冒出。transform 里要带上居中那一截。 */
+.jump-bottom {
+  animation: jump-in var(--dur-2) var(--ease-out);
+}
+
+@keyframes jump-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 6px);
+  }
+}
+
+/* 翻着历史时下面有了新内容：右上角一个点，外圈慢慢扩散。点本身常亮，
+   扩散的那圈只是"活着"的提示 —— 停着看历史的人不该被一直闪着打扰，
+   所以节奏放慢、幅度收小。 */
+.jump-dot {
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--bg-card);
+  pointer-events: none;
+  animation: jump-dot-in var(--dur-2) var(--ease-out);
+}
+
+.jump-dot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: jump-dot-pulse 1.8s var(--ease-out) infinite;
+}
+
+@keyframes jump-dot-in {
+  from {
+    transform: scale(0);
+  }
+}
+
+@keyframes jump-dot-pulse {
+  from {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(2.6);
+  }
+}
+
+.jump-bottom.has-new {
+  color: var(--text);
+}
+
+/* 新冒出来的消息（自己发的、排队注入的、报错、提示）轻轻上浮淡入。
+   只动 transform / opacity：不改布局，贴底与锚点补偿的量法不受影响。
+   挂没挂这个类由 Transcript 判定 —— 水合进来的历史不挂（见 Row 的 enter）。 */
+.msg-enter {
+  animation: msg-enter var(--dur-3) var(--ease-out);
+}
+
+@keyframes msg-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* ⌘F 查找条：sticky 钉在滚动视口上缘，高度 0 不占流。它是滚动容器的
+   第一个子元素，sticky top 才吸得住。 */
 .find-wrap {
   position: sticky;
   top: 0;
@@ -2882,8 +2979,7 @@ html[data-host='web'] body {
      devtools 里看到的内联 margin-bottom（0~1px）是 Transcript 的
      snapColTop 在把列高凑成整数，不是这里的样式。 */
   padding: 24px 0 8px;
-  /* 倒排容器的 flex 子项。min-height 撑满一屏：col-reverse 会把不足
-     一屏的内容坠到底部，撑满之后消息照旧从顶上排；shrink-0 防压缩。 */
+  /* 滚动容器的 flex 子项。shrink-0 防压缩（flex 子项默认会被压到容器高）。 */
   min-height: 100%;
   flex-shrink: 0;
 }
@@ -2910,9 +3006,10 @@ html[data-host='web'] body {
    `[data-virtualized-turn-content]` 上，一轮一份，估高 240px。）
 
    contain-intrinsic-size 的 auto 关键字：渲染过一次的轮记住真实高度，
-   没渲染过的按 240px 估 —— 估偏了 scrollHeight 会抖，但倒排容器保持
-   "距底距离"，上方估高落地不再撼动视口；贴底由倒排原生保证 +
-   pinBottom 归零残差，恢复位置有二次 rAF 补写兜着。
+   没渲染过的按内容估（Transcript 按轮写进内联样式，见 lib/turnHeight；
+   这里的 240px 只是兜底）—— 估偏了的那一轮第一次进视野附近时会落成
+   真实高度，估得越准这一下挪得越少。在视口上方落地的由 Transcript 的锚点补偿拉回；贴底时由
+   pinBottom 跟到底；恢复位置有二次 rAF 补写兜着。
    不支持的 WebView（Safari 18 之前）按普通渲染，只是不省。
 
    gap 和 .thread-col 同值：轮内块间距和轮间距都是 14px，包这一层
@@ -2925,10 +3022,12 @@ html[data-host='web'] body {
   contain-intrinsic-size: auto 240px;
 }
 
-/* 正在生成的那一轮不省渲染：内容每帧在长，"上次记住的尺寸"一直在失效，
-   而它本来就在视口里 —— 跳过判定只会白付一轮轮重新测量。生成结束后
-   属性摘掉，它变回普通历史轮。 */
-.turn[data-live] {
+/* 最后一轮不省渲染：生成中内容每帧在长，"上次记住的尺寸"一直在失效，
+   而它本来就在视口里 —— 跳过判定只会白付一轮轮重新测量。
+   生成结束后也留着，等下一轮出现才摘、变回普通历史轮：结束那一下正好
+   是直播内容搬进这一轮的同一次提交，此时变回 auto 会按占位高度排一帧，
+   正读着的位置被夹走（见 Transcript 的 liveTurnHeights）。 */
+.turn[data-tail] {
   content-visibility: visible;
 }
 
@@ -2948,6 +3047,68 @@ html[data-host='web'] body {
 
 .msg.assistant {
   align-self: stretch;
+  color: var(--text);
+}
+
+/* 键盘逐条跳到的那条消息（见 Transcript 的键盘导航）。只在键盘聚焦时画框。 */
+.turn > :focus-visible,
+.thread-col > .msg:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 4px;
+  border-radius: 10px;
+}
+
+.turn > :focus:not(:focus-visible),
+.thread-col > .msg:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* 跳到某条消息后闪一下（见 Transcript 的 flashRow）。底色向外多铺一圈，
+   贴边的正文也看得出被框住了。 */
+.row-flash {
+  border-radius: 10px;
+  animation: row-flash 1100ms var(--ease-out);
+}
+
+@keyframes row-flash {
+  0%,
+  25% {
+    background-color: color-mix(in srgb, var(--accent) 14%, transparent);
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 14%, transparent);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .row-flash {
+    animation: none;
+  }
+}
+
+/* 太长的用户气泡先收起（见 Transcript 的 UserBody）：露十二行，底下渐隐。
+   行高随气泡（继承正文 1.65）。 */
+.user-clamp:not(.open) {
+  max-height: calc(1.65em * 12);
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent);
+  mask-image: linear-gradient(to bottom, #000 70%, transparent);
+}
+
+.user-clamp-toggle {
+  display: block;
+  margin-top: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.user-clamp-toggle:hover {
   color: var(--text);
 }
 
@@ -3147,6 +3308,14 @@ html[data-host='web'] body {
   .tool-icon-spin {
     animation: none;
   }
+  .tool-icon-settle,
+  .fold-label-settle,
+  .msg-enter,
+  .jump-bottom,
+  .jump-dot,
+  .jump-dot::after {
+    animation: none;
+  }
   .fold-live-icon {
     animation: none;
   }
@@ -3204,6 +3373,27 @@ html[data-host='web'] body {
 
 .tool-ok .tool-icon {
   color: var(--ok);
+}
+
+/* 跑完的那一刻：转圈换成对勾 / 叉时轻轻弹一下。只在眼前跑完时挂
+   （见 ToolCard 的 settled），历史里的卡一挂上就是终态，不弹。 */
+.tool-icon-settle {
+  display: inline-block;
+  animation: tool-settle 0.28s var(--ease-out);
+}
+
+@keyframes tool-settle {
+  from {
+    opacity: 0;
+    transform: scale(0.4) rotate(-30deg);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.18);
+  }
+  to {
+    transform: scale(1);
+  }
 }
 
 .tool-error .tool-icon {
@@ -3300,8 +3490,26 @@ html[data-host='web'] body {
   border-radius: 6px;
 }
 
+/* 悬停同过程组头：只提亮文字，不铺底色（全局 button:hover 的灰底要
+   显式清掉，优先级的坑见 button.fold-head:hover）。 */
 .tool-plain button.tool-head:hover {
-  background: var(--bg-hover);
+  background: none;
+}
+
+/* 组里的工具行和收起的组头同级（照 Claude），悬停 / 展开提亮一档。 */
+.tool-plain .tool-name,
+.tool-plain .tool-summary {
+  color: var(--text-faint);
+  transition: color var(--dur-1) var(--ease-out);
+}
+
+.tool-plain button.tool-head:hover .tool-name,
+.tool-plain button.tool-head:hover .tool-summary,
+.tool-plain button.tool-head:hover .chevron,
+.tool-plain .tool-head[aria-expanded='true'] .tool-name,
+.tool-plain .tool-head[aria-expanded='true'] .tool-summary,
+.tool-plain .tool-head[aria-expanded='true'] .chevron {
+  color: var(--text-raised);
 }
 
 .tool-plain .tool-summary {
@@ -3497,6 +3705,77 @@ html[data-host='web'] body {
   background: var(--bg-hover);
 }
 
+/* 可缩放的图片查看器：变换出去的部分不该撑出滚动条；touch-action 交给
+   自己处理捏合 / 拖动。放大后光标变抓手。 */
+.shot-viewer-zoomable {
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.shot-viewer-zoomable img {
+  cursor: zoom-in;
+  transform-origin: center;
+  will-change: transform;
+}
+
+.shot-viewer-zoomable.zoomed img {
+  cursor: grab;
+}
+
+.shot-viewer-zoomable.dragging,
+.shot-viewer-zoomable.dragging img {
+  cursor: grabbing;
+}
+
+.shot-viewer-zoombar {
+  position: fixed;
+  left: 50%;
+  bottom: 20px;
+  z-index: calc(var(--z-viewer) + 1);
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--bg-side);
+  cursor: default;
+}
+
+.shot-viewer-zoombar button {
+  min-width: 30px;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.shot-viewer-zoombar button:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.shot-viewer-zoombar button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.shot-viewer-zoombar .shot-viewer-zoomlevel {
+  min-width: 56px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ── 输入框 ─────────────────────────────────── */
 
 .composer-dock {
@@ -3654,6 +3933,15 @@ html[data-host='web'] body {
   max-width: 260px;
   overflow: hidden;
   --chip-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.3'%3E%3Ccircle cx='8' cy='8' r='3'/%3E%3Cpath d='M8 1v2.4M8 12.6V15M1 8h2.4M12.6 8H15' stroke-linecap='round'/%3E%3C/svg%3E");
+}
+
+/* 粘贴块：一大段粘贴收成的块（见 promptText 的 `paste`）。点一下还原成文字。 */
+.chip-paste {
+  color: var(--text-soft);
+  background: var(--lift-2);
+  border: 1px dashed var(--border-strong);
+  cursor: pointer;
+  --chip-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3.5' y='2.5' width='9' height='12' rx='1.2'/%3E%3Cpath d='M6 2.5V2a.5.5 0 01.5-.5h3a.5.5 0 01.5.5v.5M6 7h4M6 9.5h4M6 12h2.5'/%3E%3C/svg%3E");
 }
 
 /* hooks 清单里的 matcher / 参数提示小标。 */
@@ -4251,6 +4539,12 @@ html[data-host='web'] body {
 .md-agent-icon {
   color: var(--text-faint);
   font-size: 0.9em;
+}
+
+/* 子任务链接的图标是 SVG（和工作台标签同一枚，见 icons.tsx 的 ForkIcon）。
+   自己也做成 flex 盒，SVG 不再挂在文字基线上，和文字垂直居中。 */
+.md-agent-link .md-agent-icon {
+  display: inline-flex;
 }
 
 /* 回答里的 `riot://session/` 链接：同一枚标签，用强调色区分"跳到另一个会话"。 */
@@ -5274,10 +5568,12 @@ body.file-dragging.file-drop-hot * {
   cursor: default;
 }
 
+/* 图标是 SVG（子 agent 那一枚，见 icons.tsx 的 ForkIcon）：转到后台就是
+   把这一轮交给一个后台子 agent 接着干。flex 盒让它和文字垂直居中。 */
 .handoff-icon {
+  display: inline-flex;
+  align-items: center;
   color: var(--text-faint);
-  font-size: 12px;
-  line-height: 1;
   margin-right: 4px;
 }
 
@@ -5499,9 +5795,8 @@ body.file-dragging.file-drop-hot * {
 
 /* 和改动面板同一种壳：整列、左描边、聊天区同底。 */
 /* 预览面板：顶上一条横跨全宽的头部（面包屑 + 按钮贴右缘），下面正文
-   撑满。看文件时树浮在右侧（.preview-split-overlay），不占文档流，
-   开合不挤正文。只有"文件"标签才跟占位并排。树靠外缘：对话在窗口
-   中间，眼睛从对话扫到文件内容不用跨过一列目录。 */
+   撑满。树和正文并排成两列，不浮在正文上（早先浮着盖住的正好是每行
+   开头）。树在左：编辑器的老位置，先找文件、再往右读内容。 */
 .preview-panel {
   flex: 1;
   min-width: 0;
@@ -5530,22 +5825,12 @@ body.file-dragging.file-drop-hot * {
 
 /* ── 文件树 ─────────────────────────────────── */
 
-/* 树栏外壳：宽度由内联样式定（可拖）。默认跟占位并排；看文件时
-   绝对定位到右缘，盖在正文上。 */
+/* 树栏外壳：宽度由内联样式定（可拖右缘），和正文并排。 */
 .file-tree-overlay {
   flex-shrink: 0;
   min-height: 0;
   display: flex;
   flex-direction: row;
-}
-
-.preview-split-overlay .file-tree-overlay {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  z-index: var(--z-panel);
-  box-shadow: -8px 0 24px var(--shadow-color);
 }
 
 .file-tree-col {
@@ -5561,7 +5846,7 @@ body.file-dragging.file-drop-hot * {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
   background: var(--bg);
 }
 
@@ -5652,6 +5937,8 @@ body.file-dragging.file-drop-hot * {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  /* 不回弹：滚到头没有外层要接力，弹一下只是晃。 */
+  overscroll-behavior: none;
   padding: 4px 4px 12px;
   outline: none;
 }
@@ -5660,6 +5947,7 @@ body.file-dragging.file-drop-hot * {
    Cursor 同款），一屏能扫三十行。名字不换行、超宽截断 —— 整条相对路径
    在 title 里。 */
 .tree-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -5676,6 +5964,29 @@ body.file-dragging.file-drop-hot * {
 .tree-row:hover {
   background: var(--bg-hover);
   color: var(--text);
+}
+
+/* 缩进引导线（照 Claude）：展开的目录从箭头往下拉一条细线，包住它的
+   子项，深层目录一眼看出谁属于谁。
+   每行只画自己的祖先那几条（--depth 条，由 FileTree 的 rowStyle 给），
+   行和行之间没有缝，上下拼起来就是连续的竖线 —— 不用额外的 DOM，也不
+   用知道"这个目录有多少个子项"。
+   位置和 FileTree 的缩进常量绑定：竖线落在 4 + 9 + 层数 × 10，即每级父
+   目录箭头的中心。渐变周期 10px、线在每个周期的第 9px，起点 left: 4px。 */
+.tree-row::before,
+.tree-note::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: calc(var(--depth, 0) * 10px);
+  background: repeating-linear-gradient(
+    90deg,
+    transparent 0 9px,
+    var(--border) 9px 10px
+  );
+  pointer-events: none;
 }
 
 /* 正在预览的文件：底色常亮（不只是 hover），一眼看出"我在看哪个"。 */
@@ -5731,6 +6042,7 @@ body.file-dragging.file-drop-hot * {
 
 /* 条目下面的说明行（正在读取 / 出错 / 还有 N 项）。 */
 .tree-note {
+  position: relative;
   height: 24px;
   display: flex;
   align-items: center;
@@ -5758,7 +6070,8 @@ body.file-dragging.file-drop-hot * {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 8px 4px 12px;
+  /* 两头都是图标按钮（左边树开关、右边文件操作），边距对称。 */
+  padding: 4px 8px;
   border-bottom: 1px solid var(--border);
   min-width: 0;
 }
@@ -5891,6 +6204,7 @@ body.file-dragging.file-drop-hot * {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  overscroll-behavior: none;
   background: var(--bg);
   padding: 20px 24px 40px;
 }
@@ -5900,62 +6214,61 @@ body.file-dragging.file-drop-hot * {
   margin: 0 auto;
 }
 
-/* 代码预览：深色、等宽、hljs 配色（github-dark-dimmed 全局主题）。
-   长行横向滚，和终端 / 聊天代码块一个阅读习惯。 */
+/* 代码预览 / 编辑器（CodeMirror，见 lib/codeEditor）。滚动在编辑器自己的
+   .cm-scroller 里 —— 外壳只负责给它一块高度确定的地方，自己不滚：外壳
+   一滚，CodeMirror 量不出视口，虚拟化就失效、整篇都会被渲染出来。
+   字号、行高、行号栏的样子在 codeEditor 的 THEME 里，和旧版一致。 */
 .code-view {
   flex: 1;
   min-height: 0;
-  overflow: auto;
-  background: var(--bg);
-}
-
-/* 行号栏 + 正文一行排开。容器不限宽（min-width: max-content 在正文
-   pre 上），横向滚动时行号靠 sticky 钉在左缘，底色盖住滑过去的代码。 */
-.code-view-lines {
   display: flex;
-  align-items: flex-start;
-  min-width: max-content;
-}
-
-.code-view pre {
-  margin: 0;
-  padding: 12px 16px;
-  min-width: max-content;
-}
-
-/* 行号：和正文同字体、同字号、同行高才能逐行对齐 —— 三个值都别单改。
-   右对齐、淡色、不可选中。 */
-.code-view-gutter {
-  position: sticky;
-  left: 0;
-  z-index: 1;
-  flex-shrink: 0;
-  padding: 12px 10px 12px 14px;
-  font-family: var(--mono);
-  font-size: 12px;
-  line-height: 1.65;
-  text-align: right;
-  color: var(--text-faint);
-  opacity: 0.7;
+  flex-direction: column;
+  overflow: hidden;
   background: var(--bg);
-  border-right: 1px solid var(--border);
-  user-select: none;
-  white-space: pre;
 }
 
-.code-view-gutter + pre {
+.code-view-editor {
   flex: 1;
-  padding-left: 14px;
+  min-height: 0;
 }
 
-.code-view code {
-  font-family: var(--mono);
-  font-size: 12px;
-  line-height: 1.65;
+/* 编辑区挂了 `hljs` 类拿 hljs 主题的正文色，它顺带的底色和内边距不要。 */
+.code-view .cm-content.hljs {
   background: transparent;
-  padding: 0;
-  display: block;
-  white-space: pre;
+  padding: 12px 0;
+}
+
+/* 没存的修改、保存中、冲突：编辑器上方一条，不挡正文。 */
+.code-edit-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px 5px 16px;
+  font-size: 12px;
+  color: var(--text-dim);
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.code-edit-bar.warn {
+  color: var(--warn);
+  background: var(--warn-bg);
+}
+
+.code-edit-bar-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-edit-bar button {
+  font-size: 12px;
+  padding: 2px 10px;
+  border-radius: 6px;
+  flex-shrink: 0;
 }
 
 .code-view-note {
@@ -9461,11 +9774,247 @@ button.field-slider-state:hover {
   white-space: nowrap;
 }
 
-.md-audio-player,
-.md-audio-pending {
+/* 自画的媒体控件（见 MediaControls.tsx）。高度、各段宽度都固定：第一帧就是
+   最终布局，文件读进来、切换会话都不会让任何东西挪位置。音频是一条独立的
+   条，视频把同一条叠在画面底部。 */
+.audio-player {
   display: block;
-  width: 100%;
   height: 32px;
+  border-radius: 6px;
+  background: var(--bg-card);
+}
+
+.audio-player audio {
+  display: none;
+}
+
+.media-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 8px 0 4px;
+  color: var(--text);
+}
+
+.media-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.media-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.media-btn:disabled {
+  color: var(--text-faint);
+  cursor: default;
+}
+
+/* 等宽数字 + 固定最小宽度：时间从 0:09 走到 0:10 时进度条不被挤动。 */
+.media-time {
+  flex: none;
+  min-width: 3.4ch;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+.media-seek {
+  flex: 1;
+  min-width: 0;
+  height: 16px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.media-seek:disabled {
+  cursor: default;
+}
+
+/* 轨道：已播那段填色（--pct 由组件写）。 */
+.media-seek::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    var(--text-dim) 0 var(--pct, 0%),
+    var(--border-strong) var(--pct, 0%) 100%
+  );
+}
+
+.media-seek::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    var(--text-dim) 0 var(--pct, 0%),
+    var(--border-strong) var(--pct, 0%) 100%
+  );
+}
+
+.media-seek::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -4px;
+  border-radius: 50%;
+  background: currentColor;
+  border: none;
+}
+
+.media-seek::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: currentColor;
+  border: none;
+}
+
+.media-seek:disabled::-webkit-slider-thumb {
+  background: var(--text-faint);
+}
+
+/* 视频：控件叠在画面底部，深色半透明底，不论亮暗主题都压在画面上。
+   暂停时常显；播放时指针不在播放器上就淡出，不挡画面。 */
+.md-video-controls {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.55);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  transition: opacity var(--dur-2) var(--ease-out);
+}
+
+.md-video-controls .media-bar {
+  color: #fff;
+}
+
+.md-video-controls .media-time {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.md-video-controls .media-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.md-video-controls .media-seek::-webkit-slider-runnable-track {
+  background: linear-gradient(
+    to right,
+    #fff 0 var(--pct, 0%),
+    rgba(255, 255, 255, 0.3) var(--pct, 0%) 100%
+  );
+}
+
+.md-video-wrap[data-playing] .md-video-controls {
+  opacity: 0;
+}
+
+/* 键盘聚焦在控件上时也常显。用 :focus-visible 而不是 :focus-within ——
+   鼠标点了播放键焦点会留在按钮上，那样控件放着片子就一直不淡出。 */
+.md-video-wrap[data-playing]:hover .md-video-controls,
+.md-video-wrap .md-video-controls:has(:focus-visible) {
+  opacity: 1;
+}
+
+.md-video {
+  cursor: pointer;
+}
+
+/* 暂停那一帧的截图，盖在视频上（见 VideoPlayer 的 still）。让出 1px 露出
+   视频的边框；点击穿透到视频上（点画面照样切换播放）。 */
+.md-video-still {
+  position: absolute;
+  inset: 1px;
+  width: calc(100% - 2px);
+  height: calc(100% - 2px);
+  object-fit: contain;
+  border-radius: 7px;
+  background: var(--bg-side);
+  pointer-events: none;
+}
+
+.md-video-stage:fullscreen .md-video-still,
+.md-video-stage.is-filled .md-video-still {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+  background: #000;
+}
+
+/* 真正进全屏的一层（画面 + 控件）。平时就是外层的内容本身。 */
+.md-video-stage {
+  position: relative;
+  display: block;
+}
+
+/* 全屏中那一轮不跳过渲染：视频挪到顶层后，原位的轮可能被判为"离屏"，
+   渲染状态被丢掉，退出时整块重建 —— 看起来像视频重新加载了一下。
+   铺满窗口（桌面版的全屏）没有 popover 时靠 position: fixed，轮上的
+   content-visibility 自带的绘制约束会把它裁在轮里，也得摘掉。 */
+.turn:has(:fullscreen),
+.turn:has(.md-video-stage.is-filled) {
+  content-visibility: visible;
+}
+
+/* 播放器进了全屏（连同自画控件）：黑底，画面等比铺满。外层留在对话流
+   里、钉着高度占位（见 MediaControls 的 useVideoFullscreen）。
+   .is-filled 是桌面版的全屏：窗口进系统全屏，播放器以 popover 进顶层
+   铺满窗口；popover 的默认样式（居中、边框、内边距、按内容定宽）全覆盖掉。 */
+.md-video-stage.is-filled {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  width: 100vw;
+  height: 100vh;
+  max-height: none;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  color: inherit;
+}
+
+.md-video-stage:fullscreen,
+.md-video-stage.is-filled {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  margin: 0;
+  background: #000;
+}
+
+/* !important：普通状态下的显示框是内联样式（见 Markdown.tsx 的 videoBoxStyle）。 */
+.md-video-stage:fullscreen .md-video,
+.md-video-stage.is-filled .md-video {
+  width: 100% !important;
+  height: 100% !important;
+  aspect-ratio: auto !important;
+  max-height: none;
+  object-fit: contain;
+  border: none;
+  border-radius: 0;
+  background: #000;
 }
 
 /* 开播前的封面：盖满播放器，中间一枚播放键。点一下撤掉、开播。 */
@@ -9549,8 +10098,7 @@ button.field-slider-state:hover {
 }
 
 /* 兜底：万一量出来的框还是比字小，宁可字溢出框边，也不能被裁掉看不见 */
-.md-mermaid foreignObject,
-.mermaid-viewer-body foreignObject {
+.md-mermaid foreignObject {
   overflow: visible;
 }
 
@@ -9721,6 +10269,31 @@ button.field-slider-state:hover {
   opacity: 1;
 }
 
+/* 正在生成的那一轮里，操作栏额外用 visibility 藏、并独立成合成层。
+
+   那一轮每帧都在重排（流式正文、思考在长）。WKWebView 在这种时候会把
+   只靠父级 opacity 藏起来的操作栏画成半截 —— 时刻露在外面、SVG 图标
+   却没画，悬停到按钮上才补画出来。visibility 在绘制时生效，不依赖
+   不透明度图层有没有被正确重绘；独立合成层让时刻和图标作为一个整体
+   淡入淡出。只限直播那一轮：visibility:hidden 的按钮 Tab 不到，历史
+   消息里键盘用户还要能用 :focus-within 把它们调出来。 */
+.turn[data-live] .msg-actions {
+  visibility: hidden;
+  will-change: opacity;
+  transition:
+    opacity var(--dur-1) var(--ease-out),
+    visibility 0s linear var(--dur-1);
+}
+
+.turn[data-live] .msg.assistant:hover .msg-actions,
+.turn[data-live] .user-row:hover .msg-actions,
+.turn[data-live] .msg-actions:focus-within {
+  visibility: visible;
+  transition:
+    opacity var(--dur-1) var(--ease-out),
+    visibility 0s;
+}
+
 .msg-action {
   display: inline-flex;
   align-items: center;
@@ -9867,8 +10440,7 @@ button.field-slider-state:hover {
   background: none;
   color: var(--text-faint);
   font-size: 12px;
-  padding: 2px 8px 2px 4px;
-  border-radius: 6px;
+  padding: 2px 0;
   /* 直播时预览要占满剩余宽度，标题必须整行铺开。 */
   max-width: 100%;
 }
@@ -9880,9 +10452,11 @@ button.field-slider-state:hover {
   color: var(--text-dim);
 }
 
-.think-head:hover {
-  color: var(--text-dim);
-  background: var(--bg-hover);
+/* 同 .fold-head：只提亮文字，优先级的坑也一样。 */
+button.think-head:hover,
+.think-head[aria-expanded='true'] {
+  color: var(--text-raised);
+  background: none;
 }
 
 .think-label {
@@ -9969,7 +10543,7 @@ button.field-slider-state:hover {
 }
 
 .think-body {
-  margin: 6px 0 0 16px;
+  margin: 6px 0 0 2px;
   color: var(--text-faint);
   font-size: 13px;
   border-left: 2px solid var(--border);
@@ -9996,8 +10570,8 @@ button.field-slider-state:hover {
    限高过的版本有两个毛病：一是落定那一刻 .live 消失、max-height 跟着
    没了，块高从 320px 弹成全文，页面当场跳一下；二是内层滚动条和外层
    对话流抢滚轮，读长思考时得先把内层滚到头才能继续翻页面。
-   现在展开就是全文，高度只在内容增长时单向变化 —— 倒排容器天然贴底，
-   这种增长不会把正在读的位置顶走。 */
+   现在展开就是全文，高度只在内容增长时单向变化 —— 增长在尾部，正排
+   容器里不会把正在读的位置顶走（锚点见 Transcript 的 growsInPlace）。 */
 
 /* ── 过程折叠组 ─────────────────────────────── */
 
@@ -10020,14 +10594,45 @@ button.field-slider-state:hover {
   background: none;
   color: var(--text-faint);
   font-size: 12px;
-  padding: 2px 8px 2px 4px;
-  border-radius: 6px;
+  padding: 2px 0;
   text-align: left;
 }
 
-.fold-head:hover {
-  color: var(--text-dim);
-  background: var(--bg-hover);
+/* 悬停只提亮文字，不铺底色、箭头在文字后面（照 Claude）。组头是过程
+   不是内容：一整条灰底在正文之间比摘要本身还显眼。
+
+   `[约束]` 要写成 `button.fold-head:hover` 并显式清掉底色。全局的
+   `button:hover:not(:disabled)` 会铺 --bg-hover，优先级 (0,2,1) 高过
+   `.fold-head:hover` 的 (0,2,0) —— 只写后者的话灰底照旧。 */
+button.fold-head:hover,
+.fold-head[aria-expanded='true'] {
+  color: var(--text-raised);
+  background: none;
+}
+
+/* 箭头跟着组头的字一起亮（.chevron 默认钉在 --text-faint）。
+   往回收 4px：箭头的 svg 左边自带约 4px 留白，再加 6px 的 gap，看上去
+   和文字隔了一个字宽。只收箭头这一侧，不动 gap —— 摘要、+N −M、失败数
+   之间还要原来的间距。 */
+.fold-head .chevron,
+.think-head .chevron {
+  color: inherit;
+  margin-left: -4px;
+}
+
+/* 线宽压到和 12px 正文的笔画差不多粗。颜色和字是同一个，但 1.8 的线
+   （渲染出来 ≈1.35px）比字的笔画粗一圈，占的亮像素多，看着就比字亮；
+   Claude 的箭头也是细线。只动这两处，别处的箭头配的是 13px 以上的字。 */
+.fold-head .chevron path,
+.think-head .chevron path,
+.tool-plain .tool-head .chevron path {
+  stroke-width: 1.3;
+}
+
+/* 组里的工具行同理。它的 gap 是 8px（比组头多 2px），多收 2px，箭头和
+   文字的视觉距离才和组头一样。 */
+.tool-plain .tool-head .chevron {
+  margin-left: -6px;
 }
 
 /* 摘要超长截尾 —— 全文在 title 里悬停可见。 */
@@ -10038,10 +10643,16 @@ button.field-slider-state:hover {
   white-space: nowrap;
 }
 
-.fold-count {
-  font-size: 11px;
-  opacity: 0.75;
-  flex: none;
+/* 过程组从直播落定：摘要从组头的直播文字上接过来，不是硬切。 */
+.fold-label-settle {
+  animation: fold-settle var(--dur-2) var(--ease-out);
+}
+
+@keyframes fold-settle {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
 }
 
 /* 直播态（组尾还在跑）：组头就是这段过程的"现在"，字色升到 dim、
@@ -10094,7 +10705,7 @@ button.field-slider-state:hover {
 
 /* 展开体：左侧一道竖线把这段过程括起来，和周围的正式内容分层。 */
 .fold-body {
-  margin: 6px 0 0 16px;
+  margin: 6px 0 0 2px;
   border-left: 2px solid var(--border);
   padding-left: 12px;
   display: flex;
@@ -10337,6 +10948,11 @@ button.field-slider-state:hover {
 
 .tool-diff .del {
   color: var(--danger);
+}
+
+/* diff 里的说明行（Write 的"已省略前 N 行""共 N 行"）：不是文件内容。 */
+.tool-diff .diff-note {
+  color: var(--text-faint);
 }
 
 /* ── 会话改动一览（右侧抽屉） ────────────────── */
@@ -10590,9 +11206,17 @@ button.field-slider-state:hover {
   overscroll-behavior: none;
 }
 
-/* 改动条自己就是 bg-card 底，diff 块换一档底色才看得出边界。 */
+/* 改动条自己就是 bg-card 底，diff 块换一档底色才看得出边界。
+   `[约束]` 这里的 diff 不自己竖着滚，整条列表是唯一的竖向滚动区。列表
+   限高 42vh、diff 限高 460px，矮窗口里 diff 比列表的可视区还高：指针在
+   diff 上滚到底，diff 不把滚动交给列表（overscroll-behavior:none），最后
+   一截压在列表下沿、也就是输入框背后，怎么都看不到；WebKit 的 overlay
+   滚动条还不受外层裁剪，diff 的滚动条画到了输入框上。横向照旧自己滚。 */
 .changes-bar-list .change-diff {
   background: var(--bg-side);
+  max-height: none;
+  /* 竖向不再自己滚，也就不能拦着竖向滚动往列表传（x、y 分开写）。 */
+  overscroll-behavior: none auto;
 }
 
 /* 改动视图里的滚动条走隐形路线：平时不占视线，悬停到滚动区域才
@@ -10899,31 +11523,6 @@ button.field-slider-state:hover {
 .md-mermaid-copy:hover {
   color: var(--text);
   background: var(--bg-hover);
-}
-
-/* 全屏 mermaid 查看器（遮罩复用 .shot-viewer） */
-/* 外层 .shot-viewer 是 flex 居中 + overflow:auto：图比窗口高时，居中会把
-   顶部推到滚动区外面，滚不上去。auto margin 在放得下时照样居中，放不下
-   时退成 0，从顶上开始排。 */
-.mermaid-viewer-body {
-  margin: auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 40px;
-  cursor: default;
-}
-
-.mermaid-viewer-body svg {
-  display: block;
-  padding: 20px;
-  border-radius: 10px;
-  background: var(--bg-side);
-  /* mermaid 给 svg 内联了 max-width:原始宽度，不加 !important 盖不掉，
-     全屏里就还是对话列那么大，放大就白点了 */
-  max-width: none !important;
-  width: min(1600px, 92vw);
-  height: auto;
 }
 
 /* ── 面板类 P2 批量修复 ───── */

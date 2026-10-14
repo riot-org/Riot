@@ -123,6 +123,10 @@ export default {
   "app.workbench.planNone": "No plan in this conversation yet. Switch to Plan mode and describe the task; the model writes a plan here first.",
   "app.workbench.addPanel": "Add panel",
   "app.workbench.closeTab": "Close {title}",
+  "app.workbench.unsaved": "Unsaved",
+  "app.workbench.unsavedTitle": "“{name}” has unsaved changes",
+  "app.workbench.unsavedBody": "Closing the tab discards them.",
+  "app.workbench.closeDiscard": "Close without saving",
 
   "app.remote.connecting": "Connecting",
   "app.remote.connectingHost": "Connecting to host…",

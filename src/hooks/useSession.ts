@@ -1,225 +1,76 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type {
-  AgentError,
-  DecisionReason,
-  MessageMeta,
-  ToolResultContent,
-  Usage,
-} from "../bridge/generated";
 import {
   type AgentEvent,
-  type BackgroundTaskStatus,
   type BackgroundTaskView,
-  type HistorySnapshot,
   type ImageInput,
-  type Message,
   type Nudge,
-  type PendingAsk,
-  type PermissionAsk,
-  type PermissionMode,
   type PermissionResponse,
-  type SplitError,
   deleteMessage as deleteMessageBridge,
   editMessage as editMessageBridge,
   getHistory,
   interrupt as interruptSession,
-  isIpcTimeout,
   onHostReconnect,
   queueList,
   queueRemove,
   queueTake,
-  isHostError,
   redoCheckpoint,
   regenerateTurn,
   renderUiText,
   resendTurn,
   restoreCheckpoint,
-  splitUiError,
   respondPermission,
   sendTurn,
   subscribeSession,
   subscribeWindowFocus,
   taskCancel,
 } from "../bridge";
-import { type MessageKey, t, tn } from "../i18n";
-import { extractTopLevelStringField, extractTopLevelStringFields } from "../lib/partialJson";
+import { t } from "../i18n";
+import { PartialJsonObject, firstStringField } from "../lib/partialJson";
 import { PLAN_TOOL } from "../lib/plan";
+import { errorItem, restoreFailNotice, sendFailureItem } from "./session/errors";
+import {
+  SEND_GRACE_MS,
+  applyHistorySnap,
+  assistantMessageId,
+  isLiveDelta,
+  liveDeltasOf,
+  locateMessage,
+  mergeLive,
+  rebuildFromSnap,
+  reconcileAsks,
+} from "./session/history";
+import {
+  appendToolOutput,
+  applyDone,
+  applyMessage,
+  applyResolved,
+  applyWithdrawn,
+  buildOf,
+  dropErrors,
+  dropSettled,
+  fillToolInput,
+  rememberCheckpoint,
+  stampOf,
+  trimAfterUserPrompt,
+  trimThroughEdited,
+  upsertTask,
+  withdrawnOf,
+} from "./session/items";
+import { PACE_FRAME_MS, paceTake } from "./session/pacing";
+import {
+  EMPTY_STATE,
+  type HistorySnap,
+  type Item,
+  type QueuedItem,
+  type SessionState,
+  type TextItem,
+  type UserItem,
+} from "./session/types";
 
-/**
- * 界面上的一条内容。
- *
- * 这不是消息的镜像 —— 一条 assistant 消息里可能同时有思考、正文和三个
- * 工具调用，它们在界面上是分开的四块。事件流到 UI 模型的这层翻译放在
- * 这里，组件就只管画。
- */
-export type Item =
-  /**
-   * `images` 是 data URL，只给界面回显自己发过什么用。
-   * `files` 是消息里 `@` 引用过的文件路径（内容进了模型，界面只列路径）。
-   * `at` 是消息产生的时刻（Unix 毫秒，见 MessageMeta.created_at_ms）；
-   * undefined = 本字段之前的老记录，界面那里不显示时间。
-   * `nudge` = 这条是「构建」/「并行构建」按钮发的（MessageMeta.nudge），
-   * 画成构建卡而不是气泡；`planName` 是它构建的那份计划的标题。
-   */
-  | {
-      kind: "user";
-      id: string;
-      text: string;
-      images?: string[];
-      files?: string[];
-      at?: number;
-      nudge?: Nudge;
-      planName?: string;
-    }
-  /** `stopped` = 用户按停止截断的半截回答（内核定稿的，见 finalize_partial）。 */
-  | { kind: "assistant"; id: string; text: string; stopped?: boolean; at?: number }
-  /** `durationMs`：这段思考花了多久（内核量的，见 riot-core 的 think_timer）。旧会话没有。 */
-  | { kind: "thinking"; id: string; text: string; durationMs?: number }
-  | {
-      kind: "tool";
-      id: string;
-      name: string;
-      input: unknown;
-      status: "running" | "ok" | "error";
-      result?: string;
-      /**
-       * 结果里的图片（截图、读图），data URL。这是消息里自带的**压缩图**
-       * （给模型的那份），先显示它，原图到了再换。
-       */
-      resultImage?: string;
-      /**
-       * 原图的磁盘路径（截图落盘的文件、或被读的图片本身）。
-       * 界面优先按它加载原图 —— 压缩图看布局够，看文字不行。
-       */
-      resultImagePath?: string;
-      output: string[];
-    }
-  /**
-   * 出错。`text` 是给人看的一句话；`detail` 是不翻译的技术细节（服务方原话、
-   * HTTP 状态），界面上折起来 —— 排查时才用得上，平时不该占一大块。
-   */
-  | { kind: "error"; id: string; text: string; detail?: string }
-  /** 中性告知（不是出错）：到达轮数上限之类，只是提示"该歇口气了"。 */
-  | { kind: "notice"; id: string; text: string }
-  /**
-   * 后台子 agent 的完成通知（内核合成的 user 消息，见 MessageMeta.task_notice）。
-   * `text` 是它的汇报正文。模型收到的是同一段话；这里画成卡片而不是用户气泡。
-   */
-  | {
-      kind: "task_notice";
-      id: string;
-      agentId: string;
-      title: string;
-      status: BackgroundTaskStatus;
-      text: string;
-      at?: number;
-    }
-  /** 压缩边界：上面是压缩前的记录，下面是压缩后的对话。 */
-  | { kind: "compact"; id: string };
-
-/**
- * 排队面板里的一条插话（还没被内核注入的用户消息）。
- *
- * `id` 是宿主队列条目 id —— 注入后回流的消息用同一个 id，面板条目
- * 由此转成对话气泡。sendTurn 还没返回的短暂窗口里是本地临时 id。
- */
-export interface QueuedItem {
-  id: string;
-  text: string;
-  images: ImageInput[];
-  /** `@` 引用的文件路径（输入框里的那些块）。 */
-  refs: string[];
-}
-
-/**
- * 一条被撤回的提问：用户在模型开口之前按了停止，内核把它从历史里删了。
- *
- * 界面要把它放回输入框 —— 那句话从没被回答过，用户按停止的意思是
- * "重说一遍"，而不是"扔掉我刚打的字"。
- */
-export interface WithdrawnPrompt {
-  /** 内核那条消息的 id。对账/排查用，界面按位置认气泡。 */
-  id: string;
-  text: string;
-  images: ImageInput[];
-  refs: string[];
-  /** 撤完这个会话一条消息都不剩了。侧栏那句自动标题也该跟着撤。 */
-  sessionEmpty: boolean;
-}
-
-export interface SessionState {
-  items: Item[];
-  /** 正在流式输出的正文。 */
-  streaming: string;
-  /** 正在流式输出的思考过程。 */
-  thinking: string;
-  /**
-   * 正在流式写出的计划正文（CreatePlan 的 `plan` 参数）。
-   * `null` = 没在写计划。空字符串 = 已经认出是计划、正文还没到。
-   * 计划整段塞在工具参数里，等 tool_use 完整到达才显示的话，
-   * 用户会对着侧栏空面板干等几十秒，以为对话卡住了。侧栏的计划面板
-   * 边流边渲染它；工具落定后改读磁盘上的文件。
-   */
-  streamingPlan: string | null;
-  busy: boolean;
-  /**
-   * 宿主正在压缩上下文。
-   *
-   * 压缩要真调一次模型做摘要，几十秒 —— 而那段时间界面上原本只有那三个点，
-   * 和"模型正在回答"分不出来，用户看到的是应答莫名变慢。
-   *
-   * 宿主不发"压缩结束"，只发压缩**成功**的 `compacted`。失败的那一半
-   * （摘要请求本身出错）没有事件，所以这个标志必须由后续动作清掉，
-   * 见 handle 里 `request_start` 和 `done` 的处理。
-   */
-  compacting: boolean;
-  /**
-   * 待回答的权限请求，按到达顺序排队，弹窗每次只显示队首那个。
-   *
-   * `[约束]` 必须是队列而不是单个槽位。调度器会把并发安全的工具放在
-   * 同一批里并行跑，每个各自征求授权 —— WebSearch + WebFetch 就是这样
-   * 一对。用单槽位的话后到的会覆盖先到的，被覆盖那个永远等不到回应，
-   * 一直挂到宿主侧 10 分钟超时才按拒绝收场。用户看到的是两个工具卡片
-   * 转圈、没有任何弹窗。
-   */
-  asks: { requestId: string; detail: PermissionAsk }[];
-  /**
-   * 本会话的 token 用量。花的是用户的钱，应该让他看得见。
-   *
-   * `input`/`output` 是**累计**（每轮相加，只增不减）；`context` 是
-   * **当前占用**的快照 —— 最近一次请求真实发出去的量，压缩之后会掉下来。
-   * 两个口径混用会让人以为"聊了半天上下文才用了 5%"（累计 ÷ 窗口），
-   * 或者"压缩完怎么还是这么多"（快照当累计看）。
-   */
-  tokens: { input: number; output: number; context: number };
-  /**
-   * 宿主主动切换的权限模式（批准计划时用户选的执行档）。null = 没发生过。
-   * Composer 靠它同步显示 —— 不同步的话界面还写着「规划模式」，
-   * 宿主已经按「自动接受编辑」放行了。
-   */
-  hostMode: PermissionMode | null;
-  /** 排队面板：模型跑动中发的、还没注入对话的插话。 */
-  queued: QueuedItem[];
-  /**
-   * 刚被撤回、等着放回输入框的那条提问。输入框消费掉之后置回 null
-   * （见 `clearWithdrawn`）。
-   */
-  withdrawn: WithdrawnPrompt | null;
-  /**
-   * 后台子 agent（跑着的和刚结束的），按启动顺序。`background_task` 事件
-   * 每次推一份全量视图，这里按 id 覆盖；切回会话时用快照整批替换。
-   */
-  tasks: BackgroundTaskView[];
-  /** 有文件切片的用户提问 id。 */
-  checkpointIds: string[];
-  /** 最近一次 Restore 还能 Redo。 */
-  redoAvailable: boolean;
-  /** 回退/重做改了磁盘：外层拿它刷新改动栏。 */
-  filesRev: number;
-}
-
-const MAX_TOOL_LINES = 200;
+// 对外的类型和水合函数从这里转出，调用方不用知道内部怎么分的文件。
+export type { Item, QueuedItem, SessionState, TextItem, WithdrawnPrompt } from "./session/types";
+export { messagesToItems } from "./session/history";
 
 /**
  * Channel 沉默超过此时长，视为 IPC 已经死了。
@@ -246,8 +97,6 @@ const BUSY_SILENCE_MS = 12_000;
  * 半分钟多半是在跑一条长命令 —— 这种情况下的对账是白拉一份历史，别太勤。
  */
 const TASK_SILENCE_MS = 30_000;
-/** 刚发送的那几秒不要用快照盖界面：乐观气泡还没进宿主历史。 */
-const SEND_GRACE_MS = 8_000;
 /** 切到别的 app 不到这么久、事件还在流，不要重订阅（避免把正在流的正文闪掉）。 */
 const AWAY_RESYNC_MS = 30_000;
 /**
@@ -278,15 +127,6 @@ function settleWithin(p: Promise<void>, ms: number): Promise<void> {
 }
 
 /**
- * 宿主的历史快照。
- *
- * `[约束]` 类型只有 `bridge` 里那一份（对着 Rust 的 `HistoryOut`）。
- * 这里以前另写了一份把四个字段标成可选的副本，于是满地 `?? false` /
- * `?? []` 兜着永远不会发生的情况，而真出现字段增删时两份都不会红。
- */
-type HistorySnap = HistorySnapshot;
-
-/**
  * 每个会话当前这轮等待的起点（epoch ms）。
  *
  * 挂在模块级：Chat 按会话 id 重挂载，组件内的计时起点活不过切换 ——
@@ -295,24 +135,6 @@ type HistorySnap = HistorySnapshot;
  * 时刻由前端记下来。应用重启后拿不回起点，从水合时刻起数（诚实的下界）。
  */
 const waitStartAt = new Map<string, number>();
-
-const EMPTY_STATE: SessionState = {
-  items: [],
-  streaming: "",
-  thinking: "",
-  streamingPlan: null,
-  busy: false,
-  compacting: false,
-  asks: [],
-  tokens: { input: 0, output: 0, context: 0 },
-  hostMode: null,
-  queued: [],
-  withdrawn: null,
-  tasks: [],
-  checkpointIds: [],
-  redoAvailable: false,
-  filesRev: 0,
-};
 
 /**
  * 切走会话后界面树可能被卸掉，条目先记在这里。下一次挂上这个 id
@@ -393,8 +215,9 @@ export function useSession(
     /**
      * 把浏览器面板打开给用户看。
      *
-     * `[约束]` 只有模型**明说**要给用户看时才走这条：`ShowBrowser`，以及
-     * 请用户在面板里亲自操作的 `BrowserHandoff`。别的 `Browser*` 工具一律
+     * `[约束]` 只有模型**明说**要给用户看时才走这条：`ShowBrowser`、
+     * `show: true` 的 `BrowserNavigate`，以及请用户在面板里亲自操作的
+     * `BrowserHandoff`。别的 `Browser*` 工具一律
      * 不弹 —— 早先按名字前缀猜，结果抓包、扫描这类纯后台分析也在抢屏幕。
      *
      * 历史回放不会走这条 —— 只在实时事件上触发。
@@ -436,7 +259,8 @@ export function useSession(
    *  推十条，几个并行就是几十条挤在同一瞬间，逐条 setState 等于逐条重渲染
    *  整个对话。按到达顺序攒着，一帧内同一个子 agent 只留最后一条的效果。 */
   const pendingTasks = useRef<BackgroundTaskView[]>([]);
-  const toolJsonById = useRef(new Map<string, string>());
+  /** 每个正在流参数的工具一个增量解析器（见 PartialJsonObject）。 */
+  const toolJsonById = useRef(new Map<string, PartialJsonObject>());
   /**
    * 工具卡片出现时就地落定的流式内容。
    *
@@ -454,8 +278,9 @@ export function useSession(
    *  预览 —— 在调用时就开的话，同一批里"先 Write 再 Preview"会抢在文件
    *  落盘之前打开一个报错的标签；失败的调用（文件不存在）则根本不该开。 */
   const pendingPreviews = useRef(new Map<string, string>());
-  /** 等结果的 ShowBrowser 调用。同 pendingPreviews 的理由：浏览器里一页
-   *  都没有时这个工具会失败，那时弹出来的是一个空面板。 */
+  /** 等结果的 ShowBrowser 调用（含 `show: true` 的 BrowserNavigate）。同
+   *  pendingPreviews 的理由：浏览器里一页都没有、或者导航失败时弹出来的
+   *  是一个空面板。 */
   const pendingShowBrowser = useRef(new Set<string>());
   /** 等结果的 CreatePlan 调用。结果一到，边流边显示的计划草稿就该撤 ——
    *  之后侧栏面板读的是磁盘上那份文件。 */
@@ -485,6 +310,8 @@ export function useSession(
   /** 最近一次从这条会话的 Channel 收到事件（或刚挂上新出口）。 */
   const lastHeardAt = useRef(Date.now());
   const lastSendAt = useRef(0);
+  /** 发送前的重连闸（见 send）。所有发送按顺序排在它后面。 */
+  const sendGate = useRef<Promise<void>>(Promise.resolve());
   /** 换一条活 Channel，并在宿主已空闲时用历史把界面追上。 */
   const ensureLiveRef = useRef<(() => Promise<void>) | null>(null);
 
@@ -498,18 +325,25 @@ export function useSession(
   );
 
   useEffect(() => {
-    const flush = () => {
+    /** `paced`：rAF 那一路，正文和思考按 paceTake 限速放出，剩下的下一帧接着放。 */
+    let pacedAt = 0;
+    const flush = (paced = false) => {
       rafId.current = 0;
-      const txt = pendingText.current;
-      const k = pendingThinking.current;
+      const allTxt = pendingText.current;
+      const allK = pendingThinking.current;
+      const now = performance.now();
+      // 上一次已经放空（pacedAt = 0）：这是新到的一撮，按一帧起步。
+      const dt = pacedAt ? now - pacedAt : PACE_FRAME_MS;
+      const txt = paced ? allTxt.slice(0, paceTake(allTxt, dt)) : allTxt;
+      const k = paced ? allK.slice(0, paceTake(allK, dt)) : allK;
       const chunks = pendingToolJson.current;
       const lines = pendingProgress.current;
       const taskViews = pendingTasks.current;
       if (!txt && !k && chunks.length === 0 && lines.length === 0 && taskViews.length === 0) {
         return;
       }
-      pendingText.current = "";
-      pendingThinking.current = "";
+      pendingText.current = allTxt.slice(txt.length);
+      pendingThinking.current = allK.slice(k.length);
       pendingToolJson.current = [];
       pendingProgress.current = [];
       pendingTasks.current = [];
@@ -517,12 +351,17 @@ export function useSession(
       let plan: string | undefined;
       // 工具参数边流边填进卡片：id → 此刻已经到齐的那些字段。
       const partial = new Map<string, Record<string, string>>();
+      // 解析器只吃新到的这几段，不再把累积的整段 JSON 从头扫一遍。
       for (const { id, chunk } of chunks) {
-        const next = (toolJsonById.current.get(id) ?? "") + chunk;
-        toolJsonById.current.set(id, next);
-        const extracted = extractTopLevelStringField(next, "plan");
+        let parser = toolJsonById.current.get(id);
+        if (!parser) {
+          parser = new PartialJsonObject();
+          toolJsonById.current.set(id, parser);
+        }
+        parser.push(chunk);
+        const extracted = firstStringField(parser, "plan");
         if (extracted !== null) plan = extracted;
-        partial.set(id, extractTopLevelStringFields(next));
+        partial.set(id, parser.snapshot());
       }
 
       setState((s) => {
@@ -544,15 +383,23 @@ export function useSession(
           ...(tasks !== s.tasks ? { tasks } : {}),
         };
       });
+      // 还有没放完的：下一帧接着放。排在 setState 之后 —— 页面隐藏时
+      // schedule 会同步再 flush 一次，后放的那截必须排在这一截后面。
+      if (pendingText.current || pendingThinking.current) {
+        pacedAt = now;
+        schedule();
+      } else {
+        pacedAt = 0;
+      }
     };
 
-    const schedule = () => {
+    function schedule() {
       if (document.hidden) {
         flush();
         return;
       }
-      if (!rafId.current) rafId.current = requestAnimationFrame(flush);
-    };
+      if (!rafId.current) rafId.current = requestAnimationFrame(() => flush(true));
+    }
 
     const onSubscribeError = (message: string) => {
       waitStartAt.delete(sessionId);
@@ -679,7 +526,11 @@ export function useSession(
           if (event.role === "assistant") {
             for (const c of event.content) {
               if (c.type !== "tool_use") continue;
-              if (c.name === "ShowBrowser") {
+              if (
+                c.name === "ShowBrowser" ||
+                (c.name === "BrowserNavigate" &&
+                  (c.input as { show?: unknown } | null)?.show === true)
+              ) {
                 pendingShowBrowser.current.add(c.id);
               } else if (c.name === PLAN_TOOL) {
                 pendingPlans.current.add(c.id);
@@ -935,6 +786,9 @@ export function useSession(
     let sub = subscribeSession(sessionId, listen, onSubscribeError);
 
     const applySnap = (hist: HistorySnap) => {
+      // 限速放出的积压先落进 state，快照按重叠去拼（mergeLive）。留在
+      // 积压里的话，快照之后它再被放出来，同一截字就出现两遍。
+      flush();
       const busy = hist.busy;
       const compacting = hist.compacting;
       // 等待起点跟着快照对齐：还在等而起点丢了（应用重启）就从现在
@@ -1010,6 +864,7 @@ export function useSession(
           if (!hist.busy || catchUp) {
             applySnap(hist);
           } else {
+            flush();
             busyRef.current = true;
             compactingRef.current = hist.compacting;
             // 同 applySnap：快照里的子 agent 视图为准，攒着的旧视图作废。
@@ -1146,9 +1001,17 @@ export function useSession(
       // 也没有报错。ensureLive 自带期限且从不抛（见 settleWithin），
       // 换出口失败就带着一条可能已经死掉的通道往下走：消息照发，最坏
       // 情况是这一轮的事件收不到，而那个有看门狗兜。
+      //
+      // `[约束]` 每次发送都排在同一道闸后面，不只是触发重连的那一次。
+      // 否则：第一句在等重连，紧跟着敲的第二句不用等（重连已把
+      // lastHeardAt 刷新了），抢先读到 busy=false —— 被当成开轮的
+      // 气泡乐观放上去、命令也可能先到宿主，宿主回"排队"后再被挪到
+      // 排队面板**末尾**，顺序全乱。等同一个 Promise 的续体按登记顺序
+      // 恢复，先发的先放置、先置忙。
       if (Date.now() - lastHeardAt.current >= SINK_STALE_MS) {
-        await ensureLiveRef.current?.();
+        sendGate.current = ensureLiveRef.current?.() ?? Promise.resolve();
       }
+      await sendGate.current;
       // 乐观气泡上的时刻。内核那份（MessageMeta.created_at_ms）要等消息
       // 定稿才回来，而气泡现在就要显示 —— 差的只是一次 IPC 往返。
       const sentAt = Date.now();
@@ -1301,19 +1164,24 @@ export function useSession(
       const item: QueuedItem = took ? { ...local, ...took } : local;
       if (busyRef.current) {
         mutateQueued((q) => [item, ...q.filter((x) => x.id !== id)]);
-        void interruptSession(sessionId).then((cancelled) => {
-          if (cancelled) return;
-          // 宿主已经闲着，忙碌是残留。直接发，别等一个永远不来的 Done。
-          busyRef.current = false;
-          mutateQueued((q) => q.filter((x) => x.id !== id));
-          void send(item.text, item.images, item.refs);
-        });
+        void interruptSession(sessionId).then(
+          (cancelled) => {
+            if (cancelled) return;
+            // 宿主已经闲着，忙碌是残留。直接发，别等一个永远不来的 Done。
+            busyRef.current = false;
+            mutateQueued((q) => q.filter((x) => x.id !== id));
+            void send(item.text, item.images, item.refs);
+          },
+          // 停不下来：条目已经从宿主队列撤下、停在面板最前，等这一轮自然
+          // 结束后由 Done 的接力发出去。只是要让用户知道"立即"没生效。
+          (e) => setState((s) => ({ ...s, items: [...s.items, errorItem(e)] })),
+        );
       } else {
         mutateQueued((q) => q.filter((x) => x.id !== id));
         void send(item.text, item.images, item.refs);
       }
     },
-    [sessionId, mutateQueued, send],
+    [sessionId, mutateQueued, send, setState],
   );
 
   /**
@@ -1614,26 +1482,34 @@ export function useSession(
   );
 
   const stop = useCallback(() => {
-    void interruptSession(sessionId).then((cancelled) => {
-      if (cancelled) return;
-      // 宿主已经闲着。结束事件在换订阅时丢过，界面还转圈 ——
-      // 再点停止必须把残留忙碌清掉，否则停止键永远摘不下来。
-      waitStartAt.delete(sessionId);
-      busyRef.current = false;
-      setState((s) => ({
-        ...s,
-        busy: false,
-        compacting: false,
-        streaming: "",
-        thinking: "",
-        streamingPlan: null,
-        items: s.items.map((it) =>
-          it.kind === "tool" && it.status === "running"
-            ? { ...it, status: "error" as const, result: t("transcript.session.unfinished") }
-            : it,
-        ),
-      }));
-    });
+    void interruptSession(sessionId).then(
+      (cancelled) => {
+        if (cancelled) return;
+        // 宿主已经闲着。结束事件在换订阅时丢过，界面还转圈 ——
+        // 再点停止必须把残留忙碌清掉，否则停止键永远摘不下来。
+        waitStartAt.delete(sessionId);
+        busyRef.current = false;
+        // 限速放出的积压一并作废，否则它下一帧又把流式正文填回来。
+        pendingText.current = "";
+        pendingThinking.current = "";
+        setState((s) => ({
+          ...s,
+          busy: false,
+          compacting: false,
+          streaming: "",
+          thinking: "",
+          streamingPlan: null,
+          items: s.items.map((it) =>
+            it.kind === "tool" && it.status === "running"
+              ? { ...it, status: "error" as const, result: t("transcript.session.unfinished") }
+              : it,
+          ),
+        }));
+      },
+      // 停止没送到（IPC 断了、超时）：要说出来。默不作声的话，用户以为
+      // 停下了，模型其实还在跑、还在改文件。
+      (e) => setState((s) => ({ ...s, items: [...s.items, errorItem(e)] })),
+    );
   }, [sessionId, setState]);
 
   /** 输入框收下了撤回的那条提问。不清的话切走再回来它会被再放一次。 */
@@ -1671,7 +1547,19 @@ export function useSession(
         ...s,
         asks: s.asks.filter((a) => a.requestId !== ask.requestId),
       }));
-      await respondPermission(sessionId, ask.requestId, response);
+      try {
+        await respondPermission(sessionId, ask.requestId, response);
+      } catch (e) {
+        // 应答没送到，宿主那边还在等。弹窗必须放回去 —— 不然工具卡一直
+        // 转圈、界面上没有任何可点的东西，干等到宿主超时按拒绝收场。
+        // 期间宿主已经作废了它（permission_resolved）就不放。
+        console.warn("[session] permission reply failed; re-queueing", e);
+        setState((s) =>
+          s.asks.some((a) => a.requestId === ask.requestId)
+            ? s
+            : { ...s, asks: [ask, ...s.asks], items: [...s.items, errorItem(e)] },
+        );
+      }
     },
     [sessionId, state.asks, setState],
   );
@@ -1697,1096 +1585,3 @@ export function useSession(
 }
 
 /** 能做上下文修改的条目：用户气泡和助手文本气泡。 */
-export type TextItem = Extract<Item, { kind: "user" } | { kind: "assistant" }>;
-
-/**
- * 上下文修改（编辑/删除）成功后的对账：快照就是真相，整份重建。
- *
- * 不走 applyHistorySnap —— 那是"切回活会话"的对齐语义，带两个照顾：
- * 空历史时保留旧条目、把不在快照里的乐观气泡（`local-*`）拼回来。
- * 这两个照顾在"刚刚确定性地删掉/改掉了什么"的场景里恰好是反效果：
- * 删掉唯一一轮后界面纹丝不动（看起来像没删，再点一次就报"消息不在
- * 上下文里"），编辑乐观气泡后旧文本又被拼回来显示成两条。
- */
-function rebuildFromSnap(s: SessionState, hist: HistorySnap): SessionState {
-  const messages = hist.messages;
-  const archived = hist.archived;
-  return {
-    ...s,
-    busy: hist.busy,
-    compacting: hist.compacting,
-    items: [...historyToItems(messages, archived, false), ...lastErrorItem(hist)],
-    tokens: sumUsage([...archived, ...messages]),
-    streaming: "",
-    thinking: "",
-    streamingPlan: null,
-    asks: [],
-    checkpointIds: hist.checkpointIds ?? s.checkpointIds,
-    redoAvailable: hist.redoAvailable ?? s.redoAvailable,
-  };
-}
-
-/**
- * 界面条目 → 内核消息 id。
- *
- * 历史水合的条目 id 是 `msg_x-t3` / `msg_x-u1` / `msg_x-k2`，剥掉后缀就是
- * 消息 id；实时路径还有两种带不了消息 id 的形态 —— 乐观用户气泡
- * （`local-*`）和工具卡出现时就地落定的块（前缀是 tool_use id）——
- * 按角色 + 原文在快照里倒序找（同文出现多次时取最近那条）。
- */
-function locateMessage(messages: Message[], item: TextItem): string | null {
-  const bare = item.id.replace(/-[tuk]\d*$/, "");
-  if (messages.some((m) => m.id === bare)) return bare;
-  const role = item.kind === "user" ? "user" : "assistant";
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    if (!m || m.role !== role) continue;
-    if (m.content.some((c) => c.type === "text" && c.text === item.text)) return m.id;
-  }
-  return null;
-}
-
-/** 活历史 + 压缩前归档 → 界面条目。归档画在分割线上面。 */
-function historyToItems(live: Message[], archived: Message[], liveTurn = false): Item[] {
-  const past = messagesToItems(archived, true);
-  const now = messagesToItems(live, true);
-  const items: Item[] =
-    past.length === 0 ? now : [...past, { kind: "compact", id: "compact-boundary" }, ...now];
-  if (liveTurn) return items;
-  // 历史里不该有还在转圈的工具。有就是这一轮被中断了，如实说。
-  // 轮子还在跑时（liveTurn）不能标 —— 切到正在跑的会话会把活工具
-  // 画成「未完成」，下一秒事件又改回来，闪一下像出错了。
-  return finalizeIdleItems(items, t("transcript.session.unfinishedInterrupted"));
-}
-
-/**
- * 用宿主快照对齐界面。
- *
- * 空闲：整份替换并清掉忙碌残留（这就是下午回来还在「正在生成」的修复）。
- * 忙碌：条目追上已落盘的消息，但保留还没进历史的流式正文和工具输出。
- */
-function applyHistorySnap(s: SessionState, hist: HistorySnap): SessionState {
-  const messages = hist.messages;
-  const archived = hist.archived;
-  const busy = hist.busy;
-  const compacting = hist.compacting;
-  // 后台任务以快照为准：事件只在变化时推，切走期间的变化只有快照里有。
-  // 老宿主没这个字段时保留本地那份。
-  const tasks = hist.tasks ?? s.tasks;
-  const checkpointIds = hist.checkpointIds ?? s.checkpointIds;
-  const redoAvailable = hist.redoAvailable ?? s.redoAvailable;
-
-  if (messages.length === 0 && archived.length === 0) {
-    return {
-      ...s,
-      busy,
-      compacting,
-      tasks,
-      checkpointIds,
-      redoAvailable,
-      ...(!busy
-        ? {
-            streaming: "",
-            thinking: "",
-            streamingPlan: null,
-            // 空闲也按快照对账而不是清空：后台子 agent 的询问不属于任何
-            // 一轮，前台空闲时它可能正等着人答。快照为准。
-            asks: reconcileAsks(s.asks, hist.pendingAsks),
-            // 历史为空但上一轮失败了（第一句就没发出去）：红卡从快照来。
-            // 撤回事件丢了的那条第一句话也在这里收掉（见 phantomBubbles）。
-            ...(() => {
-              const kept = dropPhantoms(
-                s,
-                finalizeIdleItems(dropErrors(s.items), t("transcript.session.unfinished")),
-                phantomBubbles(s.items, []),
-                true,
-              );
-              return { ...kept, items: [...kept.items, ...lastErrorItem(hist)] };
-            })(),
-          }
-        : {
-            asks: reconcileAsks(s.asks, hist.pendingAsks),
-            streaming: mergeLive(
-              hist.liveText,
-              keepIfNotSettled(s.streaming, s.items, "assistant"),
-            ),
-            thinking: mergeLive(
-              hist.liveThinking,
-              keepIfNotSettled(s.thinking, s.items, "thinking"),
-            ),
-          }),
-    };
-  }
-
-  const fromHist = historyToItems(messages, archived, busy);
-  // 空闲时历史里没有、也不会再来的乐观气泡先摘出来（见 phantomBubbles），
-  // 别让下面的合并把它当成"还没进历史"保下来。
-  const phantoms = busy ? [] : phantomBubbles(s.items, fromHist);
-  const current = phantoms.length ? dropPhantoms(s, s.items, phantoms, false).items : s.items;
-  // 错误卡以快照为准：历史里没有它（失败不进历史），本地画着的那张要么
-  // 就是快照里这条，要么是宿主已经开了新一轮之后过时的旧卡。
-  const items = [
-    ...mergeLiveTools(mergeOptimisticUser(fromHist, current), current),
-    ...lastErrorItem(hist),
-  ];
-  const tokens = sumUsage([...archived, ...messages]);
-  if (busy) {
-    return {
-      ...s,
-      busy: true,
-      compacting,
-      items,
-      tokens,
-      tasks,
-      checkpointIds,
-      redoAvailable,
-      // 半截流以快照为准：内核收齐了每一条增量，本地这份在切走/通道
-      // 断开期间是缺头的。快照为空（老内核或刚好没在流）才退回本地。
-      streaming: mergeLive(
-        hist.liveText,
-        keepIfNotSettled(s.streaming, items, "assistant"),
-      ),
-      thinking: mergeLive(
-        hist.liveThinking,
-        keepIfNotSettled(s.thinking, items, "thinking"),
-      ),
-      asks: reconcileAsks(s.asks, hist.pendingAsks),
-    };
-  }
-  return {
-    ...s,
-    busy: false,
-    compacting,
-    items,
-    tokens,
-    tasks,
-    checkpointIds,
-    redoAvailable,
-    streaming: "",
-    thinking: "",
-    streamingPlan: null,
-    asks: reconcileAsks(s.asks, hist.pendingAsks),
-    withdrawn: dropPhantoms(s, items, phantoms, false).withdrawn,
-  };
-}
-
-/** 还没进历史的乐观气泡留下，已经在快照里的丢掉。 */
-function mergeOptimisticUser(fromHist: Item[], current: Item[]): Item[] {
-  const extras = current.filter((it) => {
-    if (it.kind !== "user" || !it.id.startsWith("local-")) return false;
-    return !fromHist.some((h) => h.kind === "user" && h.text === it.text);
-  });
-  return extras.length === 0 ? fromHist : [...fromHist, ...extras];
-}
-
-/**
- * 用快照里的挂起询问重建弹窗队列。
- *
- * `permission_request` 事件只发一次：切走再切回（组件重挂载）、睡眠唤醒
- * 后换通道，事件都已经发进没人听的旧出口，弹窗全靠快照重建。快照为准 ——
- * 不在快照里的已经被解决（超时/分类器），留着就是一个点了没反应的僵尸
- * 弹窗；已在队列里的保住原对象，正在看的弹窗不因为一次对账重建。快照
- * 之后新到的询问由事件流补上（permission_request 的处理按 request_id
- * 去重，晚到的重复无害）。
- */
-function reconcileAsks(
-  current: { requestId: string; detail: PermissionAsk }[],
-  snap: PendingAsk[],
-): { requestId: string; detail: PermissionAsk }[] {
-  return snap.map(
-    (p) =>
-      current.find((a) => a.requestId === p.request_id) ?? {
-        requestId: p.request_id,
-        detail: p.detail,
-      },
-  );
-}
-
-/**
- * 把内核快照里的半截流和本地/缓冲里的增量拼起来。
- *
- * 订阅之后到快照落地之间，同一段 delta 会同时出现在两边。哪边是前缀
- * 就取长的；有重叠就按后缀对齐再接上快照之后才到的那截。对不上就
- * 以快照为准再追加 —— 总比从 0 重数、缺一截头好。
- */
-function mergeLive(snap: string | undefined, extra: string): string {
-  const a = snap ?? "";
-  if (!extra) return a;
-  if (!a) return extra;
-  if (extra.startsWith(a)) return extra;
-  if (a.startsWith(extra)) return a;
-  const max = Math.min(a.length, extra.length);
-  for (let k = max; k >= 0; k--) {
-    if (a.endsWith(extra.slice(0, k))) return a + extra.slice(k);
-  }
-  return a + extra;
-}
-
-function isLiveDelta(event: AgentEvent): boolean {
-  return event.type === "delta" && (event.kind === "text" || event.kind === "thinking");
-}
-
-function liveDeltasOf(events: AgentEvent[]): { text: string; thinking: string } {
-  let text = "";
-  let thinking = "";
-  for (const e of events) {
-    if (e.type !== "delta") continue;
-    if (e.kind === "text") text += e.text;
-    else if (e.kind === "thinking") thinking += e.text;
-  }
-  return { text, thinking };
-}
-
-/** 历史没有进度行，把界面上还在跑的那张卡的输出接回去。 */
-function mergeLiveTools(fromHist: Item[], current: Item[]): Item[] {
-  return fromHist.map((it) => {
-    if (it.kind !== "tool" || it.status !== "running") return it;
-    const prev = current.find((c) => c.kind === "tool" && c.id === it.id);
-    if (!prev || prev.kind !== "tool") return it;
-    return {
-      ...it,
-      output: prev.output.length > 0 ? prev.output : it.output,
-      input: hasToolInput(it.input) ? it.input : prev.input,
-      ...(prev.resultImage ? { resultImage: prev.resultImage } : {}),
-      ...(prev.resultImagePath ? { resultImagePath: prev.resultImagePath } : {}),
-    };
-  });
-}
-
-function hasToolInput(input: unknown): boolean {
-  return !!input && typeof input === "object" && Object.keys(input as object).length > 0;
-}
-
-function keepIfNotSettled(
-  live: string,
-  items: Item[],
-  kind: "assistant" | "thinking",
-): string {
-  if (!live.trim()) return "";
-  if (items.some((it) => it.kind === kind && textsOverlap(it.text, live))) return "";
-  return live;
-}
-
-function textsOverlap(a: string, b: string): boolean {
-  return a === b || a.startsWith(b) || b.startsWith(a);
-}
-
-/** 界面条目 id（`msg_xxx-t` / `msg_xxx-t3`）→ 内核消息 id。 */
-function assistantMessageId(itemId: string): string {
-  return itemId.replace(/-t\d*$/, "");
-}
-
-/** 回退 / 前进有文件没写回去：在对话里留一条提示，点过的人要知道哪几个没成。 */
-function restoreFailNotice(
-  failed: { path: string; reason: string }[],
-): Item {
-  return {
-    kind: "notice",
-    id: `restore-fail-${Date.now()}`,
-    text: t("transcript.restore.partialFail", {
-      files: failed.map((f) => f.path).join(t("transcript.listSep")),
-    }),
-  };
-}
-
-/** 截到这条用户气泡（含）并换掉它的文字（以及可选的图），之后的一切丢掉。找不到就原样返回。 */
-function trimThroughEdited(
-  items: Item[],
-  userItemId: string,
-  text: string,
-  images?: ImageInput[],
-  sentAt?: number,
-): Item[] {
-  const idx = items.findIndex((it) => it.id === userItemId);
-  if (idx < 0) return items;
-  const kept = items.slice(0, idx + 1);
-  const target = kept[idx];
-  if (target?.kind === "user") {
-    const at = sentAt ?? target.at;
-    if (images === undefined) {
-      kept[idx] = { ...target, text, ...(at !== undefined ? { at } : {}) };
-    } else {
-      const { images: _was, ...rest } = target;
-      kept[idx] = {
-        ...rest,
-        text,
-        ...(at !== undefined ? { at } : {}),
-        ...(images.length
-          ? { images: images.map((img) => `data:${img.mediaType};base64,${img.data}`) }
-          : {}),
-      };
-    }
-  }
-  return kept;
-}
-
-/** 丢掉这条助手回复及之后的一切，保留到它前面那条用户气泡。 */
-function trimAfterUserPrompt(items: Item[], assistantItemId: string): Item[] {
-  const ast = items.findIndex((it) => it.id === assistantItemId);
-  if (ast < 0) return items;
-  for (let i = ast - 1; i >= 0; i--) {
-    if (items[i]?.kind === "user") return items.slice(0, i + 1);
-  }
-  return items.slice(0, ast);
-}
-
-function finalizeIdleItems(items: Item[], result: string): Item[] {
-  let hit = false;
-  const out = items.map((it) => {
-    if (it.kind !== "tool" || it.status !== "running") return it;
-    hit = true;
-    return { ...it, status: "error" as const, result: it.result ?? result };
-  });
-  return hit ? out : items;
-}
-
-/**
- * 消息上的时刻，摊成一段可展开的属性。
- *
- * 老 transcript 没有这个字段（也不该编一个出来），展开成空 —— 气泡上
- * 就没有时间，而不是标成"刚刚"。
- */
-function stampOf(meta: MessageMeta | null | undefined): { at?: number } {
-  const at = meta?.created_at_ms;
-  return at ? { at } : {};
-}
-
-/**
- * 按钮发的消息（「构建」/「并行构建」）→ 构建卡要的两个字段，摊成一段可
- * 展开的属性。计划标题取这条消息**之前**最近一份计划 —— 卡说的是"构建
- * 哪份"，同一会话第二次规划再构建时不能指到旧的那份。「转到后台」不是
- * 开轮消息，走不到这里；真走到了也按普通气泡画。
- */
-function buildOf(
-  nudge: Nudge | null | undefined,
-  itemsBefore: Item[],
-): { nudge?: Nudge; planName?: string } {
-  if (nudge !== "build_plan" && nudge !== "build_in_parallel") return {};
-  const planName = latestPlanName(itemsBefore);
-  return { nudge, ...(planName ? { planName } : {}) };
-}
-
-/** 条目里最近一次 CreatePlan 的标题；没有就是 undefined。 */
-function latestPlanName(items: Item[]): string | undefined {
-  for (let i = items.length - 1; i >= 0; i--) {
-    const it = items[i];
-    if (it?.kind !== "tool" || it.name !== PLAN_TOOL) continue;
-    const name = (it.input as { name?: unknown } | null)?.name;
-    return typeof name === "string" && name.trim() ? name.trim() : undefined;
-  }
-  return undefined;
-}
-
-/**
- * 消息 → 界面条目。导出给子 agent 会话视图复用：那边拿到的是同一种
- * `Message[]`，画法也该和主对话一样（工具卡、思考块、回答）。
- */
-export function messagesToItems(msgs: Message[], skipSynthetic = false): Item[] {
-  const items: Item[] = [];
-
-  for (const msg of msgs) {
-    if (msg.role === "user") {
-      // 后台子 agent 的完成通知：卡片，不是用户气泡。先于 synthetic 判定 ——
-      // 它也是合成的，但有自己的画法。
-      const notice = taskNoticeItem(msg);
-      if (notice) {
-        items.push(notice);
-        continue;
-      }
-      // 带文本的合成用户消息（压缩后的续接摘要）不是用户说的话。
-      // 分割线已经说明"上面被压缩了"，这里不再画一块提示把记录盖住。
-      // 只拦带文本的：中断时合成的"已取消"消息只有 tool_result，必须
-      // 走下面的正常流程去把工具卡片标成中断。
-      if (msg.meta?.synthetic && msg.content.some((c) => c.type === "text")) {
-        if (!skipSynthetic) {
-          items.push({ kind: "compact", id: `${msg.id}-synthetic` });
-        }
-        continue;
-      }
-      // 历史里用户附的图。不回显的话，切回会话后"自己发过哪张图"就再也
-      // 看不到了。挂在同一条消息的第一个文本气泡上 —— user_content 保证
-      // 每条用户消息都有文本。
-      //
-      // 两种附件都是图：`image` 是模型自己能看图时存的原图，
-      // `described_image` 是走视觉兼容时存的（模型读里面的转述，图给界面）。
-      // 只认前者的话，纯文本模型下的图片全都不显示。
-      const images = msg.content.flatMap((c) =>
-        c.type === "attachment" && (c.kind === "image" || c.kind === "described_image")
-          ? [`data:${c.media_type};base64,${c.data}`]
-          : [],
-      );
-      // `@` 引用过的文件。内容进了模型，界面只列路径 —— 把整份文件
-      // 铺在气泡里，一次引用就能把对话流淹掉。
-      const files = msg.content.flatMap((c) =>
-        c.type === "attachment" && c.kind === "user_file" ? [c.path] : [],
-      );
-      let imagesShown = false;
-      for (const c of msg.content) {
-        if (c.type === "text") {
-          items.push({
-            kind: "user",
-            id: `${msg.id}-u${items.length}`,
-            text: c.text,
-            ...(images.length && !imagesShown ? { images } : {}),
-            ...(files.length && !imagesShown ? { files } : {}),
-            ...stampOf(msg.meta),
-            ...buildOf(msg.meta?.nudge, items),
-          });
-          imagesShown = true;
-        } else if (c.type === "tool_result") {
-          const i = findLast(items, (it) => it.kind === "tool" && it.id === c.tool_use_id);
-          if (i >= 0) {
-            const card = items[i] as Extract<Item, { kind: "tool" }>;
-            const view = resultView(c.content);
-            items[i] = {
-              ...card,
-              status: c.is_error ? "error" : "ok",
-              ...(view.text !== undefined ? { result: view.text } : {}),
-              ...(view.image !== undefined ? { resultImage: view.image } : {}),
-              ...(view.imagePath !== undefined ? { resultImagePath: view.imagePath } : {}),
-            };
-          }
-        }
-      }
-    } else if (msg.role === "assistant") {
-      for (const c of msg.content) {
-        if (c.type === "text" && c.text.trim()) {
-          items.push({
-            kind: "assistant",
-            id: `${msg.id}-t${items.length}`,
-            text: c.text,
-            ...(msg.meta?.interrupted ? { stopped: true as const } : {}),
-            ...stampOf(msg.meta),
-          });
-        } else if (c.type === "thinking" && c.text.trim()) {
-          items.push({
-            kind: "thinking",
-            id: `${msg.id}-k${items.length}`,
-            text: c.text,
-            ...(c.duration_ms ? { durationMs: c.duration_ms } : {}),
-          });
-        } else if (c.type === "tool_use") {
-          items.push({
-            kind: "tool",
-            id: c.id,
-            name: c.name,
-            input: c.input,
-            status: "running",
-            output: [],
-          });
-        }
-      }
-    } else {
-      const it = systemItem(msg);
-      if (it) items.push(it);
-    }
-  }
-
-  return items;
-}
-
-/**
- * 历史里的 System 消息 → 界面条目。
- *
- * error 级的不画：失败现在是会话状态（快照的 `lastError`），不再写进历史；
- * 老 transcript 里残留的那些描述的都是早已过去的某次尝试，画出来只是
- * 一排永远消不掉的红卡。其余级别（Stop hook 拦住收尾之类）记录的是轮内
- * 真实发生的干预，画成中性提示 —— 它不是出错。带词典键的按当前语言翻，
- * 老记录只有原话就用原话。
- */
-function systemItem(msg: Extract<Message, { role: "system" }>): Item | null {
-  if (msg.level === "error") return null;
-  const text = msg.ui ? renderUiText({ key: msg.ui.key, args: msg.ui.args ?? {} }) : msg.text;
-  return { kind: "notice", id: msg.id, text };
-}
-
-/** 错误卡是会话状态：新一轮一开，上一轮的失败就过时了，整批收掉。 */
-function dropErrors(items: Item[]): Item[] {
-  return items.some((it) => it.kind === "error") ? items.filter((it) => it.kind !== "error") : items;
-}
-
-/** 快照里带着的"最近一轮失败"→ 画在末尾的那张错误卡。 */
-function lastErrorItem(hist: HistorySnap): Item[] {
-  if (!hist.lastError || hist.busy) return [];
-  return [{ kind: "error", id: "last-error", ...describeError(hist.lastError) }];
-}
-
-/**
- * 把流式到达的工具参数填进对应卡片。
- *
- * 参数还没齐，能显示多少显示多少 —— Write 的正文就是这样一行行长出来的。
- * 解析只认顶层字符串字段，数字和布尔参数要等完整的 tool_use 才补上。
- */
-function fillToolInput(items: Item[], partial: Map<string, Record<string, string>>): Item[] {
-  let hit = false;
-  const out = items.map((it) => {
-    if (it.kind !== "tool") return it;
-    const fields = partial.get(it.id);
-    if (!fields) return it;
-    hit = true;
-    return { ...it, input: fields };
-  });
-  return hit ? out : items;
-}
-
-/**
- * 去掉工具卡片出现时已经就地落定的那些块。
- *
- * 完整消息会把同一段话再给一遍，不去掉的话界面上出现两次。按内容配对
- * 而不是按位置 —— 一条消息里可能有好几个文本块，只有落定过的那些要走。
- */
-function dropSettled(
-  event: Extract<AgentEvent, { type: "message" }>,
-  settled: { text: string[]; thinking: string[] },
-): Extract<AgentEvent, { type: "message" }> {
-  if (event.role !== "assistant") return event;
-  if (settled.text.length === 0 && settled.thinking.length === 0) return event;
-  const content = event.content.filter((c) => {
-    if (c.type !== "text" && c.type !== "thinking") return true;
-    const pool = c.type === "text" ? settled.text : settled.thinking;
-    const at = pool.indexOf(c.text);
-    if (at < 0) return true;
-    pool.splice(at, 1);
-    return false;
-  });
-  return { ...event, content };
-}
-
-/**
- * 后台子 agent 的完成通知 → 卡片。
- *
- * 正文在 SystemReminder 附件里（模型读的那份）；这里原样拿来给人看。
- * 不是通知的消息返回 null。
- */
-function taskNoticeItem(msg: Extract<Message, { role: "user" }>): Item | null {
-  const notice = msg.meta?.task_notice;
-  if (!notice) return null;
-  const text = msg.content
-    .flatMap((c) => (c.type === "attachment" && c.kind === "system_reminder" ? [c.text] : []))
-    .join("\n");
-  return {
-    kind: "task_notice",
-    id: msg.id,
-    agentId: notice.agent_id,
-    title: notice.title,
-    status: notice.status,
-    text: stripNoticePreamble(text),
-    ...stampOf(msg.meta),
-  };
-}
-
-/**
- * 通知正文里前奏和汇报本体之间的分隔符。与内核 `tasks.rs` 拼通知时写的
- * 那一行对齐 —— 它是协议标记，不是界面文案，不进词典。
- */
-const NOTICE_REPORT_MARK = /--- 汇报 ---/;
-
-/**
- * 通知正文前面是给模型的行为说明（"不要复述……"），对人没有信息量；
- * 卡片只显示分隔符之后的部分。找不到分隔符就全显示。
- */
-function stripNoticePreamble(text: string): string {
-  const m = NOTICE_REPORT_MARK.exec(text);
-  return m ? text.slice(m.index + m[0].length).trim() : text;
-}
-
-/** 提问落盘时内核会拍切片。事件到了先记上，不等下次拉历史。 */
-function rememberCheckpoint(ids: string[], messageId: string): string[] {
-  return ids.includes(messageId) ? ids : [...ids, messageId];
-}
-
-/** 按 id 覆盖；没有就追加到末尾。 */
-function upsertTask(tasks: BackgroundTaskView[], task: BackgroundTaskView): BackgroundTaskView[] {
-  const at = tasks.findIndex((t) => t.id === task.id);
-  if (at < 0) return [...tasks, task];
-  const out = [...tasks];
-  out[at] = task;
-  return out;
-}
-
-function applyMessage(s: SessionState, event: Extract<AgentEvent, { type: "message" }>): SessionState {
-  const items = [...s.items];
-  const msg = event;
-
-  if (msg.role === "user") {
-    const notice = taskNoticeItem(msg);
-    if (notice) {
-      items.push(notice);
-      return { ...s, items };
-    }
-    // 合成续接摘要：分割线已经说明"上面被压缩了"，不画成用户气泡。
-    if (msg.meta?.synthetic && msg.content.some((c) => c.type === "text")) {
-      return { ...s, items };
-    }
-    let sawPrompt = false;
-    for (const c of msg.content) {
-      if (c.type === "tool_result") {
-        // 找到对应的工具卡片填结果。倒着找 —— 同一个工具在一次会话里
-        // 会被调用很多次，最近那次才是它。
-        const i = findLast(items, (it) => it.kind === "tool" && it.id === c.tool_use_id);
-        if (i >= 0) {
-          const card = items[i] as Extract<Item, { kind: "tool" }>;
-          const view = resultView(c.content);
-          items[i] = {
-            ...card,
-            status: c.is_error ? "error" : "ok",
-            ...(view.text !== undefined ? { result: view.text } : {}),
-            ...(view.image !== undefined ? { resultImage: view.image } : {}),
-            ...(view.imagePath !== undefined ? { resultImagePath: view.imagePath } : {}),
-          };
-        }
-      } else if (c.type === "text") {
-        // 用户正文。发送端已经乐观插过一条 `local-*`；其它观看者（网页版）
-        // 没有那条，必须靠事件流补上 —— 以前这里整支跳过，另一端就只看
-        // 得见助手回复。
-        if (items.some((it) => it.kind === "user" && it.id === msg.id)) {
-          continue;
-        }
-        const images = msg.content.flatMap((x) =>
-          x.type === "attachment" && (x.kind === "image" || x.kind === "described_image")
-            ? [`data:${x.media_type};base64,${x.data}`]
-            : [],
-        );
-        const files = msg.content.flatMap((x) =>
-          x.type === "attachment" && x.kind === "user_file" ? [x.path] : [],
-        );
-        // 乐观气泡：正文相同的 `local-*` 换成正式 id，避免同一句话两张卡。
-        const localAt = items.findIndex(
-          (it) => it.kind === "user" && it.id.startsWith("local-") && it.text === c.text,
-        );
-        const bubble: Extract<Item, { kind: "user" }> = {
-          kind: "user",
-          id: msg.id,
-          text: c.text,
-          ...(images.length ? { images } : {}),
-          ...(files.length ? { files } : {}),
-          ...stampOf(msg.meta),
-          // 构建卡的计划标题按这条消息之前的条目找：乐观气泡已经占了位的
-          // 话，它自己不能算"之前"。
-          ...buildOf(msg.meta?.nudge, localAt >= 0 ? items.slice(0, localAt) : items),
-        };
-        if (localAt >= 0) {
-          items[localAt] = bubble;
-        } else {
-          items.push(bubble);
-        }
-        sawPrompt = true;
-      }
-    }
-    return sawPrompt
-      ? { ...s, items, checkpointIds: rememberCheckpoint(s.checkpointIds, msg.id) }
-      : { ...s, items };
-  }
-
-  if (msg.role === "assistant") {
-    const stopped = msg.meta?.interrupted ? { stopped: true as const } : {};
-    const at = stampOf(msg.meta);
-    for (const c of msg.content) {
-      if (c.type === "text" && c.text.trim()) {
-        items.push({ kind: "assistant", id: `${msg.id}-t`, text: c.text, ...stopped, ...at });
-      } else if (c.type === "thinking" && c.text.trim()) {
-        items.push({
-          kind: "thinking",
-          id: `${msg.id}-k`,
-          text: c.text,
-          ...(c.duration_ms ? { durationMs: c.duration_ms } : {}),
-        });
-      } else if (c.type === "tool_use") {
-        // 卡片多半已经在了（tool_start 时就插好、参数边流边填）。这里补
-        // 上完整参数 —— 再 push 一张的话，一次调用会显示成两张卡。
-        const at = items.findIndex((it) => it.kind === "tool" && it.id === c.id);
-        const card = {
-          kind: "tool" as const,
-          id: c.id,
-          name: c.name,
-          input: c.input,
-          status: "running" as const,
-          output: [] as string[],
-        };
-        if (at >= 0) {
-          const prev = items[at] as Extract<Item, { kind: "tool" }>;
-          items[at] = { ...card, status: prev.status, output: prev.output };
-        } else {
-          items.push(card);
-        }
-      }
-    }
-    // 流式文本已经落成正式消息，清掉临时区，否则同一段会显示两遍
-    const u = msg.usage;
-    const tokens = u
-      ? {
-          input: s.tokens.input + u.input_tokens + u.cache_read_tokens + u.cache_creation_tokens,
-          output: s.tokens.output + u.output_tokens,
-          context: contextOf(u),
-        }
-      : s.tokens;
-    return { ...s, items, streaming: "", thinking: "", tokens };
-  }
-
-  if (msg.role === "system") {
-    const it = systemItem(msg);
-    if (it) items.push(it);
-  }
-  return { ...s, items };
-}
-
-/**
- * 把一帧里攒下的进度行追加到各自的工具卡片。
- *
- * 按工具分组后每张卡只重建一次：同一个 build 一帧内来几十行是常态，
- * 逐行复制 items 数组等于把开销乘上行数。找不到卡片的行直接丢 ——
- * 那是 tool_start 还没到（或已经被历史覆盖）的进度，没有归宿。
- */
-function appendToolOutput(items: Item[], lines: { id: string; text: string }[]): Item[] {
-  const byTool = new Map<string, string[]>();
-  for (const { id, text } of lines) {
-    const bucket = byTool.get(id);
-    if (bucket) bucket.push(text);
-    else byTool.set(id, [text]);
-  }
-
-  let out = items;
-  for (const [id, texts] of byTool) {
-    const i = findLast(out, (it) => it.kind === "tool" && it.id === id);
-    if (i < 0) continue;
-    // 第一次命中才复制，全都没命中时保持引用不变（memo 才挡得住）。
-    if (out === items) out = [...items];
-    const card = out[i] as Extract<Item, { kind: "tool" }>;
-    // 只留尾部。一个 build 能吐几万行，全留着会让页面卡死，而有用的
-    // 信息（错误摘要）总是在最后。
-    out[i] = { ...card, output: [...card.output, ...texts].slice(-MAX_TOOL_LINES) };
-  }
-  return out;
-}
-
-function applyDone(s: SessionState, event: Extract<AgentEvent, { type: "done" }>): SessionState {
-  const items = [...s.items];
-
-  // 收尾时把还挂着 running 的工具卡片改掉。否则界面上会永远转圈，
-  // 而后台其实什么都没在跑了。
-  for (let i = 0; i < items.length; i++) {
-    const it = items[i];
-    if (it && it.kind === "tool" && it.status === "running") {
-      items[i] = { ...it, status: "error", result: t("transcript.session.unfinished") };
-    }
-  }
-
-  const r = event.reason;
-  if (r.reason === "error") {
-    // 失败只在 Done 里报一次（内核不再往历史写 System 消息），这里是它
-    // 唯一的画法。宿主同时把它记成会话状态，切走再切回靠快照画回来。
-    items.push({ kind: "error", id: `done-${Date.now()}`, ...describeError(r.error) });
-  } else if (r.reason === "max_turns") {
-    // 不是报错:模型这一轮自主跑满了步数上限，停下来等指示。用中性
-    // 提示，别用红色 error 样式吓人。文案说清"没坏、接着说就行"。
-    items.push({
-      kind: "notice",
-      id: `done-${Date.now()}`,
-      text: t("transcript.session.maxTurns", { limit: r.limit }),
-    });
-  }
-
-  // 这一轮结束了，还排着队的权限请求已经没有意义 —— 它们对应的工具
-  // 调用要么被中断要么已超时。留着的话，用户下一轮开口前会先被一个
-  // 属于上一轮的弹窗拦住。
-  //
-  // 例外：有后台子 agent 在跑。它们的权限询问不属于任何一轮，前台轮结束
-  // 时还等着人答。这时只能信内核 —— 作废的询问内核会发 permission_resolved
-  // （中断、超时都发），这里不再一把清空。
-  const backgroundRunning = s.tasks.some((t) => t.background && t.status === "running");
-  return {
-    ...s,
-    items,
-    busy: false,
-    compacting: false,
-    streaming: "",
-    thinking: "",
-    streamingPlan: null,
-    asks: backgroundRunning ? s.asks : [],
-  };
-}
-
-/**
- * 撤掉最后那条用户气泡，把内容交给输入框。
- *
- * 按位置找而不是按 id：气泡通常还是发送时的乐观条目（`local-*`），内核
- * 的消息 id 从没到过界面这一侧。撤回只发生在"这一轮什么都没产出"的时候，
- * 所以往回数第一条用户消息必然就是它 —— 但它不一定是**最后一条条目**：
- * 主动压缩的分割线会排在它后面。
- */
-function applyWithdrawn(s: SessionState, id: string, sessionEmpty: boolean): SessionState {
-  let at = -1;
-  for (let i = s.items.length - 1; i >= 0; i--) {
-    if (s.items[i]?.kind === "user") {
-      at = i;
-      break;
-    }
-  }
-  const bubble = at < 0 ? undefined : s.items[at];
-  // 没有气泡可撤（历史刚被别的路径重建过）：内核那边已经删了，界面
-  // 保持现状就行，下一次快照会对齐。
-  if (!bubble || bubble.kind !== "user") return s;
-
-  const items = [...s.items];
-  items.splice(at, 1);
-  return { ...s, items, withdrawn: withdrawnOf(bubble, id, sessionEmpty) };
-}
-
-type UserItem = Extract<Item, { kind: "user" }>;
-
-/** 把一条用户气泡交还输入框的那份内容。 */
-function withdrawnOf(bubble: UserItem, id: string, sessionEmpty: boolean): WithdrawnPrompt {
-  return {
-    id,
-    text: bubble.text,
-    images: (bubble.images ?? []).flatMap((u) => {
-      const img = imageFromDataUrl(u);
-      return img ? [img] : [];
-    }),
-    refs: bubble.files ?? [],
-    sessionEmpty,
-  };
-}
-
-/**
- * 乐观气泡发出去超过这么久、宿主空闲、历史里却没有它 —— 它不会再来了。
- * 和看门狗的发送宽限同一个数：宽限之内的快照可能拍在内核收到之前。
- */
-const PHANTOM_AFTER_MS = SEND_GRACE_MS;
-
-/**
- * 宿主空闲时历史里没有、也不会再有的那条提问气泡。
- *
- * 来路是丢了 `prompt_withdrawn`：按了停止、模型一个字没给出，内核把提问
- * 撤了，可撤回事件落进了一条正在换的 / 已经死掉的通道（长时间空闲后
- * 第一句话最容易撞上）。气泡留在界面上，对它删除、编辑、回退都报
- * "不在上下文里"。气泡此时多半已经换成了内核的 id（轮首回声），还是
- * 乐观的 `local-*` 则另有一层：快照对账会按"还没进历史"把它保下来。
- *
- * 只认**最后一条**提问、且它后面没有任何回答：撤回只会发生在那里。
- * 放宽了的话，另一个观看者删掉的一轮会被这里当成撤回，把原文塞进
- * 这边的输入框。乐观气泡还在发送宽限内的不算 —— 快照可能拍在内核
- * 收到它之前。
- */
-function phantomBubbles(items: Item[], fromHist: Item[], now = Date.now()): UserItem[] {
-  let at = -1;
-  for (let i = items.length - 1; i >= 0; i--) {
-    const k = items[i]?.kind;
-    if (k === "user") {
-      at = i;
-      break;
-    }
-    if (k === "assistant" || k === "thinking" || k === "tool") return [];
-  }
-  const it = items[at];
-  if (!it || it.kind !== "user") return [];
-  if (it.id.startsWith("local-") && now - (it.at ?? 0) < PHANTOM_AFTER_MS) return [];
-  if (fromHist.some((h) => h.kind === "user" && (h.id === it.id || h.text === it.text))) return [];
-  return [it];
-}
-
-/**
- * 撤掉幽灵气泡，并像撤回那样把最后一条交还输入框 —— 撤回事件本该做的
- * 事。输入框已经有一份待收的撤回时不覆盖。
- */
-function dropPhantoms(
-  s: SessionState,
-  items: Item[],
-  phantoms: UserItem[],
-  sessionEmpty: boolean,
-): Pick<SessionState, "items" | "withdrawn"> {
-  const last = phantoms[phantoms.length - 1];
-  if (!last) return { items, withdrawn: s.withdrawn };
-  const gone = new Set(phantoms.map((p) => p.id));
-  return {
-    items: items.filter((it) => !gone.has(it.id)),
-    withdrawn: s.withdrawn ?? withdrawnOf(last, last.id, sessionEmpty),
-  };
-}
-
-/** `data:image/png;base64,……` → 重新发送时要的图片输入。认不出就丢掉。 */
-function imageFromDataUrl(url: string): ImageInput | null {
-  const m = /^data:([^;,]+);base64,([\s\S]*)$/.exec(url);
-  return m?.[1] && m[2] ? { mediaType: m[1], data: m[2] } : null;
-}
-
-/**
- * 撤掉一个已经作废的权限请求。
- *
- * 超时会额外留一行。不说的话用户只会以为程序卡了 —— 而这一步确实
- * 没执行，后面的结果都建立在"少做了一件事"之上。
- */
-function applyResolved(s: SessionState, requestId: string, reason: DecisionReason): SessionState {
-  if (!s.asks.some((a) => a.requestId === requestId)) return s;
-  const asks = s.asks.filter((a) => a.requestId !== requestId);
-  if (reason.kind !== "timeout") return { ...s, asks };
-  return {
-    ...s,
-    asks,
-    items: [
-      ...s.items,
-      {
-        kind: "error",
-        id: `ask-timeout-${requestId}`,
-        text: t("transcript.session.askTimeout"),
-      },
-    ],
-  };
-}
-
-/**
- * 发送失败时摆在对话流里的那一行。
- *
- * 宿主超时要和"宿主拒绝"分开说。拒绝是确定的：这条没进队列，原文回到
- * 输入框，重发就行。超时的结果**不确定** —— 命令可能已经落地、轮子已经
- * 在跑，只是回执没回来。这时催用户重发，就是在制造两条一模一样的消息。
- */
-function sendFailureItem(e: unknown): Item {
-  if (isIpcTimeout(e)) {
-    return { kind: "error", id: `err-${Date.now()}`, text: t("transcript.session.sendTimeout") };
-  }
-  return errorItem(e);
-}
-
-/** 错误卡的两段（见 `Item` 的 error 变体）。没有细节就不带这个键。 */
-type ErrorParts = { text: string; detail?: string };
-
-function parts(text: string, detail?: string | null): ErrorParts {
-  const d = detail?.trim();
-  return d ? { text, detail: d } : { text };
-}
-
-/** catch 到的任何东西 → 一张错误卡。 */
-function errorItem(e: unknown): Item {
-  return { kind: "error", id: `err-${Date.now()}`, ...humanizeError(e) };
-}
-
-/**
- * 技术错误链 → 人话的匹配表。存的是词典键，匹配到时再查 —— 存译文的话
- * 会钉死在模块加载那一刻的语言上。
- */
-const KNOWN_ERRORS: [RegExp, MessageKey][] = [
-  [/timed?\s*out|timeout/, "transcript.session.humanize.timeout"],
-  [/dns|name not resolved|nodename/, "transcript.session.humanize.dns"],
-  [/connection refused|connect error|network|fetch failed/, "transcript.session.humanize.network"],
-  [/401|unauthorized|invalid.*key|authentication/, "transcript.session.humanize.auth"],
-  [/429|rate.?limit|overloaded/, "transcript.session.humanize.rateLimit"],
-  // 额度类只认带额度语境的措辞。裸的 "insufficient" 会误伤 ——
-  // DeepSeek 的 tool_calls 校验报错里就有 "insufficient tool messages"，
-  // 真实余额没问题的用户被这句话带去查账单（生产事故）。
-  // 覆盖的真实文案：DeepSeek "Insufficient Balance"、OpenAI
-  // "insufficient_quota" / "You exceeded your current quota"、
-  // Anthropic "credit balance is too low"、Kimi "balance is insufficient"。
-  [
-    /insufficient[_\s]+(quota|balance|funds|credits)|(credit\s+)?balance\s+is\s+(too\s+low|insufficient)|exceeded.{0,40}quota|quota.{0,40}exceeded|out\s+of\s+(quota|credits)|余额不足|欠费/,
-    "transcript.session.humanize.quota",
-  ],
-];
-
-/**
- * 把一串技术错误链翻成一句人话，原文放进折叠的细节 —— 报 bug 时用得上，
- * 平时不该占地方。识别不了的原样当正文 —— 编出来的解释比看不懂的原文更糟。
- */
-function humanizeError(e: unknown): ErrorParts {
-  // 宿主超时要抢在下面那条 timeout 规则前面：那句话说的是"网络或服务方
-  // 没按时响应"，而这一类根本没走到网络 —— 是宿主自己没回话。
-  if (isIpcTimeout(e)) return parts(t("transcript.session.humanize.ipcTimeout", { message: e.message }));
-  // 宿主的结构化错误自带译文和细节，不用再从拼好的字符串里猜。
-  if (isHostError(e)) return fromSplit(splitUiError(e));
-  const raw = String(e);
-  const lower = raw.toLowerCase();
-  for (const [re, key] of KNOWN_ERRORS) {
-    if (re.test(lower)) return parts(t(key), raw.length > 200 ? `${raw.slice(0, 200)}…` : raw);
-  }
-  return parts(raw);
-}
-
-function fromSplit(s: SplitError): ErrorParts {
-  return parts(s.text, s.detail);
-}
-
-function describeError(e: AgentError): ErrorParts {
-  switch (e.kind) {
-    case "provider":
-      // 内核已按原因（认证、限流、额度、连不上）选好键，HTTP 原文在 detail 里。
-      return fromSplit(splitUiError(e.error));
-    case "context_exhausted":
-      return parts(t("transcript.session.err.contextExhausted", { used: e.used, limit: e.limit }));
-    case "compact_circuit_open":
-      return parts(tn("transcript.session.err.compactCircuit", e.attempts));
-    case "internal": {
-      const inner = splitUiError(e.error);
-      return parts(t("transcript.session.err.internal", { message: inner.text }), inner.detail);
-    }
-    default:
-      return parts(t("transcript.session.err.unknown"));
-  }
-}
-
-/**
- * 工具结果 → 界面上显示什么。
- *
- * 图片类结果（截图、读图）显示图片本身。described_image 的 text 是写给
- * 模型的转述（带着"当作亲眼所见"之类的内部指示），**不能**摆到界面上 ——
- * 用户该看到的是那张图。marked_image 的 text 则是和图同属一个结果的
- * 正文（编号清单、MCP 结果的文本部分），图文都给用户看。
- *
- * `image` 是消息里的压缩图（data URL），`imagePath` 是落盘原图的路径。
- * 两个都给：压缩图立刻能显示，原图由组件按路径异步加载后替换。
- */
-function resultView(c: ToolResultContent): { text?: string; image?: string; imagePath?: string } {
-  switch (c.type) {
-    case "text":
-      return { text: c.text };
-    case "spilled": {
-      const head = t("transcript.session.result.spilled", { bytes: c.total_bytes, path: c.path });
-      return { text: `${head}\n\n${c.preview}` };
-    }
-    case "cleared":
-      return { text: t("transcript.session.result.cleared") };
-    case "marked_image":
-      return {
-        text: c.text,
-        image: `data:${c.media_type};base64,${c.data}`,
-        ...(c.path ? { imagePath: c.path } : {}),
-      };
-    case "image":
-    case "described_image":
-      return {
-        image: `data:${c.media_type};base64,${c.data}`,
-        ...(c.path ? { imagePath: c.path } : {}),
-      };
-    default:
-      return {};
-  }
-}
-
-function findLast<T>(arr: T[], pred: (x: T) => boolean): number {
-  for (let i = arr.length - 1; i >= 0; i--) {
-    const v = arr[i];
-    if (v !== undefined && pred(v)) return i;
-  }
-  return -1;
-}
-
-/** 重建历史时恢复用量，和实时路径的口径一致。 */
-function sumUsage(msgs: Message[]): { input: number; output: number; context: number } {
-  let input = 0;
-  let output = 0;
-  // 每遇到一条就整个覆盖，循环结束后剩的就是最后一条 —— 那一次请求发出去
-  // 的量就是此刻上下文的真实大小（服务方报的数，不是估的）。
-  let context = 0;
-  for (const m of msgs) {
-    if (m.role === "assistant" && m.usage) {
-      input += m.usage.input_tokens + m.usage.cache_read_tokens + m.usage.cache_creation_tokens;
-      output += m.usage.output_tokens;
-      context = contextOf(m.usage);
-    }
-  }
-  return { input, output, context };
-}
-
-/** 一次请求占了多少上下文：发进去的（含命中缓存的）加上吐出来的。 */
-function contextOf(u: Usage): number {
-  return u.input_tokens + u.cache_read_tokens + u.cache_creation_tokens + u.output_tokens;
-}
