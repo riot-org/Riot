@@ -338,7 +338,9 @@ pub enum RpcNotification {
     #[serde(rename = "event.agent")]
     Agent {
         session_id: SessionId,
-        event: AgentEvent,
+        // 装箱：AgentEvent 比另一个变体大一个数量级（clippy large_enum_variant）。
+        // 序列化形状不变。
+        event: Box<AgentEvent>,
     },
     /// 内核级错误。fatal 时宿主应重启内核。
     #[serde(rename = "event.kernel_error")]

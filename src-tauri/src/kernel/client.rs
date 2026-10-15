@@ -348,6 +348,7 @@ fn spawn_dispatch(
                     }
                     match serde_json::from_value::<RpcNotification>(v) {
                         Ok(RpcNotification::Agent { session_id, event }) => {
+                            let event = *event;
                             let sid = session_id.as_str().to_owned();
                             // 宿主关心的那几件先拷贝一份出去(见 HostNotice)。
                             match &event {

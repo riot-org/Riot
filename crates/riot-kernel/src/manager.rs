@@ -49,7 +49,7 @@ impl EventSink for RpcEventSink {
     fn send(&self, event: AgentEvent) -> Result<(), SinkClosed> {
         let note = RpcNotification::Agent {
             session_id: self.session_id.clone(),
-            event,
+            event: Box::new(event),
         };
         let line = serde_json::to_string(&note).map_err(|_| SinkClosed)?;
         self.out.send(line).map_err(|_| SinkClosed)
