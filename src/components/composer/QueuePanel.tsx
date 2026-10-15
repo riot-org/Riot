@@ -33,14 +33,14 @@ export function QueuePanel({
         ? queued.map((q) => (
             <div className="queue-row" key={q.id}>
               <span className="queue-ring" aria-hidden />
-              <span className="queue-text" title={q.text}>
+              <span className="queue-text">
                 {q.text || t("composer.queue.imageOnly")}
               </span>
               {q.images.length > 0 ? (
                 <span className="queue-imgs">{tn("composer.queue.images", q.images.length)}</span>
               ) : null}
               {q.refs.length > 0 ? (
-                <span className="queue-imgs" title={q.refs.join("\n")}>
+                <span className="queue-imgs">
                   {tn("common.files", q.refs.length)}
                 </span>
               ) : null}

@@ -184,7 +184,7 @@ const TaskCard = memo(function TaskCard({ tool }: { tool: Tool }) {
         </span>
         {agentId ? <span className="task-card-go" aria-hidden>›</span> : null}
       </button>
-      <div className="task-card-activity" title={activity}>
+      <div className="task-card-activity">
         {activity}
       </div>
       {children.length > 0 ? (
@@ -240,7 +240,7 @@ function ChildTaskRow({
           ›
         </span>
       </button>
-      <div className="task-card-activity" title={activity}>
+      <div className="task-card-activity">
         {activity}
       </div>
       {grandchildren.length > 0 && depth < 3 ? (
@@ -345,7 +345,7 @@ const PlainToolCard = memo(function PlainToolCard({
       <span className="tool-name">{tool.name}</span>
       {/* 失败不能只靠 12px 图标变红 —— 扫视时根本发现不了 */}
       {tool.status === "error" ? <span className="tool-fail">{t("common.failed")}</span> : null}
-      <span className="tool-summary" title={filePathOf(tool) || bashCommandOf(tool) || summary}>
+      <span className="tool-summary">
         {summary}
       </span>
       {stat ? (
@@ -624,13 +624,6 @@ function filePathOf(tool: Tool): string {
   if (!FILE_TOOLS.has(tool.name)) return "";
   const i = tool.input as Record<string, unknown>;
   const v = i?.path ?? i?.file_path;
-  return typeof v === "string" ? v : "";
-}
-
-/** Bash 的完整命令。摘要行放的是描述，命令留给悬停提示。 */
-function bashCommandOf(tool: Tool): string {
-  if (tool.name !== "Bash") return "";
-  const v = (tool.input as Record<string, unknown>)?.command;
   return typeof v === "string" ? v : "";
 }
 

@@ -369,7 +369,7 @@ export function Chat({
             <RiotMark />
           </span>
           <h1 className="hero-title">{t("app.hero.title")}</h1>
-          <p className="hero-ws" title={workspace}>
+          <p className="hero-ws">
             {workspaceMissing ? (
               <button
                 type="button"

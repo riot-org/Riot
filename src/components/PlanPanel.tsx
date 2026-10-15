@@ -100,7 +100,7 @@ export function PlanPanel({
           <PlanModeIcon />
         </span>
         <div className="plan-panel-head-main">
-          <div className="plan-panel-title" title={title}>
+          <div className="plan-panel-title">
             {title}
           </div>
           <div className="plan-panel-meta">

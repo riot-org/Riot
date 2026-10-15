@@ -148,7 +148,7 @@ function SubagentHeader({
         {running ? "◐" : task.status === "completed" ? "✓" : "✕"}
       </span>
       <div className="subagent-head-main">
-        <div className="subagent-head-title" title={task.title}>
+        <div className="subagent-head-title">
           {task.title}
         </div>
         <div className="subagent-head-meta">
@@ -161,7 +161,7 @@ function SubagentHeader({
           <span>{statusLabel(task.status)}</span>
           {task.tool_uses > 0 ? <span>· {tn("transcript.steps", task.tool_uses)}</span> : null}
           {task.tokens > 0 ? <span>· {fmtK(task.tokens)} tokens</span> : null}
-          <span className="subagent-head-id" title={task.id}>
+          <span className="subagent-head-id">
             {task.id}
           </span>
         </div>

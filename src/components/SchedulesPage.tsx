@@ -258,7 +258,6 @@ export function SchedulesPage({
                     <button
                       className="sp-row-main"
                       onClick={() => onSelect(task.id === selected ? null : task.id)}
-                      title={task.prompt}
                     >
                       <StatusRing t={task} />
                       <span className="sp-row-text">

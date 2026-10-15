@@ -407,7 +407,7 @@ export const ProcessGroup = memo(
               <>
                 <span className="fold-live-label shimmer">{act.label}</span>
                 {act.detail ? (
-                  <span className="fold-live-detail shimmer" title={act.detail}>
+                  <span className="fold-live-detail shimmer">
                     {act.detail}
                   </span>
                 ) : null}

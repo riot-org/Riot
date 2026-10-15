@@ -75,7 +75,7 @@ export const TaskNoticeCard = memo(function TaskNoticeCard({ item }: { item: Not
           {item.status === "completed" ? "✓" : item.status === "cancelled" ? "◦" : "✕"}
         </span>
         <span className="task-notice-label">{t(noticeLabelKey(item.status))}</span>
-        <span className="task-notice-title" title={item.title}>
+        <span className="task-notice-title">
           {item.title}
         </span>
         {/* 点 id 打开那个子 agent 的完整会话（不是展开汇报）。span 而不是
@@ -212,7 +212,7 @@ export function BackgroundTasksPanel({
                   ) : null}
                 </span>
               ) : null}
-              <span className="task-activity" title={renderUiText(task.activity)}>
+              <span className="task-activity">
                 {task.status === "running" ? renderUiText(task.activity) : statusLabel(task.status)}
               </span>
               <span className="task-meta">
