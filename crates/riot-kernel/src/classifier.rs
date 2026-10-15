@@ -141,6 +141,7 @@ impl SafetyClassifier for HostClassifier {
             tools: Vec::new(),
             max_output_tokens: Some(MAX_OUTPUT_TOKENS),
             thinking: ThinkingConfig::Off,
+            cache_ttl: Default::default(),
         };
 
         let cancel = CancellationToken::new();

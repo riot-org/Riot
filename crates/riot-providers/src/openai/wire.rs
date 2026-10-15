@@ -202,6 +202,28 @@ pub struct WireUsage {
     /// DeepSeek 的上下文缓存命中数。
     #[serde(default)]
     pub prompt_cache_hit_tokens: Option<u32>,
+    /// 标准写法的命中数（OpenAI 和多数兼容实现，如智谱）：
+    /// `prompt_tokens_details.cached_tokens`。
+    #[serde(default)]
+    pub prompt_tokens_details: Option<WirePromptTokensDetails>,
+}
+
+impl WireUsage {
+    /// 命中缓存的输入 token 数。两种写法都认：只认 DeepSeek 那个的话，其它
+    /// 服务商的命中一律报成 0，输入按全价算，用量和成本显示全错。
+    pub fn cached_tokens(&self) -> Option<u32> {
+        self.prompt_cache_hit_tokens.or_else(|| {
+            self.prompt_tokens_details
+                .as_ref()
+                .and_then(|d| d.cached_tokens)
+        })
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct WirePromptTokensDetails {
+    #[serde(default)]
+    pub cached_tokens: Option<u32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

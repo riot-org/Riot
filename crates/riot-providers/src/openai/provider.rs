@@ -494,6 +494,7 @@ mod header_tests {
             tools: vec![],
             max_output_tokens: Some(16),
             thinking: ThinkingConfig::Off,
+            cache_ttl: Default::default(),
         }
     }
 

@@ -19,22 +19,26 @@
 //!
 //! # 缓存约束
 //!
-//! 系统提示词是整个上下文前缀的第一段，变一个字，后面的工具定义加
-//! 全部历史整体作废。所以：
+//! 前缀缓存按「工具定义 → 系统提示词 → 历史」的顺序逐字节比对，系统提示词
+//! 变一个字，后面的全部历史整体作废。所以：
 //! - 会在会话中途变化的内容（模式、日期到天）不进 system prompt；
 //! - 日期只精确到月（粒度取舍同 `riot_tools::tools::web::date`）；
 //! - 规划模式的约束走消息侧的 system-reminder（见 [`plan_mode_reminder`]）。
 //!
 //! 这条纪律过去只能靠人工遵守。现在有机制托底：[`system_prompt`] 把
-//! 跨会话逐字节相同的分节和逐项目逐用户不同的分节分别装进两组，中间
-//! 用 [`SYSTEM_SECTION_BOUNDARY`] 隔开，provider 侧按它切块 —— 只有
-//! 前一组拿 `scope: "global"` 的缓存断点。要加新分节，先回答它属于
-//! 哪一组；答不上来就属于后一组。
+//! 跨会话逐字节相同的分节和逐项目不同的分节分别装进两组，中间用
+//! [`SYSTEM_SECTION_BOUNDARY`] 隔开，provider 侧按它切块 —— 只有前一组
+//! 末尾打缓存断点。那是一个不受后面变动影响的读取点：换了项目、改了补充
+//! 指令、压缩改写了历史，工具定义加前一组照样命中。要加新分节，先回答它
+//! 属于哪一组；答不上来就属于后一组。
+//!
+//! 缓存不跨用户：Anthropic 按工作区隔离（Bedrock / Vertex 上按组织），从不
+//! 跨组织共享。
 //!
 //! 「随模型变化」不算变化：各家的前缀缓存本来就按模型隔离，同一个模型
 //! 的请求看到的字节一样，不同模型的请求从来不可能共享。所以模型 id 可以
 //! 进前一组（见 [`agent_identity`]）—— 但必须是 id，不能是用户在设置里
-//! 自己起的展示名，那个逐用户不同。
+//! 自己起的展示名，那个改一下名字就整组作废。
 
 use riot_protocol::message::{Attachment, UserContent};
 use riot_protocol::permission::PermissionMode;
@@ -153,10 +157,10 @@ pub(crate) fn system_prompt(input: &SystemPromptInput<'_>) -> String {
 
 /// 装配两组分节：`(跨会话共享, 逐项目)`。
 ///
-/// `[约束]` 第一组里不许出现任何随项目、随用户、随时间变化的字节。它是
-/// 全局缓存块的内容，掺一个工作目录进去，别人永远命不中，还把自己那份
-/// 挤掉 —— 而这个损失在本地完全看不出来：请求照发照回，只是 `cache_read`
-/// 一直是 0。拿不准某一节归哪组时归第二组，代价只是少缓存几百 token。
+/// `[约束]` 第一组里不许出现任何随项目、随时间变化的字节。它是带断点的
+/// 静态块，掺一个工作目录进去，换个项目这个读取点就作废 —— 而这个损失在
+/// 本地完全看不出来：请求照发照回，只是 `cache_read` 一直是 0。拿不准某
+/// 一节归哪组时归第二组，代价只是少缓存几百 token。
 /// 随模型变化的字节除外（模块文档说了为什么）。
 fn assemble(input: &SystemPromptInput<'_>) -> (Sections, Sections) {
     let mut shared = Sections::new(input.flavor);
@@ -213,8 +217,8 @@ fn assemble(input: &SystemPromptInput<'_>) -> (Sections, Sections) {
         project.push("past_sessions", past_sessions(dir));
     }
     if let Some(extra) = input.extra {
-        // 用户输入里的边界标记要洗掉：留着的话它会把后面的内容切进
-        // 全局缓存块，而那块是跨用户共享的。
+        // 用户输入里的边界标记要洗掉：留着的话切分点由用户说了算，后面的
+        // 项目内容会被切进带断点的静态块。
         let extra = extra.replace(SYSTEM_SECTION_BOUNDARY, "");
         project.push(
             "user_rules",
@@ -551,7 +555,7 @@ link. To show one, fetch it with WebFetch: the result card displays it to the us
 /// 用户说"接着上次的做"它也不翻）、以及引用格式（前端把 `riot://session/`
 /// 画成可点的芯片）。
 ///
-/// 这一节在**项目组**：目录路径逐用户不同，不能进跨用户共享的静态段；
+/// 这一节在**项目组**：目录路径逐项目不同，不能进静态段；
 /// 对同一项目的所有会话它是常量，项目块的缓存不受影响。当前会话自己的
 /// id 走消息侧（首条消息的 system-reminder）—— 放这里会让同一项目不同
 /// 会话的项目块字节不同，白丢一层缓存。
@@ -1775,10 +1779,10 @@ mod tests {
 
     /// 缓存断点打在正确的位置：逐项目的内容一个字都不能进静态段。
     ///
-    /// `[约束]` 静态段是 provider 那边 `scope: "global"` 缓存块的内容，
-    /// 跨会话跨用户共享。工作目录、venv 路径、用户自己写的补充指令混进去，
-    /// 别人永远命不中，还把自己那份挤掉 —— 而这个损失在本地完全看不出来：
-    /// 请求照发照回，只是 cache_read 一直是 0。这条测试就是那道机制。
+    /// `[约束]` 静态段是 provider 那边带断点的第一块，一个不受后面变动影响
+    /// 的读取点。工作目录、venv 路径、用户自己写的补充指令混进去，换个项目、
+    /// 改句补充指令它就作废 —— 而这个损失在本地完全看不出来：请求照发照回，
+    /// 只是 cache_read 一直是 0。这条测试就是那道机制。
     #[test]
     fn 逐项目的内容不进静态段() {
         let input = SystemPromptInput {
@@ -1798,7 +1802,7 @@ mod tests {
         ] {
             assert!(
                 !stable.contains(needle),
-                "「{needle}」逐项目/逐月变化，不能进跨用户共享的静态段"
+                "「{needle}」逐项目/逐月变化，不能进静态段"
             );
             assert!(project.contains(needle), "「{needle}」要在项目段里");
         }

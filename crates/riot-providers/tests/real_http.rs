@@ -108,6 +108,7 @@ fn request() -> ProviderRequest {
         tools: vec![],
         max_output_tokens: Some(1024),
         thinking: ThinkingConfig::Off,
+        cache_ttl: Default::default(),
     }
 }
 

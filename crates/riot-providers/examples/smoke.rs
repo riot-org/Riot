@@ -81,6 +81,7 @@ async fn main() {
         }],
         max_output_tokens: Some(512),
         thinking: ThinkingConfig::Off,
+        cache_ttl: Default::default(),
     };
 
     let started = Instant::now();

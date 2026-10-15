@@ -18,7 +18,7 @@
 //! 见 ARCHITECTURE.md §11.2、§11.5
 
 use riot_protocol::message::{AssistantContent, Message, ToolResultContent, UserContent};
-use riot_protocol::provider::{ProviderRequest, ThinkingConfig, ToolSpec};
+use riot_protocol::provider::{CacheTtl, ProviderRequest, ToolSpec};
 use serde::Serialize;
 
 /// 重试与降级时会变的参数。
@@ -69,12 +69,18 @@ impl RetryContext {
 pub struct SystemSection {
     pub name: &'static str,
     pub text: String,
-    /// 这一段能不能进 `scope: "global"` 的缓存块。
+    /// 这一段能不能进 system 第一块（带缓存断点的静态块）。
     ///
     /// 两类内容不能进：会话中途会变的（时间、模式），以及会话内不变但
-    /// **逐项目逐用户不同**的（工作目录、venv 路径、用户自己写的补充指令）。
-    /// 后者写进全局块的代价不只是自己不命中 —— 全局块是跨会话跨用户共享的，
-    /// 掺进只对一个项目成立的路径，等于把别人那份也挤掉。
+    /// **逐项目不同**的（工作目录、venv 路径、用户自己写的补充指令）。
+    /// 静态块的断点是一个不受后面任何变动影响的读取点：换了项目、改了
+    /// 补充指令、压缩改写了历史，工具定义加静态块这一段照样命中。掺进只对
+    /// 一个项目成立的路径，这个读取点就只剩这一个项目能用。
+    ///
+    /// 注意缓存不跨用户：Anthropic 的缓存按工作区隔离（Bedrock / Vertex 上
+    /// 按组织），从不跨组织共享。而工具定义排在 system 前面，静态块的缓存键
+    /// 里含着整个工具列表 —— 两个会话的工具集（MCP、沙箱、平台）不同，
+    /// 静态块也共享不了。
     ///
     /// `[约束]` 默认应该是 `false`（可缓存）。要置位就走
     /// [`SystemSection::dangerous_volatile`] 或 [`SystemSection::project_scoped`]，
@@ -103,7 +109,7 @@ impl SystemSection {
 
     /// 会话内不变、但逐项目逐用户不同的段落。
     ///
-    /// 和 [`Self::stable`] 的差别只在缓存作用域：这些内容进不了全局块，
+    /// 和 [`Self::stable`] 的差别只在缓存作用域：这些内容进不了静态块，
     /// 但会话内的复用不亏 —— messages 末尾那个断点的前缀覆盖了整个 system。
     pub fn project_scoped(name: &'static str, text: impl Into<String>) -> Self {
         Self {
@@ -121,16 +127,16 @@ impl SystemSection {
 /// `Vec<SystemSection>`：[`riot_protocol::provider::ProviderRequest::system`]
 /// 是一个 `String`，它要跨 RPC 传输、要参与黄金回放，换成结构体是协议改动。
 /// 于是约定用这个标记切开 —— 标记之前是**跨会话逐字节相同**的部分，
-/// 之后是工作目录、venv、用户补充指令这类逐项目逐用户不同的尾巴。
+/// 之后是工作目录、venv、用户补充指令这类逐项目不同的尾巴。
 ///
 /// 找不到标记时整段按静态处理：摘要请求那种极简 system 本来就是常量，
-/// 而漏切的后果只是少一次分块，不会把项目内容错标成全局可共享。
+/// 而漏切的后果只是少一次分块。
 pub const SYSTEM_SECTION_BOUNDARY: &str = "@@riot:system-cache-boundary@@";
 
 /// 按 [`SYSTEM_SECTION_BOUNDARY`] 切开请求级 system，返回 `(静态段, 项目段)`。
 ///
 /// 只切第一处。装配方负责把用户输入里的同名标记洗掉，这里不重复防御 ——
-/// 真漏过来的话，多出来的标记留在项目段里，不会把用户文本抬进全局块。
+/// 真漏过来的话，多出来的标记留在项目段里，不会把用户文本抬进静态块。
 pub fn split_request_system(system: &str) -> (&str, &str) {
     match system.split_once(SYSTEM_SECTION_BOUNDARY) {
         Some((stable, project)) => (stable.trim_end(), project.trim_start()),
@@ -152,6 +158,9 @@ pub struct WireRequest {
     pub tools: Vec<WireTool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<WireThinking>,
+    /// 新模型的思考力度（`effort`）。老模型走 `thinking.budget_tokens`，不发这个。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_config: Option<WireOutputConfig>,
     /// 采样参数由 provider 配置注入。None 不发送。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
@@ -171,27 +180,31 @@ pub struct WireSystemBlock {
     pub cache_control: Option<CacheControl>,
 }
 
+/// 缓存断点。
+///
+/// `[约束]` 只有 `type` 和 `ttl` 两个字段 —— 这是公开文档里 `cache_control`
+/// 的全部。以前这里还发过一个 `scope: "global"`，指望静态段跨用户共享：
+/// 文档里没有这个字段（严格的服务端会 400），缓存也从不跨组织共享。
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 pub struct CacheControl {
     #[serde(rename = "type")]
     pub kind: &'static str,
-    /// `global` 让静态段跨会话跨用户共享。动态段不能用。
+    /// None = 服务端默认（5 分钟）。`"1h"` 见 [`CacheTtl::Extended`]。
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub scope: Option<&'static str>,
+    pub ttl: Option<&'static str>,
 }
 
 impl CacheControl {
-    fn global() -> Self {
+    /// `[约束]` 一个请求里的所有断点都从同一个 [`CacheTtl`] 取值。API 要求
+    /// 前缀里靠前的断点 TTL 不短于靠后的（1 小时在前、5 分钟在后可以，反过来
+    /// 400）；同一个值天然满足，[`validate_cache_breakpoints`] 再兜一次底。
+    fn new(ttl: CacheTtl) -> Self {
         Self {
             kind: "ephemeral",
-            scope: Some("global"),
-        }
-    }
-
-    fn local() -> Self {
-        Self {
-            kind: "ephemeral",
-            scope: None,
+            ttl: match ttl {
+                CacheTtl::Default => None,
+                CacheTtl::Extended => Some("1h"),
+            },
         }
     }
 }
@@ -209,10 +222,27 @@ pub struct WireTool {
     pub input_schema: serde_json::Value,
 }
 
+/// 思考参数。哪个代际发哪一种，见 [`super::thinking`]。
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WireThinking {
+    /// 老模型（Claude 4.5 及更早）。
     Enabled { budget_tokens: u32 },
+    /// Opus 4.6 / Sonnet 4.6 起：模型按请求自己决定想多深，力度走
+    /// [`WireOutputConfig::effort`]。
+    Adaptive {
+        /// `"summarized"` = 回思考摘要。4.7 起默认不回，不要的话界面上
+        /// 就是一段没有内容的长停顿。
+        #[serde(skip_serializing_if = "Option::is_none")]
+        display: Option<&'static str>,
+    },
+    /// Sonnet 5.5 的关思考写法（它收到 `disabled` 会 400）。
+    BetweenTools,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+pub struct WireOutputConfig {
+    pub effort: &'static str,
 }
 
 /// 没有指定时的输出上限。
@@ -221,34 +251,6 @@ const DEFAULT_MAX_TOKENS: u32 = 8192;
 // ────────────────────────────────────────────────────────────
 // 组装
 // ────────────────────────────────────────────────────────────
-
-/// 力度档 → 思考预算。Anthropic 没有档位参数，只有 `budget_tokens`。
-///
-/// 数值参照 Claude Code 的 think/megathink 量级；high 刻意没顶到 CC 的
-/// ultrathink（32k）—— 那是用户喊口令才给的量，当作常规档每轮都发太贵。
-fn effort_budget(level: riot_protocol::provider::ThinkingEffort) -> u32 {
-    use riot_protocol::provider::ThinkingEffort;
-    match level {
-        ThinkingEffort::Low => 2_048,
-        ThinkingEffort::Medium => 8_192,
-        ThinkingEffort::High => 24_576,
-    }
-}
-
-/// 把预算夹进 API 的硬约束：`1024 ≤ budget < max_tokens`。
-///
-/// 挤不下（max_tokens 太小，思考和输出没法都留出最低空间）就返回 None
-/// 不开思考 —— 发一个非法组合出去是整个请求 400，而不是思考被忽略。
-fn clamp_thinking_budget(budget: u32, max_tokens: u32) -> Option<u32> {
-    const MIN_BUDGET: u32 = 1_024;
-    // 给最终输出至少留 MIN_BUDGET：预算贴着 max_tokens 的话，思考一满
-    // 输出就被截断，表现为"想了半天一句话没说完"。
-    let cap = max_tokens.saturating_sub(MIN_BUDGET);
-    if cap < MIN_BUDGET {
-        return None;
-    }
-    Some(budget.clamp(MIN_BUDGET, cap))
-}
 
 /// 组装一次请求。**这是唯一的组装入口。**
 pub fn build_request(
@@ -260,25 +262,21 @@ pub fn build_request(
         .max_output_tokens_override
         .or(req.max_output_tokens)
         .unwrap_or(DEFAULT_MAX_TOKENS);
+    let model = retry
+        .model_override
+        .clone()
+        .unwrap_or_else(|| req.model.clone());
+    // 按**实际发出去的**模型选写法：降级换到别的代际时，参数也得跟着换。
+    let (thinking, output_config) =
+        super::thinking::wire_thinking(req.thinking, &model, max_tokens);
     let out = WireRequest {
-        model: retry
-            .model_override
-            .clone()
-            .unwrap_or_else(|| req.model.clone()),
+        model,
         max_tokens,
-        system: build_system_with_request(system, &req.system),
-        messages: build_messages(&req.messages, retry),
+        system: build_system_with_request(system, &req.system, req.cache_ttl),
+        messages: build_messages(&req.messages, retry, req.cache_ttl),
         tools: build_tools(&req.tools),
-        thinking: match req.thinking {
-            // Anthropic 默认就不思考，Disabled 等价于不发。
-            ThinkingConfig::Off | ThinkingConfig::Disabled => None,
-            ThinkingConfig::Effort { level } => {
-                clamp_thinking_budget(effort_budget(level), max_tokens)
-                    .map(|budget_tokens| WireThinking::Enabled { budget_tokens })
-            }
-            ThinkingConfig::Budget { tokens } => clamp_thinking_budget(tokens, max_tokens)
-                .map(|budget_tokens| WireThinking::Enabled { budget_tokens }),
-        },
+        thinking,
+        output_config,
         temperature: None,
         top_p: None,
         top_k: None,
@@ -306,14 +304,15 @@ pub fn build_request(
 /// 任何工具规矩"，而 OpenAI 侧一切正常（那边一直有拼接），排查会先怀疑模型。
 ///
 /// 顺序对齐 OpenAI 侧的 `full_system`：provider 段在前，请求级在后。请求级
-/// 按 [`SYSTEM_SECTION_BOUNDARY`] 切成两段并入 —— 前半段跨会话相同，进全局
-/// 缓存块；后半段是这个项目、这个用户独有的，不进。
+/// 按 [`SYSTEM_SECTION_BOUNDARY`] 切成两段并入 —— 前半段跨会话相同，进带
+/// 断点的静态块；后半段是这个项目独有的，不进。
 fn build_system_with_request(
     sections: &[SystemSection],
     request_system: &str,
+    ttl: CacheTtl,
 ) -> Vec<WireSystemBlock> {
     if request_system.is_empty() {
-        return build_system(sections);
+        return build_system(sections, ttl);
     }
     let (stable, project) = split_request_system(request_system);
     let mut merged = sections.to_vec();
@@ -326,16 +325,16 @@ fn build_system_with_request(
             project.to_owned(),
         ));
     }
-    build_system(&merged)
+    build_system(&merged, ttl)
 }
 
-/// 静态段合并成一块打全局缓存，其余（会变的 + 逐项目的）合并成一块不打。
+/// 静态段合并成一块打断点，其余（会变的 + 逐项目的）合并成一块不打。
 ///
 /// `[约束]` 静态段里不许放任何会在会话中途变化的东西（feature flag、
-/// 时间戳、MCP 工具列表），也不许放只对当前项目/用户成立的东西（工作目录、
-/// venv 路径、会话补充指令）。变一个字节，全局缓存就整个作废 —— 而这个
-/// 损失是跨用户的，不只影响你自己。
-fn build_system(sections: &[SystemSection]) -> Vec<WireSystemBlock> {
+/// 时间戳、MCP 工具列表），也不许放只对当前项目成立的东西（工作目录、
+/// venv 路径、会话补充指令）。变一个字节，这个读取点就整个作废 —— 而且
+/// 请求照发照回，只是 `cache_read` 一直是 0，本地完全看不出来。
+fn build_system(sections: &[SystemSection], ttl: CacheTtl) -> Vec<WireSystemBlock> {
     let (stable, volatile): (Vec<_>, Vec<_>) = sections.iter().partition(|s| !s.volatile);
 
     let mut out = Vec::with_capacity(2);
@@ -348,7 +347,7 @@ fn build_system(sections: &[SystemSection]) -> Vec<WireSystemBlock> {
                 .map(|s| s.text.as_str())
                 .collect::<Vec<_>>()
                 .join("\n\n"),
-            cache_control: Some(CacheControl::global()),
+            cache_control: Some(CacheControl::new(ttl)),
         });
     }
 
@@ -396,13 +395,13 @@ fn build_tools(tools: &[ToolSpec]) -> Vec<WireTool> {
 /// 断点位置，对字节数的影响可以忽略，而估算发生在决定要不要压缩的时候 ——
 /// 那时还没有任何重试上下文。
 pub fn wire_bytes(messages: &[Message]) -> usize {
-    build_messages(messages, &RetryContext::initial())
+    build_messages(messages, &RetryContext::initial(), CacheTtl::Default)
         .iter()
         .map(|m| serde_json::to_string(m).map(|s| s.len()).unwrap_or(0))
         .sum()
 }
 
-fn build_messages(messages: &[Message], retry: &RetryContext) -> Vec<WireMessage> {
+fn build_messages(messages: &[Message], retry: &RetryContext, ttl: CacheTtl) -> Vec<WireMessage> {
     let mut out: Vec<WireMessage> = messages
         .iter()
         .filter_map(|m| convert_message(m, retry))
@@ -423,7 +422,7 @@ fn build_messages(messages: &[Message], retry: &RetryContext) -> Vec<WireMessage
     {
         obj.insert(
             "cache_control".into(),
-            serde_json::to_value(CacheControl::local()).expect("CacheControl 可序列化"),
+            serde_json::to_value(CacheControl::new(ttl)).expect("CacheControl 可序列化"),
         );
     }
 
@@ -595,6 +594,8 @@ pub enum CacheError {
     TooManySystemBreakpoints(usize),
     #[error("动态 system 段打了缓存断点 —— 它每轮都变，缓存必然 miss")]
     VolatileSystemCached,
+    #[error("system 断点的 TTL 比 messages 断点短 —— 靠前的断点 TTL 不能更短，服务端会 400")]
+    TtlOrder,
 }
 
 /// 断点数量校验。
@@ -628,6 +629,24 @@ pub fn validate_cache_breakpoints(req: &WireRequest) -> Result<(), CacheError> {
         return Err(CacheError::TooManyMessageBreakpoints(msg_marks));
     }
 
+    // 靠前的断点 TTL 不能比靠后的短：5 分钟的 system 后面跟 1 小时的
+    // messages 是 400。只有这一种组合会错 —— 默认值是 5 分钟。
+    let system_long = req
+        .system
+        .iter()
+        .filter_map(|b| b.cache_control)
+        .any(|c| c.ttl.is_some());
+    let system_marked = system_marks > 0;
+    let messages_long = req
+        .messages
+        .iter()
+        .flat_map(|m| &m.content)
+        .filter_map(|c| c.get("cache_control"))
+        .any(|c| c.get("ttl").is_some());
+    if system_marked && !system_long && messages_long {
+        return Err(CacheError::TtlOrder);
+    }
+
     Ok(())
 }
 
@@ -637,6 +656,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use riot_protocol::id::{MessageId, ToolUseId};
     use riot_protocol::message::MessageMeta;
+    use riot_protocol::provider::ThinkingConfig;
 
     fn user(text: &str) -> Message {
         Message::User {
@@ -663,6 +683,7 @@ mod tests {
             tools: vec![],
             max_output_tokens: None,
             thinking: ThinkingConfig::Off,
+            cache_ttl: Default::default(),
         }
     }
 
@@ -719,7 +740,7 @@ mod tests {
     }
 
     #[test]
-    fn 静态段合并打全局缓存_动态段不打() {
+    fn 静态段合并打断点_动态段不打() {
         let r = build_request(
             &req(vec![user("hi")]),
             &sections(),
@@ -727,7 +748,10 @@ mod tests {
         );
 
         assert_eq!(r.system.len(), 2, "静态段合成一块，动态段一块");
-        assert_eq!(r.system[0].cache_control, Some(CacheControl::global()));
+        assert_eq!(
+            r.system[0].cache_control,
+            Some(CacheControl::new(CacheTtl::Default))
+        );
         assert!(r.system[0].text.contains("编码助手"));
         assert!(r.system[0].text.contains("Grep"));
 
@@ -756,7 +780,7 @@ mod tests {
         );
         assert_eq!(
             b.system[0].cache_control,
-            Some(CacheControl::global()),
+            Some(CacheControl::new(CacheTtl::Default)),
             "它在会话内不变，归稳定块"
         );
 
@@ -766,23 +790,26 @@ mod tests {
         assert!(b.system[0].text.contains("总结助手的角色声明"));
     }
 
-    /// 请求级 system 按边界常量切开：前半段进全局块，后半段不进。
+    /// 请求级 system 按边界常量切开：前半段进带断点的静态块，后半段不进。
     ///
-    /// `[约束]` 全局块是跨会话跨用户共享的。工作目录、venv 路径、用户自己
-    /// 写的补充指令混进去，别人永远命不中，还把自己那份挤掉 —— 而这个损失
+    /// `[约束]` 静态块是不受后面变动影响的读取点。工作目录、venv 路径、用户
+    /// 自己写的补充指令混进去，换个项目、改句补充指令它就作废 —— 而这个损失
     /// 在本地完全看不出来，请求照发照回，只是 cache_read 一直是 0。
     #[test]
-    fn 请求级_system_按边界切成全局段和项目段() {
+    fn 请求级_system_按边界切成静态段和项目段() {
         let mut r = req(vec![user("hi")]);
         r.system = format!("跨会话相同的准则{SYSTEM_SECTION_BOUNDARY}工作目录：/tmp/proj");
 
         let b = build_request(&r, &[], &RetryContext::initial());
         assert_eq!(b.system.len(), 2, "切成两块");
-        assert_eq!(b.system[0].cache_control, Some(CacheControl::global()));
+        assert_eq!(
+            b.system[0].cache_control,
+            Some(CacheControl::new(CacheTtl::Default))
+        );
         assert!(b.system[0].text.contains("跨会话相同的准则"));
         assert!(
             !b.system[0].text.contains("/tmp/proj"),
-            "逐项目的内容不能进全局块：{}",
+            "逐项目的内容不能进静态块：{}",
             b.system[0].text
         );
         assert_eq!(b.system[1].cache_control, None);
@@ -793,6 +820,55 @@ mod tests {
         assert!(!wire.contains("riot:system-cache-boundary"), "{wire}");
 
         assert_eq!(validate_cache_breakpoints(&b), Ok(()));
+    }
+
+    /// `cache_control` 只发文档里有的字段：不发 `scope`；默认 TTL 不发 `ttl`。
+    ///
+    /// 以前静态块带着 `scope: "global"`，指望跨用户共享 —— 公开文档里没有
+    /// 这个字段（严格的服务端会 400），缓存也从不跨组织共享。
+    #[test]
+    fn 断点不发文档外的字段() {
+        let b = build_request(
+            &req(vec![user("hi")]),
+            &sections(),
+            &RetryContext::initial(),
+        );
+        let wire = serde_json::to_string(&b).expect("序列化");
+        assert!(!wire.contains("scope"), "{wire}");
+        assert!(!wire.contains("\"ttl\""), "默认 TTL 不用写出来：{wire}");
+        assert!(
+            wire.contains(r#""cache_control":{"type":"ephemeral"}"#),
+            "{wire}"
+        );
+    }
+
+    /// 要求长 TTL 时，system 和 messages 两个断点都是 1 小时。
+    ///
+    /// 只给 messages 打 1 小时是 400：靠前的断点 TTL 不能比靠后的短。
+    #[test]
+    fn 长_ttl_两个断点一起改() {
+        let mut r = req(vec![user("hi"), user("再来")]);
+        r.cache_ttl = CacheTtl::Extended;
+        let b = build_request(&r, &sections(), &RetryContext::initial());
+        assert_eq!(
+            b.system[0].cache_control,
+            Some(CacheControl::new(CacheTtl::Extended))
+        );
+        assert_eq!(b.system[0].cache_control.and_then(|c| c.ttl), Some("1h"));
+        let marked: Vec<&serde_json::Value> = b
+            .messages
+            .iter()
+            .flat_map(|m| &m.content)
+            .filter_map(|c| c.get("cache_control"))
+            .collect();
+        assert_eq!(marked.len(), 1);
+        assert_eq!(marked[0]["ttl"], "1h", "{marked:?}");
+        assert_eq!(validate_cache_breakpoints(&b), Ok(()));
+
+        // 反过来（system 5 分钟、messages 1 小时）校验要拦住。
+        let mut bad = b.clone();
+        bad.system[0].cache_control = Some(CacheControl::new(CacheTtl::Default));
+        assert_eq!(validate_cache_breakpoints(&bad), Err(CacheError::TtlOrder));
     }
 
     /// 没有边界标记时整段按静态处理 —— 摘要请求那种极简 system 是常量。
@@ -1054,7 +1130,7 @@ mod tests {
     fn 校验能抓到动态段被缓存() {
         let mut r = build_request(&req(vec![user("a")]), &sections(), &RetryContext::initial());
         r.system[0].cache_control = None;
-        r.system[1].cache_control = Some(CacheControl::global());
+        r.system[1].cache_control = Some(CacheControl::new(CacheTtl::Default));
 
         assert_eq!(
             validate_cache_breakpoints(&r),
@@ -1104,7 +1180,8 @@ mod tests {
         );
     }
 
-    /// Disabled 在 Anthropic 侧等价于不发 —— 它默认就不思考。
+    /// 老代际上 Disabled 等价于不发 —— 它们默认就不思考。新代际各有各的
+    /// 关法，见 `thinking` 模块。
     #[test]
     fn thinking_disabled_不发参数() {
         let mut r = req(vec![user("hi")]);
@@ -1112,6 +1189,41 @@ mod tests {
         assert_eq!(
             build_request(&r, &sections(), &RetryContext::initial()).thinking,
             None
+        );
+    }
+
+    /// 新模型的请求体：`thinking` 是 adaptive，力度在 `output_config.effort`，
+    /// 不带 `budget_tokens`（Opus 4.7 起发它就是 400）。降级换到老模型时，
+    /// 参数按实际发出去的模型重新选。
+    #[test]
+    fn 新模型请求体发_adaptive_和_effort() {
+        use riot_protocol::provider::ThinkingEffort;
+        let mut r = req(vec![user("hi")]);
+        r.model = "claude-opus-5-5".into();
+        r.thinking = ThinkingConfig::Effort {
+            level: ThinkingEffort::Medium,
+        };
+        let b = build_request(&r, &sections(), &RetryContext::initial());
+        let v = serde_json::to_value(&b).expect("序列化");
+        assert_eq!(
+            v["thinking"],
+            serde_json::json!({ "type": "adaptive", "display": "summarized" })
+        );
+        assert_eq!(
+            v["output_config"],
+            serde_json::json!({ "effort": "medium" })
+        );
+        assert!(!v.to_string().contains("budget_tokens"), "{v}");
+
+        let fallback = build_request(
+            &r,
+            &sections(),
+            &RetryContext::fallback_to("claude-haiku-4-5"),
+        );
+        assert!(
+            matches!(fallback.thinking, Some(WireThinking::Enabled { .. }))
+                && fallback.output_config.is_none(),
+            "降级到老模型要换回预算写法：{fallback:?}"
         );
     }
 }

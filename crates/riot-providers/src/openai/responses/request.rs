@@ -58,7 +58,7 @@ pub fn build_request(
             }),
             Vec::new(),
         ),
-        ThinkingConfig::Effort { level } => (
+        ThinkingConfig::Effort { level } | ThinkingConfig::Adaptive { hint: level } => (
             Some(WireReasoning {
                 effort: level.as_openai_str(),
                 summary: Some("auto"),
@@ -67,11 +67,7 @@ pub fn build_request(
         ),
         ThinkingConfig::Budget { tokens } => (
             Some(WireReasoning {
-                effort: match tokens {
-                    0..=4_096 => ThinkingEffort::Low.as_openai_str(),
-                    4_097..=16_384 => ThinkingEffort::Medium.as_openai_str(),
-                    _ => ThinkingEffort::High.as_openai_str(),
-                },
+                effort: ThinkingEffort::from_budget(tokens).as_openai_str(),
                 summary: Some("auto"),
             }),
             vec!["reasoning.encrypted_content"],

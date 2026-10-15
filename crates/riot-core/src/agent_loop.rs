@@ -121,6 +121,7 @@ pub fn run_agent(
                 max_output_tokens: state.max_output_tokens_override,
                 // 按请求序号解析：Adaptive 在首请求和工具续轮给不同档。
                 thinking: state.thinking.config_for(state.turn),
+                cache_ttl: Default::default(),
             };
 
             // ── 3. 流式消费模型输出 ──────────────────────────────
@@ -201,6 +202,25 @@ pub fn run_agent(
                 }
             }
             drop(model_stream);
+
+            // 每次请求一行缓存账。前缀缓存退化时（有人往 system 里塞了会变
+            // 的东西、工具列表变了、历史被改写）请求照发照回，只有这几个数
+            // 会变 —— 不记下来就没人看得出来。debug 级，平时不出声。
+            let u = turn.usage();
+            let prompt = u64::from(u.input_tokens)
+                + u64::from(u.cache_read_tokens)
+                + u64::from(u.cache_creation_tokens);
+            if let Some(hit_pct) = (u64::from(u.cache_read_tokens) * 100).checked_div(prompt) {
+                tracing::debug!(
+                    turn = state.turn,
+                    model = %state.model,
+                    input = u.input_tokens,
+                    cache_read = u.cache_read_tokens,
+                    cache_write = u.cache_creation_tokens,
+                    hit_pct,
+                    "请求缓存"
+                );
+            }
 
             // 只有**流被放弃**才在这里收场。
             //

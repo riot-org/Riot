@@ -19,7 +19,9 @@
 //!   折成一行能力索引，见 [`GROUPS`]；
 //! - `ToolSearch(query: "select:<名字>")` 把完整定义（描述 + 参数 schema）
 //!   作为工具结果文本返回，并把该工具标记为"已发现"；
-//! - 已发现的工具从下一次请求起进 tools 数组，之后和普通工具无异；
+//! - 已发现的工具从下一次请求起进 tools 数组，之后和普通工具无异；成组的
+//!   （`Browser*`）只要发现一个就整组进来 —— 工具列表每变一次，整段前缀
+//!   缓存就作废一次（见 [`DeferredPool::discover_group_mates`]）；
 //! - 未发现就直接调用会被调度器拦下，报错教模型先 ToolSearch ——
 //!   模型没见过 schema，编出来的参数不可信（fail-closed）。
 //!
@@ -168,6 +170,33 @@ impl DeferredPool {
             .insert(name.to_owned());
     }
 
+    /// `names` 里有成组工具时，把同组其余成员一并标成已发现；返回这次新
+    /// 加进来的那些（`names` 自己不算）。
+    ///
+    /// `[取舍]` 整组一次加载，而不是要哪个给哪个。工具定义排在请求的最前面，
+    /// 工具列表变一次，后面的 system 和整段历史的前缀缓存全部作废 —— 浏览器
+    /// 任务常常分好几次各捞一两个，每捞一次就把整段对话重写一遍（Anthropic
+    /// 按 1.25 倍写入、DeepSeek 按未命中计费）。整组约 2.4 万字符，进了请求
+    /// 之后每次都按缓存价读，比反复重写便宜得多。MCP 工具不成组，照旧按个加载。
+    fn discover_group_mates(&self, names: &[&str]) -> Vec<&str> {
+        let prefixes: Vec<&str> = GROUPS
+            .iter()
+            .map(|(prefix, _)| *prefix)
+            .filter(|p| names.iter().any(|n| n.starts_with(p)))
+            .collect();
+        if prefixes.is_empty() {
+            return Vec::new();
+        }
+        let mut discovered = self.discovered.write().expect("discovered 锁不该中毒");
+        self.entries
+            .iter()
+            .filter(|e| prefixes.iter().any(|p| e.name.starts_with(p)))
+            .filter(|e| !names.contains(&e.name.as_str()))
+            .filter(|e| discovered.insert(e.name.clone()))
+            .map(|e| e.name.as_str())
+            .collect()
+    }
+
     fn names(&self) -> Vec<&str> {
         self.entries.iter().map(|e| e.name.as_str()).collect()
     }
@@ -231,7 +260,9 @@ impl ToolSearch {
     }
 
     /// 把命中的工具渲染成结果文本并标记为已发现。
-    fn render_matches(&self, names: &[&str]) -> String {
+    /// 给模型的定义文本，和这次真正加载了的全部名字（`names` 在前，同组
+    /// 一并带进来的在后 —— 卡片上照实说加载了几个）。
+    fn render_matches<'a>(&'a self, names: &[&'a str]) -> (String, Vec<&'a str>) {
         let mut out =
             String::from("以下工具已加载，从下一步起可以直接调用（定义如下）：\n\n<functions>\n");
         for name in names {
@@ -251,7 +282,20 @@ impl ToolSearch {
             out.push('\n');
         }
         out.push_str("</functions>");
-        out
+        // 同组的不贴定义：它们从下一次请求起就在工具列表里，这里再贴一遍
+        // 只是把两万多字符塞进历史。
+        let mates = self.pool.discover_group_mates(names);
+        if !mates.is_empty() {
+            out.push_str(&format!(
+                "\n\n同组的另外 {} 个工具也一并加载了，从下一步起同样可以直接调用，\
+                 定义见工具列表：{}",
+                mates.len(),
+                mates.join("、"),
+            ));
+        }
+        let mut loaded = names.to_vec();
+        loaded.extend(mates);
+        (out, loaded)
     }
 }
 
@@ -291,8 +335,10 @@ impl Tool for ToolSearch {
         p.push_str(
             "\nUsage:\n\
              - `select:Name`, or `select:NameA,NameB` — exact retrieval by name. Use \
-             this when you know what you want, including for a whole group \
-             (`select:BrowserNavigate,BrowserSnapshot`).\n\
+             this when you know what you want (`select:BrowserNavigate,BrowserSnapshot`). \
+             Loading any member of a grouped family (`Browser*` above) loads the whole \
+             family: the result names the rest, and they are callable from your next \
+             step too.\n\
              - Anything else — keyword search over names and descriptions, returns the \
              closest matches.\n\
              - Retrieve everything you expect to need in one call. Tools returned in \
@@ -354,8 +400,8 @@ impl Tool for ToolSearch {
                     self.pool.names().join("、"),
                 ));
             }
-            let mut text = if found.is_empty() {
-                String::new()
+            let (mut text, loaded) = if found.is_empty() {
+                (String::new(), Vec::new())
             } else {
                 self.render_matches(&found)
             };
@@ -372,10 +418,10 @@ impl Tool for ToolSearch {
                 ui_payload: Some(UiPayload::Message {
                     // 真加载了东西就照实说几个；一个都没加载（全是常驻的）
                     // 时说"已加载 0 个工具"是句假话。
-                    text: if found.is_empty() {
+                    text: if loaded.is_empty() {
                         resident_message(&resident)
                     } else {
-                        loaded_message(&found)
+                        loaded_message(&loaded)
                     },
                 }),
                 model_content: riot_protocol::message::ToolResultContent::text(text),
@@ -386,11 +432,10 @@ impl Tool for ToolSearch {
         // 裸名字精确命中的快速通道：模型（尤其是压缩后）经常直接用名字
         // 而不带 select: 前缀，能认出来就别逼它重试。
         if let Some(e) = self.pool.get(query) {
-            let name = e.name.clone();
-            let text = self.render_matches(&[name.as_str()]);
+            let (text, loaded) = self.render_matches(&[e.name.as_str()]);
             return ToolOutcome::Ok {
                 ui_payload: Some(UiPayload::Message {
-                    text: loaded_message(&[name.as_str()]),
+                    text: loaded_message(&loaded),
                 }),
                 model_content: riot_protocol::message::ToolResultContent::text(text),
                 side_messages: Vec::new(),
@@ -464,10 +509,10 @@ impl Tool for ToolSearch {
             .take(max_results)
             .map(|(_, e)| e.name.as_str())
             .collect();
-        let text = self.render_matches(&names);
+        let (text, loaded) = self.render_matches(&names);
         ToolOutcome::Ok {
             ui_payload: Some(UiPayload::Message {
-                text: loaded_message(&names),
+                text: loaded_message(&loaded),
             }),
             model_content: riot_protocol::message::ToolResultContent::text(text),
             side_messages: Vec::new(),
@@ -863,6 +908,57 @@ mod tests {
 
         let p2 = DeferredPool::new(&tools, &prompt_ctx(), discovered);
         assert!(!p2.is_hidden("mcp__a__x"), "新一轮的池要认上一轮的发现");
+    }
+
+    /// 成组工具发现一个就整组加载：工具列表每变一次，整段前缀缓存就作废
+    /// 一次，分几次各捞一两个等于把整段对话重写好几遍。
+    ///
+    /// 同组的只报名字不贴定义（下一次请求它们就在工具列表里）；不成组的
+    /// MCP 工具不受牵连；已经整组进来之后再捞，不再重复报。
+    #[tokio::test]
+    async fn 成组工具发现一个就整组加载() {
+        let tools = [
+            tool("BrowserNavigate", "开页"),
+            tool("BrowserClick", "点击某个元素"),
+            tool("BrowserSnapshot", "读无障碍树"),
+            tool("mcp__a__x", "别的服务器"),
+        ];
+        let p = pool(&tools);
+        let ts = ToolSearch::new(Arc::clone(&p));
+
+        let out = ts
+            .call(
+                serde_json::json!({ "query": "select:BrowserNavigate" }),
+                ctx(),
+            )
+            .await;
+        let ToolOutcome::Ok {
+            ui_payload: Some(UiPayload::Message { text: card }),
+            ..
+        } = &out
+        else {
+            panic!("该成功并带卡片文案：{out:?}");
+        };
+        assert_eq!(
+            card,
+            &loaded_message(&["BrowserNavigate", "BrowserClick", "BrowserSnapshot"])
+        );
+        let text = ok_text(out);
+        for name in ["BrowserNavigate", "BrowserClick", "BrowserSnapshot"] {
+            assert!(!p.is_hidden(name), "{name} 该随组加载");
+        }
+        assert!(p.is_hidden("mcp__a__x"), "不成组的不该被顺带发现");
+        assert!(
+            text.contains("同组的另外 2 个工具") && text.contains("BrowserClick"),
+            "要点名一并加载了哪些：{text}"
+        );
+        assert!(!text.contains("点击某个元素"), "同组的不贴定义：{text}");
+
+        let again = ok_text(
+            ts.call(serde_json::json!({ "query": "select:BrowserClick" }), ctx())
+                .await,
+        );
+        assert!(!again.contains("同组的另外"), "已经整组进来了：{again}");
     }
 
     #[test]

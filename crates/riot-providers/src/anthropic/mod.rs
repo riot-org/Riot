@@ -7,6 +7,7 @@
 pub mod decode;
 pub mod provider;
 pub mod request;
+mod thinking;
 pub mod wire;
 
 pub use decode::StreamDecoder;

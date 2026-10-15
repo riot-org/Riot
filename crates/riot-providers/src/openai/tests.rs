@@ -31,6 +31,7 @@ fn req(messages: Vec<Message>) -> ProviderRequest {
         tools: vec![],
         max_output_tokens: Some(4096),
         thinking: ThinkingConfig::Off,
+        cache_ttl: Default::default(),
     }
 }
 
@@ -821,6 +822,32 @@ fn 用量被记录() {
     assert_eq!(u.output_tokens, 20);
     assert_eq!(u.cache_read_tokens, 80);
     assert_eq!(u.total(), 120, "三项相加要等于服务方报的总量");
+}
+
+/// 标准写法 `prompt_tokens_details.cached_tokens` 也要认。
+///
+/// 只认 DeepSeek 的 `prompt_cache_hit_tokens` 的话，OpenAI、智谱这些用标准
+/// 字段的服务商命中一律报成 0，输入按全价算 —— 用量和成本显示全错，缓存
+/// 退化了也没人看得出来。
+#[test]
+fn 标准写法的缓存命中也被记录() {
+    let mut d = StreamDecoder::new();
+    d.push(&sse(r#"{"id":"c1","choices":[{"delta":{"content":"x"}}]}"#));
+    d.push(&sse(
+        r#"{"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":20,"prompt_tokens_details":{"cached_tokens":64}}}"#,
+    ));
+
+    let u = d
+        .finish()
+        .into_iter()
+        .find_map(|e| match e {
+            ProviderEvent::Usage(u) => Some(u),
+            _ => None,
+        })
+        .expect("要有用量");
+    assert_eq!(u.cache_read_tokens, 64);
+    assert_eq!(u.input_tokens, 36, "同样要扣掉命中的部分");
+    assert_eq!(u.total(), 120);
 }
 
 #[test]

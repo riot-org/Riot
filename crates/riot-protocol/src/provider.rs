@@ -218,6 +218,31 @@ pub struct ProviderRequest {
     /// None = 用模型默认值。输出上限恢复时会被调低。
     pub max_output_tokens: Option<u32>,
     pub thinking: ThinkingConfig,
+    /// 这次写进前缀缓存的内容希望留多久。见 [`CacheTtl`]。
+    #[serde(default, skip_serializing_if = "CacheTtl::is_default")]
+    pub cache_ttl: CacheTtl,
+}
+
+/// 前缀缓存的存活时长偏好。
+///
+/// 只是偏好：只有 Anthropic 官方端点照办（`cache_control.ttl`），其它协议
+/// 和兼容端点按各自的默认处理 —— DeepSeek 这类自动缓存本来就没有这个旋钮。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheTtl {
+    /// 服务端默认（Anthropic 是 5 分钟）。工具续轮之间的间隔通常远短于此。
+    #[default]
+    Default,
+    /// 留一小时：这次请求之后可能要隔好几分钟才有下一次 —— 主 agent 委派完
+    /// 就收尾、等后台任务的通知。Anthropic 的写入价从 1.25 倍涨到 2 倍，换来
+    /// 的是被叫醒时不用把整段历史重写一遍。
+    Extended,
+}
+
+impl CacheTtl {
+    pub fn is_default(&self) -> bool {
+        *self == Self::Default
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -244,10 +269,19 @@ pub enum ThinkingConfig {
     /// 不认识 `thinking` 字段）—— 所以它只能来自用户的显式选择，不能当默认。
     Disabled,
     /// 力度档位。各协议映射到自家参数（OpenAI 系 `reasoning_effort`、
-    /// Anthropic 折算成 `budget_tokens`）。
+    /// Anthropic 新模型 `output_config.effort`、老模型折算成 `budget_tokens`）。
     Effort { level: ThinkingEffort },
-    /// 固定预算。Anthropic 原生；OpenAI 兼容侧折算成最近的档位。
+    /// 固定预算。Anthropic 老模型原生；其它地方折算成最近的档位。
     Budget { tokens: u32 },
+    /// 自适应策略（[`ThinkingPolicy::Adaptive`]）。`hint` 是按请求序号给的档：
+    /// 首请求中档、工具续轮低档。
+    ///
+    /// `[取舍]` 不直接解析成 `Effort`，是因为"该不该逐请求切档"各协议答案
+    /// 不同。Anthropic 上思考参数一变，消息缓存就整段作废 —— 每轮在首请求
+    /// 和续轮之间切两次，等于每轮把整段历史重写两遍；那边忽略 `hint`，整个
+    /// 会话用同一档（新模型的 adaptive 本来就会按请求自己调深浅）。OpenAI
+    /// 兼容侧照 `hint` 走，行为和以前一样。
+    Adaptive { hint: ThinkingEffort },
 }
 
 /// 思考力度档。取值刻意与 OpenAI 的 `reasoning_effort` 对齐 ——
@@ -262,6 +296,15 @@ pub enum ThinkingEffort {
 }
 
 impl ThinkingEffort {
+    /// 固定预算折算成最近的档位：没有预算参数的协议都按这一张表折。
+    pub fn from_budget(tokens: u32) -> Self {
+        match tokens {
+            0..=4_096 => ThinkingEffort::Low,
+            4_097..=16_384 => ThinkingEffort::Medium,
+            _ => ThinkingEffort::High,
+        }
+    }
+
     /// OpenAI 系 `reasoning_effort` 的字面值。
     pub fn as_openai_str(self) -> &'static str {
         match self {
@@ -284,6 +327,7 @@ pub enum ThinkingPolicy {
     Default,
     /// 自适应：首请求中档（那一次要理解任务、定计划），工具续轮低档
     /// （多数续轮只是"读结果、发起下一步"，全力思考纯属烧钱烧时间）。
+    /// Anthropic 上例外：整会话同一档，见 [`ThinkingConfig::Adaptive`]。
     Adaptive,
     /// 每次请求都显式关闭思考。
     Disabled,
@@ -297,8 +341,8 @@ impl ThinkingPolicy {
     pub fn config_for(self, turn: u32) -> ThinkingConfig {
         match self {
             ThinkingPolicy::Default => ThinkingConfig::Off,
-            ThinkingPolicy::Adaptive => ThinkingConfig::Effort {
-                level: if turn == 0 {
+            ThinkingPolicy::Adaptive => ThinkingConfig::Adaptive {
+                hint: if turn == 0 {
                     ThinkingEffort::Medium
                 } else {
                     ThinkingEffort::Low
@@ -425,20 +469,20 @@ mod tests {
     fn 自适应首请求中档续轮低档() {
         assert_eq!(
             ThinkingPolicy::Adaptive.config_for(0),
-            ThinkingConfig::Effort {
-                level: ThinkingEffort::Medium
+            ThinkingConfig::Adaptive {
+                hint: ThinkingEffort::Medium
             }
         );
         assert_eq!(
             ThinkingPolicy::Adaptive.config_for(1),
-            ThinkingConfig::Effort {
-                level: ThinkingEffort::Low
+            ThinkingConfig::Adaptive {
+                hint: ThinkingEffort::Low
             }
         );
         assert_eq!(
             ThinkingPolicy::Adaptive.config_for(7),
-            ThinkingConfig::Effort {
-                level: ThinkingEffort::Low
+            ThinkingConfig::Adaptive {
+                hint: ThinkingEffort::Low
             }
         );
     }

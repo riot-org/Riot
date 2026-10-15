@@ -57,6 +57,7 @@ impl Distiller {
             max_output_tokens: Some(req.max_output_tokens.unwrap_or(DEFAULT_MAX_TOKENS)),
             // 摘要不需要思考预算，开着只是把钱花在用不上的 token 上。
             thinking: ThinkingConfig::Off,
+            cache_ttl: Default::default(),
         };
 
         let stream = self.provider.stream(request, cancel.clone());

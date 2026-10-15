@@ -172,9 +172,27 @@ struct Endpoint {
     extra_headers: Vec<(String, String)>,
 }
 
+/// 这个端点认不认 `cache_control.ttl`。
+///
+/// `[取舍]` 只认官方端点。走 Anthropic 协议的兼容入口（各家网关、国内厂商的
+/// 兼容层）对文档外或不支持的字段可能直接拒，而它们的缓存本来就不归这个
+/// 字段管 —— 为了一个偏好冒整个请求 400 的险不划算。
+fn honors_cache_ttl(base_url: &str) -> bool {
+    let rest = base_url
+        .trim()
+        .split_once("://")
+        .map_or(base_url.trim(), |(_, r)| r);
+    let host = rest.split(['/', ':']).next().unwrap_or_default();
+    host.eq_ignore_ascii_case("api.anthropic.com")
+}
+
 #[async_trait]
 impl Provider for AnthropicProvider {
     fn stream(&self, req: ProviderRequest, cancel: CancellationToken) -> ProviderStream {
+        let mut req = req;
+        if !honors_cache_ttl(&self.config.base_url) {
+            req.cache_ttl = riot_protocol::provider::CacheTtl::Default;
+        }
         let transport = Arc::clone(&self.transport);
         let clock = Arc::clone(&self.clock);
         let system = self.system.clone();
@@ -206,7 +224,9 @@ impl Provider for AnthropicProvider {
                 // `[约束]` 开了 thinking 就不能注采样：Anthropic 对
                 // thinking + temperature/top_k 的组合直接 400。思考的价值
                 // 高于用户调过的采样 —— 两者冲突时保思考、弃采样。
-                if wire.thinking.is_none() {
+                // Opus 4.7 起采样参数整个移除了（不开思考也 400），那些模型
+                // 一律不发。
+                if wire.thinking.is_none() && super::thinking::accepts_sampling(&wire.model) {
                     wire.temperature = sampling.temperature;
                     wire.top_p = sampling.top_p;
                     wire.top_k = sampling.top_k;
@@ -393,6 +413,7 @@ mod tests {
             tools: vec![],
             max_output_tokens: None,
             thinking: ThinkingConfig::Off,
+            cache_ttl: Default::default(),
         }
     }
 
@@ -756,6 +777,82 @@ mod tests {
             printed.contains("api.anthropic.com"),
             "非密字段要照常打出来，否则调试时这个 Debug 没用：{printed}"
         );
+    }
+
+    #[test]
+    fn 只有官方端点认_ttl() {
+        assert!(honors_cache_ttl("https://api.anthropic.com"));
+        assert!(honors_cache_ttl("https://API.anthropic.com/v1/"));
+        assert!(honors_cache_ttl("api.anthropic.com:443"));
+        assert!(!honors_cache_ttl("https://api.deepseek.com/anthropic"));
+        assert!(!honors_cache_ttl("https://open.bigmodel.cn/api/anthropic"));
+        assert!(!honors_cache_ttl("https://api.anthropic.com.evil.example"));
+    }
+
+    /// 长 TTL 只发给官方端点；兼容端点悄悄退回默认，不冒 400 的险。
+    #[tokio::test(start_paused = true)]
+    async fn 长_ttl_只发给官方端点() {
+        for (base_url, expect_ttl) in [
+            ("https://api.anthropic.com", true),
+            ("https://api.deepseek.com/anthropic", false),
+        ] {
+            let t = Arc::new(ScriptedTransport::new(vec![ScriptedResponse::Chunks(
+                ok_chunks(),
+            )]));
+            let p = AnthropicProvider::new(
+                Arc::clone(&t) as Arc<dyn HttpTransport>,
+                Arc::new(TokioClock),
+                sections(),
+                AnthropicConfig {
+                    base_url: base_url.into(),
+                    api_key: "sk-ant-test".into(),
+                    ..Default::default()
+                },
+            );
+            let mut r = req();
+            r.cache_ttl = riot_protocol::provider::CacheTtl::Extended;
+            let _: Vec<ProviderEvent> = p.stream(r, CancellationToken::new()).collect().await;
+            let body = String::from_utf8(t.requests()[0].body.clone()).expect("UTF-8");
+            assert_eq!(
+                body.contains(r#""ttl":"1h""#),
+                expect_ttl,
+                "{base_url}: {body}"
+            );
+        }
+    }
+
+    /// 用户调过采样参数：老模型照发，Opus 4.7 起的模型不发（发了就是 400，
+    /// 不开思考也一样）。
+    #[tokio::test(start_paused = true)]
+    async fn 新模型不发采样参数() {
+        for (model, expect_sampling) in [("claude-haiku-4-5", true), ("claude-opus-5-5", false)] {
+            let t = Arc::new(ScriptedTransport::new(vec![ScriptedResponse::Chunks(
+                ok_chunks(),
+            )]));
+            let p = AnthropicProvider::new(
+                Arc::clone(&t) as Arc<dyn HttpTransport>,
+                Arc::new(TokioClock),
+                sections(),
+                AnthropicConfig {
+                    api_key: "sk-ant-test".into(),
+                    sampling: crate::SamplingParams {
+                        temperature: Some(0.3),
+                        top_p: None,
+                        top_k: None,
+                    },
+                    ..Default::default()
+                },
+            );
+            let mut r = req();
+            r.model = model.into();
+            let _: Vec<ProviderEvent> = p.stream(r, CancellationToken::new()).collect().await;
+            let body = String::from_utf8(t.requests()[0].body.clone()).expect("UTF-8");
+            assert_eq!(
+                body.contains("temperature"),
+                expect_sampling,
+                "{model}: {body}"
+            );
+        }
     }
 
     #[tokio::test(start_paused = true)]

@@ -687,6 +687,10 @@ pub struct Session {
     /// 会话创建时刻，水合时从 transcript 首行拿到。0 = 还不知道
     /// （没水合过 / 没有持久化通道），摘录头部退回 log 的元数据。
     created_at_ms: std::sync::atomic::AtomicU64,
+    /// 测试替身：设了就不按端点建 provider，整轮装配照真的跑。只在测试里
+    /// 存在 —— 要验"两轮之间请求的前缀不变"，就得让真实的装配跑起来。
+    #[cfg(test)]
+    test_provider: std::sync::OnceLock<Arc<dyn Provider>>,
 }
 
 /// 标题截断规则：去空白、取前 40 个字符。
@@ -925,6 +929,8 @@ impl Session {
             multitask_exit_pending: AtomicBool::new(false),
             digests: std::sync::OnceLock::new(),
             created_at_ms: std::sync::atomic::AtomicU64::new(0),
+            #[cfg(test)]
+            test_provider: std::sync::OnceLock::new(),
         }
     }
 
@@ -989,6 +995,8 @@ impl Session {
             multitask_exit_pending: AtomicBool::new(false),
             digests: std::sync::OnceLock::new(),
             created_at_ms: std::sync::atomic::AtomicU64::new(0),
+            #[cfg(test)]
+            test_provider: std::sync::OnceLock::new(),
         }
     }
 
@@ -3486,7 +3494,14 @@ impl Session {
         cancel: CancellationToken,
         limits: TurnLimits,
     ) -> Result<Option<riot_protocol::event::TerminalReason>, UiError> {
-        let provider = match crate::models::provider_from_endpoint(&model) {
+        #[cfg(test)]
+        let built = match self.test_provider.get() {
+            Some(p) => Ok(Arc::clone(p)),
+            None => crate::models::provider_from_endpoint(&model),
+        };
+        #[cfg(not(test))]
+        let built = crate::models::provider_from_endpoint(&model);
+        let provider = match built {
             Ok(p) => p,
             Err(e) => {
                 // 唤醒轮起不来（配置坏了、密钥没了）不能把通知吞掉：攒回去，
@@ -3780,7 +3795,13 @@ impl Session {
         let reactive_compacted: Arc<std::sync::Mutex<Option<Vec<Message>>>> =
             Arc::new(std::sync::Mutex::new(None));
         let deps = AgentDeps {
-            provider: Arc::clone(&provider),
+            // 主循环这一份按"是不是在等后台任务"挑缓存时长；压缩、分叉、
+            // 子 agent 用的是没包过的那份（见 models::WaitAwareCache）。
+            provider: Arc::new(crate::models::WaitAwareCache {
+                inner: Arc::clone(&provider),
+                multitask: self.multitask(),
+                tasks: Arc::clone(&self.tasks),
+            }),
             // 反应式（413）路径的完整阶梯：清旧工具结果 → LLM 总结。
             // 只挂 ClearOldResults 的话，"对话本身超长"的会话一溢出就死。
             compactor: Arc::new(RecordingCompactor {
@@ -6260,6 +6281,81 @@ mod tests {
 
         assert!(s.queue_snapshot().is_empty(), "残留插话该被清空");
         assert!(s.running.lock().await.is_none(), "running 该清干净");
+    }
+
+    /// 前缀稳定性：上一轮发出去的请求，逐字节是下一轮请求的前缀。
+    ///
+    /// `[约束]` 前缀缓存按「工具 → system → 历史」逐字节比对。这条被破坏时
+    /// （system 里塞了会变的东西、工具顺序抖动、注入了又删掉的提醒、旧消息
+    /// 被改写），请求照发照回，只是缓存命中掉成 0 —— 本地完全看不出来。这里
+    /// 让真实的整轮装配连跑两轮，按 Anthropic 线上格式比对；每次都会挪位置
+    /// 的 `cache_control` 标记先去掉，它不是失效源。
+    #[tokio::test]
+    async fn 两轮之间请求前缀逐字节不变() {
+        use riot_protocol::provider::{ProviderEvent, ProviderRequest};
+
+        fn strip_markers(v: &mut serde_json::Value) {
+            match v {
+                serde_json::Value::Object(map) => {
+                    map.remove("cache_control");
+                    map.values_mut().for_each(strip_markers);
+                }
+                serde_json::Value::Array(items) => items.iter_mut().for_each(strip_markers),
+                _ => {}
+            }
+        }
+        let wire = |r: &ProviderRequest| {
+            let built = riot_providers::anthropic::build_request(
+                r,
+                &[],
+                &riot_providers::anthropic::RetryContext::initial(),
+            );
+            let mut v = serde_json::to_value(built).expect("可序列化");
+            strip_markers(&mut v);
+            v
+        };
+
+        let dir = tempfile::tempdir().expect("临时目录");
+        let s = Arc::new(Session::new(
+            SessionId::from_raw("s1"),
+            dir.path().to_path_buf(),
+            None,
+        ));
+        let scripted = Arc::new(riot_core::testing::ScriptedProvider::new(vec![
+            vec![ProviderEvent::Message(hist_assistant("a1", "第一答"))],
+            vec![ProviderEvent::Message(hist_assistant("a2", "第二答"))],
+        ]));
+        assert!(
+            s.test_provider
+                .set(Arc::clone(&scripted) as Arc<dyn Provider>)
+                .is_ok()
+        );
+        for text in ["第一问", "第二问"] {
+            let input = TurnInput {
+                text: text.into(),
+                ..Default::default()
+            };
+            s.run_turn(input, test_model(), test_caps(), test_sink(), test_limits())
+                .await
+                .expect("这一轮要跑完");
+        }
+
+        let reqs = scripted.requests();
+        assert_eq!(reqs.len(), 2, "一轮一次请求");
+        let (a, b) = (wire(&reqs[0]), wire(&reqs[1]));
+        assert!(
+            a["tools"].as_array().is_some_and(|t| t.len() > 3)
+                && a["system"].as_array().is_some_and(|s| !s.is_empty()),
+            "比的得是真东西，不是两个空数组：{a}"
+        );
+        assert_eq!(a["tools"], b["tools"], "工具列表两轮之间不能变");
+        assert_eq!(a["system"], b["system"], "system 两轮之间不能变");
+        let (ma, mb) = (
+            a["messages"].as_array().expect("messages"),
+            b["messages"].as_array().expect("messages"),
+        );
+        assert!(mb.len() > ma.len(), "第二轮多出了回答和新问题");
+        assert_eq!(ma[..], mb[..ma.len()], "上一轮的消息要原样出现在下一轮开头");
     }
 
     fn task_view(id: &str) -> riot_protocol::task::BackgroundTaskView {

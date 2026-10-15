@@ -763,6 +763,7 @@ mod tests {
                 tools: vec![],
                 max_output_tokens: None,
                 thinking: Default::default(),
+                cache_ttl: Default::default(),
             },
             CancellationToken::new(),
         );

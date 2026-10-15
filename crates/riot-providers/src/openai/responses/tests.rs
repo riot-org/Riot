@@ -29,6 +29,7 @@ fn req(messages: Vec<Message>) -> ProviderRequest {
         tools: vec![],
         max_output_tokens: Some(4096),
         thinking: ThinkingConfig::Off,
+        cache_ttl: Default::default(),
     }
 }
 

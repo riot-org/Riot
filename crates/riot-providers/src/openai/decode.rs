@@ -281,12 +281,12 @@ impl StreamDecoder {
             // DeepSeek 这种命中率常年九成的，报出来的数能是真实值的两倍。
             self.usage.input_tokens = u
                 .prompt_tokens
-                .saturating_sub(u.prompt_cache_hit_tokens.unwrap_or(0));
+                .saturating_sub(u.cached_tokens().unwrap_or(0));
         }
         if u.completion_tokens > 0 {
             self.usage.output_tokens = u.completion_tokens;
         }
-        if let Some(c) = u.prompt_cache_hit_tokens
+        if let Some(c) = u.cached_tokens()
             && c > 0
         {
             self.usage.cache_read_tokens = c;

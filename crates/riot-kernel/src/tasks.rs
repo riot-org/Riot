@@ -1381,4 +1381,40 @@ mod tests {
                 if text.contains("报告正文") && text.contains("do NOT recite")
         ));
     }
+
+    /// 主循环的请求在多任务模式或有后台任务在跑时要一小时的缓存，其余用默认。
+    ///
+    /// 同步子 agent 不算：主 agent 就在旁边等它，请求之间没有空档。
+    #[test]
+    fn 等后台任务时主循环要长缓存() {
+        use riot_protocol::provider::{CacheTtl, Provider, ProviderRequest};
+        let tasks = Arc::new(BackgroundTasks::new(SessionSink::default()));
+        let inner = Arc::new(riot_core::testing::ScriptedProvider::new(Vec::new()));
+        let wrap = |multitask| crate::models::WaitAwareCache {
+            inner: Arc::clone(&inner) as Arc<dyn Provider>,
+            multitask,
+            tasks: Arc::clone(&tasks),
+        };
+        let req = || ProviderRequest {
+            model: "m".into(),
+            messages: Vec::new(),
+            system: String::new(),
+            tools: Vec::new(),
+            max_output_tokens: None,
+            thinking: Default::default(),
+            cache_ttl: Default::default(),
+        };
+
+        start(&tasks, "sync", false, CancellationToken::new());
+        drop(wrap(false).stream(req(), CancellationToken::new()));
+        drop(wrap(true).stream(req(), CancellationToken::new()));
+        start(&tasks, "bg", true, CancellationToken::new());
+        drop(wrap(false).stream(req(), CancellationToken::new()));
+
+        let ttls: Vec<CacheTtl> = inner.requests().iter().map(|r| r.cache_ttl).collect();
+        assert_eq!(
+            ttls,
+            [CacheTtl::Default, CacheTtl::Extended, CacheTtl::Extended]
+        );
+    }
 }

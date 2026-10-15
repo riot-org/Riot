@@ -173,6 +173,7 @@ pub async fn summarize_history(
         },
         max_output_tokens: Some(SUMMARY_MAX_OUTPUT_TOKENS),
         thinking: ThinkingConfig::Off,
+        cache_ttl: Default::default(),
     };
 
     let mut stream = provider.stream(request, cancel);

@@ -16,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 
 use riot_protocol::id::MessageId;
 use riot_protocol::message::{Message, MessageMeta, UserContent};
-use riot_protocol::provider::Provider;
+use riot_protocol::provider::{CacheTtl, Provider};
 use riot_protocol::text::UiError;
 use riot_protocol::ui_error;
 use riot_providers::anthropic::request::SystemSection;
@@ -167,6 +167,44 @@ pub(crate) fn flavor_for(model: &riot_protocol::ModelEndpoint) -> Flavor {
         Flavor::Anthropic
     } else {
         Flavor::OpenAiCompatible
+    }
+}
+
+/// 主 agent 可能要等后台任务时，把请求的缓存时长偏好调成一小时（见
+/// [`CacheTtl::Extended`]）。
+///
+/// 多任务模式下主 agent 委派完就收尾、等通知叫醒；子 agent 一般要跑好几
+/// 分钟，默认 5 分钟的缓存等不到它回来，被叫醒那一轮要把整段历史重写一遍。
+/// 只包主循环的 provider：子 agent、压缩总结的请求之间没有这种空档，照旧
+/// 用默认 —— 1 小时的写入价是 2 倍，没有空档时纯属多花。
+///
+/// 后台任务数每次请求现查：任务在轮中启动，委派之后那一次请求（模型写
+/// "已派出、等通知"的那句）正是被叫醒时要读的缓存。
+pub(crate) struct WaitAwareCache {
+    pub inner: Arc<dyn Provider>,
+    /// 本轮开始时是不是多任务模式（宿主每轮现设）。
+    pub multitask: bool,
+    pub tasks: Arc<crate::tasks::BackgroundTasks>,
+}
+
+impl Provider for WaitAwareCache {
+    fn stream(
+        &self,
+        mut req: riot_protocol::provider::ProviderRequest,
+        cancel: CancellationToken,
+    ) -> riot_protocol::provider::ProviderStream {
+        if self.multitask || self.tasks.running_count() > 0 {
+            req.cache_ttl = CacheTtl::Extended;
+        }
+        self.inner.stream(req, cancel)
+    }
+
+    fn count_tokens(&self, messages: &[Message]) -> u32 {
+        self.inner.count_tokens(messages)
+    }
+
+    fn estimate_tokens_of(&self, messages: &[Message]) -> u32 {
+        self.inner.estimate_tokens_of(messages)
     }
 }
 
@@ -349,6 +387,7 @@ pub async fn test_connection(model: &ResolvedModel) -> Result<String, String> {
         // 要的是"链路通"，不是回答质量 —— 别让用户为一次握手付整段生成的钱
         max_output_tokens: Some(16),
         thinking: Default::default(),
+        cache_ttl: Default::default(),
     };
 
     let cancel = CancellationToken::new();

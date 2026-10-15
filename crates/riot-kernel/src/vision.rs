@@ -138,6 +138,7 @@ impl VisionAccess for HostVision {
             max_output_tokens: Some(MAX_TOKENS),
             // 描述一张图不需要思考预算，开着只是把钱花在用不上的 token 上。
             thinking: ThinkingConfig::Off,
+            cache_ttl: Default::default(),
         };
 
         // 这条调用不跟着某个工具的取消令牌走:它是工具内部的一步，工具自己
