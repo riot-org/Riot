@@ -21,7 +21,7 @@ export default {
   "panels.terminal.closeConfirm.body": "このターミナルには実行中のプロセスがあります。閉じると即座に終了します。",
   "panels.terminal.closeConfirm.confirm": "閉じて終了",
   "panels.terminal.reattachFailed": "再接続後にこのターミナルへ再アタッチできませんでした。すでに終了している可能性があります。",
-  "panels.terminal.processExited": "[プロセスは終了しました。ログはここに残ります。タブの × で閉じてください。]",
+  "panels.terminal.processExited": "[プロセスは終了しました。このタブは数秒後に自動で閉じます。]",
   "panels.terminal.attachFailed": "このターミナルにアタッチできません。対応するサービスが終了した可能性があります。このタブは閉じて構いません。",
   "panels.terminal.startFailed": "ターミナルを起動できませんでした。このタブを閉じて新しく開いてみてください。",
 

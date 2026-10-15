@@ -23,7 +23,7 @@ export default {
     "A process is running in this terminal. Closing will terminate it immediately.",
   "panels.terminal.closeConfirm.confirm": "Close and terminate",
   "panels.terminal.reattachFailed": "Could not reattach to this terminal after reconnecting. It may have exited.",
-  "panels.terminal.processExited": "[Process exited. The log stays here; click × on the tab to close.]",
+  "panels.terminal.processExited": "[Process exited. This tab closes automatically in a few seconds.]",
   "panels.terminal.attachFailed":
     "Could not attach to this terminal. Its service may have exited; you can close this tab.",
   "panels.terminal.startFailed": "The terminal failed to start. Close this tab and open a new one to try again.",

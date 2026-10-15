@@ -21,7 +21,7 @@ export default {
   "panels.terminal.closeConfirm.body": "이 터미널에 실행 중인 프로세스가 있습니다. 닫으면 즉시 종료됩니다.",
   "panels.terminal.closeConfirm.confirm": "닫고 종료",
   "panels.terminal.reattachFailed": "다시 연결한 뒤 이 터미널에 접속할 수 없습니다. 이미 종료되었을 수 있습니다.",
-  "panels.terminal.processExited": "[프로세스가 종료되었습니다. 로그는 여기 남습니다. 탭의 ×를 클릭해 닫으세요.]",
+  "panels.terminal.processExited": "[프로세스가 종료되었습니다. 이 탭은 몇 초 후 자동으로 닫힙니다.]",
   "panels.terminal.attachFailed": "이 터미널에 접속할 수 없습니다. 해당 서비스가 이미 종료되었을 수 있으니 이 탭을 닫아도 됩니다.",
   "panels.terminal.startFailed": "터미널을 시작하지 못했습니다. 이 탭을 닫고 새로 열어 다시 시도하세요.",
 

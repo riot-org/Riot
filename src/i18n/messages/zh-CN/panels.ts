@@ -22,7 +22,7 @@ export default {
   "panels.terminal.closeConfirm.confirm": "关闭并终止",
   /** 下面几条写进 xterm 画面里（不是 DOM）。 */
   "panels.terminal.reattachFailed": "重连后接不上这个终端，它可能已经退出了。",
-  "panels.terminal.processExited": "[进程已退出。日志留在这里，点标签上的 × 关闭。]",
+  "panels.terminal.processExited": "[进程已退出，这个标签几秒后自动关闭。]",
   "panels.terminal.attachFailed": "接不上这个终端。它对应的服务可能已经退出了，可以关掉这个标签。",
   "panels.terminal.startFailed": "终端没能启动，可以关掉这个标签再开一个试试。",
 

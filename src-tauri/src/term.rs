@@ -263,11 +263,11 @@ impl Terminals {
             shared: std::sync::atomic::AtomicBool::new(false),
             owner,
         });
-        self.0
-            .map
-            .lock()
-            .expect("terminal table lock")
-            .insert(id, Arc::clone(&term));
+        {
+            let mut map = self.0.map.lock().expect("terminal table lock");
+            prune_exited(&mut map);
+            map.insert(id, Arc::clone(&term));
+        }
 
         // Windows 的退出监视要多持一份句柄（见下）。读线程会把 term 移走，
         // 只能在这之前克隆。
@@ -574,6 +574,32 @@ impl Terminals {
     }
 }
 
+/// 退出后还留着的模型终端最多几个。
+///
+/// 留着是为了让模型读最后的报错（见 [`Term::running`]）；界面那边退出后
+/// 会自己收掉标签而不删这里的条目，所以不封顶的话，跑一天下来表里全是
+/// 早已没人看的尸体，每份还背着一整块输出缓冲。
+const KEEP_EXITED: usize = 8;
+
+/// 新起一个终端前，把超出 [`KEEP_EXITED`] 的已退出模型终端从老到新删掉。
+/// 用户自己的 shell 退出时就已经摘掉了，这里只会碰到模型起的。
+fn prune_exited(map: &mut HashMap<u32, Arc<Term>>) {
+    let mut exited: Vec<u32> = map
+        .iter()
+        .filter(|(_, t)| {
+            t.command.is_some() && !t.running.load(std::sync::atomic::Ordering::Relaxed)
+        })
+        .map(|(id, _)| *id)
+        .collect();
+    if exited.len() <= KEEP_EXITED {
+        return;
+    }
+    exited.sort_unstable();
+    for id in &exited[..exited.len() - KEEP_EXITED] {
+        map.remove(id);
+    }
+}
+
 /// 往缓冲里塞，超上限就从头砍掉一截。
 ///
 /// 一次砍四分之一而不是刚好砍到线上：贴着上限的话每来一个 chunk 都要
@@ -789,6 +815,41 @@ pub(crate) mod testing {
 mod tests {
     use super::testing::{probe, wait_until};
     use super::*;
+
+    /// 退出的模型终端留着给模型读，但不能无限攒：再起新的时只留最近
+    /// KEEP_EXITED 个。
+    #[test]
+    fn 已退出的模型终端只留最近几个() {
+        let terms = Terminals::default();
+        let root = Some(std::env::temp_dir().display().to_string());
+        let ids: Vec<u32> = (0..KEEP_EXITED + 3)
+            .map(|i| {
+                terms
+                    .spawn(root.clone(), "exit 0", &format!("t{i}"), "s1")
+                    .expect("起服务")
+            })
+            .collect();
+        assert!(
+            wait_until(|| ids
+                .iter()
+                .all(|id| terms.info(*id).is_some_and(|i| !i.running))),
+            "都该很快退出"
+        );
+
+        // 新起一个才收：起的那一刻把超出的老尸体删掉。
+        let last = terms.spawn(root, "exit 0", "last", "s1").expect("起服务");
+        let alive: Vec<u32> = terms.list().iter().map(|t| t.id).collect();
+        assert!(alive.contains(&last));
+        for old in &ids[..3] {
+            assert!(!alive.contains(old), "最老的该删掉：{old} 还在 {alive:?}");
+        }
+        for kept in &ids[3..] {
+            assert!(
+                alive.contains(kept),
+                "最近的 {KEEP_EXITED} 个留着：{kept} 不在 {alive:?}"
+            );
+        }
+    }
 
     /// 模型起的服务：跑得起来、输出留得下、进程退了条目还在。
     ///

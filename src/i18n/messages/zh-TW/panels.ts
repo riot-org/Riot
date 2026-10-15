@@ -20,7 +20,7 @@ export default {
   "panels.terminal.closeConfirm.body": "這個終端機裡有正在執行的程序，關閉會立即終止它。",
   "panels.terminal.closeConfirm.confirm": "關閉並終止",
   "panels.terminal.reattachFailed": "重新連線後接不上這個終端機，它可能已經結束了。",
-  "panels.terminal.processExited": "[程序已結束。日誌留在這裡，點分頁上的 × 關閉。]",
+  "panels.terminal.processExited": "[程序已結束，這個分頁幾秒後自動關閉。]",
   "panels.terminal.attachFailed": "接不上這個終端機。它對應的服務可能已經結束了，可以關掉這個分頁。",
   "panels.terminal.startFailed": "終端機沒能啟動，可以關掉這個分頁再開一個試試。",
 

@@ -91,8 +91,15 @@ export function TerminalPanel({
    *  悄无声息什么都不发生，比灰掉更让人困惑。 */
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const instances = useRef(new Map<string, Inst>());
-  /** 关标签的收尾。exit 事件（shell 自己退出）也走这条路。 */
-  const closeTab = (uid: string, opts?: { hostDead?: boolean }) => {
+  /** 自动收掉的模型终端（宿主条目留着给模型读）。认领轮询见到它们不再捡回来。 */
+  const dismissed = useRef(new Set<number>());
+  /**
+   * 关标签的收尾。exit 事件（shell 自己退出）也走这条路。
+   *
+   * `keepHost`：只收界面，不发 termClose —— 模型起的服务退出后自动收标签
+   * 用它：宿主那份最后的输出模型还要读（见下面 onEvent 的注释）。
+   */
+  const closeTab = (uid: string, opts?: { hostDead?: boolean; keepHost?: boolean }) => {
     const inst = instances.current.get(uid);
     if (inst) {
       inst.ro.disconnect();
@@ -105,7 +112,8 @@ export function TerminalPanel({
       inst.term.dispose();
       // shell 自己退出（exit/崩溃）时宿主已经收过尸，再发 close 只是
       // 对一个不存在的 id 的无操作 —— 但没必要发。
-      if (!opts?.hostDead && inst.hostId != null) void termClose(inst.hostId);
+      if (opts?.keepHost && inst.hostId != null) dismissed.current.add(inst.hostId);
+      else if (!opts?.hostDead && inst.hostId != null) void termClose(inst.hostId);
       instances.current.delete(uid);
     }
     setSelected((prev) => {
@@ -194,6 +202,23 @@ export function TerminalPanel({
     });
   };
 
+  // 模型起的终端退出后自己收掉，不然一次次跑下来标签越攒越多。留一小会儿
+  // 让"已退出"被看见。正看着的那个也收 —— 它常常是组里唯一的标签，等用户
+  // "切走"就永远等不到；最后的输出模型照样读得到（宿主条目留着），有结论
+  // 它会说。最后一个收掉时面板跟着收起（见 closeTab）。点 × 仍是原来的语义
+  //（连宿主条目一起删）。
+  useEffect(() => {
+    const timers = state.tabs
+      .filter((x) => x.fromAgent && x.exited)
+      .map((x) =>
+        window.setTimeout(
+          () => closeRef.current(x.uid, { keepHost: true }),
+          Math.max(0, (x.exitedAt ?? 0) + AGENT_EXIT_LINGER_MS - Date.now()),
+        ),
+      );
+    return () => timers.forEach((id) => window.clearTimeout(id));
+  }, [state.tabs]);
+
   // 模型起的服务：宿主那边已经在跑了，这里认领过来变成一个标签。
   //
   // 轮询而不是等事件：起服务发生在一轮的中间，等轮次结束才显示的话，
@@ -210,7 +235,12 @@ export function TerminalPanel({
           const known = new Set(
             [...instances.current.values()].flatMap((i) => (i.hostId == null ? [] : [i.hostId])),
           );
-          const fresh = list.filter((t) => t.command != null && !known.has(t.id));
+          // 已经退出的不认领：要么是自动收掉过的，要么在认领之前就跑完了 ——
+          // 只为了显示一个"已退出"再收掉它，是白闪一下。
+          const fresh = list.filter(
+            (t) =>
+              t.command != null && t.running && !known.has(t.id) && !dismissed.current.has(t.id),
+          );
           if (fresh.length === 0) return;
           setState((prev) => {
             // 已经认领过的不再来一遍：hostId 落地有一拍延迟，
@@ -446,13 +476,15 @@ export function TerminalPanel({
       sawExit = true;
       if (tab.fromAgent) {
         // 模型起的服务退出后，宿主**保留**条目（模型要读最后的报错），
-        // 只有 termClose 才移除。这里跟着关标签的话，本地没了、宿主还在，
-        // 3 秒一次的认领轮询又把它捡回来 —— 表现为标签几秒闪现一次，
-        // 面板关了也自己弹出来。留着标签展示最后输出，用户点 X 才真正关。
+        // 只有 termClose 才移除。标签先标成已退出，过一会儿由下面的
+        // 自动收尾只收界面（keepHost），并记进 dismissed —— 不然 3 秒一次
+        // 的认领轮询又把它捡回来，表现为标签几秒闪现一次。
         term.write(`\r\n\x1b[2m${t("panels.terminal.processExited")}\x1b[0m\r\n`);
         setState((prev) => ({
           ...prev,
-          tabs: prev.tabs.map((t) => (t.uid === tab.uid ? { ...t, exited: true } : t)),
+          tabs: prev.tabs.map((t) =>
+            t.uid === tab.uid ? { ...t, exited: true, exitedAt: Date.now() } : t,
+          ),
         }));
       } else {
         // 用户自己的 shell：exit/崩溃时宿主已把条目摘掉，这里只收尾界面。
@@ -687,11 +719,17 @@ interface Tab {
   hostId?: number;
   /** 模型起的服务（不是用户自己开的 shell）。 */
   fromAgent?: boolean;
-  /** 服务进程已退出，标签只剩日志。宿主侧条目还在，点 × 才真正移除。 */
+  /** 服务进程已退出，标签只剩日志。宿主侧条目还在，点 × 才真正移除；
+   *  不点的话过一会儿自动收掉界面（宿主条目留着给模型读）。 */
   exited?: boolean;
+  /** 退出的时刻（自动收标签从这里起算）。 */
+  exitedAt?: number;
   /** 用户把这个终端共享给模型了。只对自己开的 shell 有意义。 */
   shared?: boolean;
 }
+
+/** 模型终端退出后标签再留多久（毫秒）。 */
+const AGENT_EXIT_LINGER_MS = 5000;
 
 function mkTab(root: string | null, existing: Tab[], sessionId: string | null): Tab {
   // 同目录开出来的标签标题一模一样，撞了就加序号 —— 三个"Riot"
