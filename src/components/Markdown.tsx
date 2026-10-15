@@ -205,9 +205,10 @@ function remarkSoftBreaks() {
  * 把 `12:14:src/foo.rs` 这样的 info string 拆成 data 属性，并把 lang 换成
  * 真语言，让后面的 rehypeHighlight 照常工作。
  *
- * 做在 remark 这一层（mdast）而不是渲染时：`code` 节点的 `data.hProperties`
- * 会被 mdast-util-to-hast 应用到外层的 `<pre>` 上，正好是 [`CodeBlock`]
- * 接到的那个元素。放到渲染时再拆的话，语言已经错过高亮那一步了。
+ * 做在 remark 这一层（mdast）而不是渲染时：放到渲染时再拆的话，语言
+ * 已经错过高亮那一步了。`code` 节点的 `data.hProperties` 会被
+ * mdast-util-to-hast 应用到**内层的 `<code>`** 上（不是外层 `<pre>`），
+ * [`CodeBlock`] 从子元素的 props 里取。
  */
 function remarkCodeRefs() {
   return (tree: MdNode) => {
@@ -1113,26 +1114,28 @@ function brightness(ctx: CanvasRenderingContext2D, w: number, h: number): number
 }
 
 /** 代码块：语言标签（或代码引用的路径）+ 复制按钮。 */
-function CodeBlock(props: React.HTMLAttributes<HTMLPreElement>) {
+function CodeBlock({
+  node: _node,
+  ...props
+}: React.HTMLAttributes<HTMLPreElement> & { node?: unknown }) {
   const { t } = useT();
   const [copied, flashCopied] = useTimedFlag<"idle" | "ok" | "fail">("idle", 1500);
   const [refErr, flashRefErr] = useTimedFlag(false, 2000);
   const root = useContext(ProjectRootContext);
 
-  const child = props.children as React.ReactElement<{
-    className?: string;
-    children?: React.ReactNode;
-  }> | null;
+  const child = props.children as React.ReactElement<
+    { className?: string; children?: React.ReactNode } & Record<string, unknown>
+  > | null;
   const lang =
     child?.props?.className
       ?.split(" ")
       .find((c) => c.startsWith("language-"))
       ?.slice("language-".length) ?? "";
 
-  // remarkCodeRefs 把引用信息挂成 data 属性（见那个插件的说明），
-  // 而 React 的元素 props 类型里没有它们。
-  const attrs = props as Record<string, unknown>;
-  const str = (k: string) => (typeof attrs[k] === "string" ? (attrs[k] as string) : "");
+  // remarkCodeRefs 把引用信息挂成 data 属性，落在内层 <code> 上
+  // （见那个插件的说明）。
+  const attrs = child?.props ?? {};
+  const str = (k: string) => (typeof attrs[k] === "string" ? attrs[k] : "");
   const refPath = str("data-ref-path");
   const refStart = str("data-ref-start");
   const refEnd = str("data-ref-end");

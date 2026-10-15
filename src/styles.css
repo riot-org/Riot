@@ -76,6 +76,25 @@
      底色一抬，里面那排 pill 和图标键的 hover 就得跟着抬，见 .composer。 */
   --bg-input: #2b2b2b;
   --bg-input-hover: #363636;
+  /* 侧栏和输入框自己的一组角色。深色下全部等于通用 token（不改样子），
+     浅色照 Codex 浅色量的值另配（见浅色块）—— 两处在浅色里都要比通用
+     token 更"白、轻"，而通用 token 别处还在用，不能整体改。 */
+  --nav-text: var(--text);
+  --nav-text-dim: var(--text-dim);
+  --nav-caption: var(--text-faint);
+  /* 磨砂侧栏上罩的那层菜单底占多少（见 html[data-vibrancy] .sidebar）。 */
+  --nav-glass: 50%;
+  --composer-bg: var(--bg-input);
+  --composer-hover: var(--bg-input-hover);
+  /* 深色输入框靠底色比正文亮浮起来，不要描边和投影（见 .composer）。 */
+  --composer-edge: transparent;
+  --composer-shadow: transparent;
+  --composer-pill-border: var(--border-strong);
+  --composer-icon: var(--text-dim);
+  --composer-placeholder: var(--text-faint);
+  /* 发送键：深色是反色键（正文色当底），hover 推到纯白。 */
+  --send-bg: var(--text);
+  --send-hover: var(--lift-base);
   --border: #303030;
   --border-strong: #3d3d3d;
   --text: #ececf1;
@@ -153,6 +172,39 @@
      底色和描边不另起 token，从字色 / --ok 系打透明派生。 */
   --chip-cmd-text: #e6c9a4;
   --chip-elem-text: #8fd6a0;
+  /* Markdown 正文的配色角色（规则见「Markdown 正文」一节）。
+     全中性的回答读久了累：满屏白字灰框，结构全靠字号撑。颜色只给
+     **出现得少**的东西：蓝管"骨架"——标题、表头、引用竖线；
+     珊瑚红给行内代码。链接仍是 --accent-text，和标题的浅蓝靠字号字重分开。
+
+     `[约束]` 加粗不许上色。模型加粗用得极多（一屏常有五分之一的字是
+     粗的），染了色就是满屏彩字，什么都不突出，比全灰还累；染红还撞
+     语义 —— A 股红是涨，「−0.73%」标红读着像在涨，「缺失」标红像报错；
+     红字紧贴蓝标题，两种饱和色在深底上还会"浮"在不同深度上，看着发颤。
+     也别靠"更亮"跳 —— 试过正文压暗、加粗提到最亮，一屏的粗字像在发光。
+     照 Claude 桌面端量的：加粗和正文**同色**，只靠字重区分。
+
+     正文色也是照 Claude 量的暖白（#f0efec，带一点黄）。界面其余部分的
+     灰阶是纯中性的，但大段阅读的字偏暖一点比冷白柔和，看久了不扎眼。
+
+     字面量（正文 / 标题 / 行内代码的字色）在浅色块里各有一份；
+     其余从它们或 accent 派生，跟着主题自己算。 */
+  --md-text: #f0efec;
+  --md-strong: currentColor;
+  --md-heading: #a9c8f2;
+  --md-code-text: #ec7b7b;
+  --md-code-bg: color-mix(in srgb, var(--md-code-text) 10%, transparent);
+  --md-code-border: color-mix(in srgb, var(--md-code-text) 22%, transparent);
+  /* 项目符号和序号：正文色打 78%，比字退一档（Claude 量出来是 #c3c2b7，
+     正好是这个比例）。实心圆点和正文同亮度会显得比字还亮 —— 字是细笔画，
+     点是一整块。也不用蓝：蓝点一列排下来，在左边缘连成一道彩色竖线。
+     用 currentColor 而不是 --md-text：思考块这种淡色容器里跟着一起淡。 */
+  --md-marker: color-mix(in srgb, currentColor 78%, transparent);
+  --md-quote-bar: var(--accent);
+  --md-quote-bg: color-mix(in srgb, var(--accent) 9%, transparent);
+  --md-quote-text: var(--text-soft);
+  --md-th-bg: color-mix(in srgb, var(--accent) 12%, transparent);
+  --md-th-text: var(--md-heading);
   /* 文件类型图标（seti 字形，.file-icon 和引用块的 ::before）的整体滤镜。
      lib/fileIcons.ts 里的颜色是 VS Code seti 主题的**深色**那组（.txt 的
      默认灰 #d4d7d6、.js 的黄 #cbcb41），是给深底调的；VS Code 自己在浅色
@@ -274,13 +326,37 @@ html[data-theme='light'] {
   --bg-side: #f6f6f6;
   --bg-card: #f4f4f4;
   --bg-hover: #ececec;
-  --bg-nav: #f3f3f3;
-  --bg-nav-hover: #e8e8e8;
-  --bg-nav-active: #e0e0e0;
-  /* 输入条不能和正文同白 —— 它没有描边，全靠底色差浮起来（见 .composer）。
-     比卡片再灰一点，pill 的 hover 再往下一档。 */
+  /* 侧栏照 Codex 浅色：#f7f7f8，hover / 选中各往下一小档。 */
+  --bg-nav: #f7f7f8;
+  --bg-nav-hover: #efefef;
+  --bg-nav-active: #e8e8e8;
+  /* 文件树过滤框这类小输入框的底：比卡片再灰一点。输入条另有 --composer-bg。 */
   --bg-input: #f0f0f0;
   --bg-input-hover: #e3e3e3;
+  /* 侧栏文字不用纯黑：项目和会话都是偏冷的深灰 #3a3d3f，分组标题再淡到
+     #a6a8a8（照 Codex 量的）。分组标题低于 AA，但它是"最近 / 项目"这种
+     看位置就知道的路标，不是要读的内容；侧栏里要读的小字仍走 --text-faint。
+     浅色侧栏不透磨砂（罩层 100%）：macOS 浅色材质是一层随背后窗口变的灰，
+     罩 50% / 80% 都会把它透上来，侧栏就落不到 #f7f7f8。 */
+  --nav-text: #3a3d3f;
+  --nav-text-dim: #3a3d3f;
+  --nav-caption: #a6a8a8;
+  --nav-glass: 100%;
+  /* 输入框照 Codex 浅色：纯白框 + 一圈细灰边 + 很淡的投影。和正文同白，
+     所以靠边和影浮起来（深色那套"靠底色浮起来"在白底上没有可抬的余地）。
+     框里：占位字很淡 #c7c7c8，图标和正文同一个近黑 #191c1f，pill 描边
+     回到普通 --border —— 白底上 strong 那档太重。 */
+  --composer-bg: #ffffff;
+  --composer-hover: #f0f0f0;
+  --composer-edge: #e8e8e8;
+  --composer-shadow: rgba(0, 0, 0, 0.06);
+  --composer-pill-border: var(--border);
+  --composer-icon: #191c1f;
+  --composer-placeholder: #c7c7c8;
+  /* 发送键照 Codex 浅色用亮蓝（空框时 disabled 的 0.4 透明正好是它那种
+     浅蓝）。hover 往深蓝压一档。 */
+  --send-bg: #3f83f8;
+  --send-hover: #2f6fe0;
   --border: #e4e4e4;
   --border-strong: #d0d0d0;
   --text: #1a1a1a;
@@ -331,6 +407,14 @@ html[data-theme='light'] {
   --on-accent: #ffffff;
   --chip-cmd-text: #7d5019;
   --chip-elem-text: #166534;
+  /* 正文暖黑（同样带一点黄，≈16:1）。标题深蓝 ≈7.9:1。
+     行内代码照 Claude 浅色量的：深砖红字压在**中性**灰底灰边上（≈7.5:1）。
+     白底上把底和边也染红，整枚标签发粉，像报错提示；红只留给字。 */
+  --md-text: #1f1e1d;
+  --md-heading: #1f4f9a;
+  --md-code-text: #8e2726;
+  --md-code-bg: #f0f0ef;
+  --md-code-border: #dadad9;
   /* seti 图标压暗一成 = VS Code 浅色主题给这套图标配的那组值（见 :root）。
      不压的话 .txt / .spec / .har 这类走默认灰 #d4d7d6 的图标在白底上只有
      1.4:1，基本看不见。 */
@@ -495,7 +579,7 @@ html[data-vibrancy] .main {
    打架；太实就只是一块灰。65% 下背后是隐约可辨的形状和明暗，侧栏
    自己的色调还认得出。 */
 html[data-vibrancy] .sidebar {
-  background: color-mix(in srgb, var(--bg-nav) 50%, transparent);
+  background: color-mix(in srgb, var(--bg-nav) var(--nav-glass), transparent);
   /* hover / 选中也得让材质透过去：实心灰会在磨砂上抠出一块不透明的
      补丁，材质的色相进不来。--lift-* 叠在任何底上都是「抬一档」，
      并且随主题翻方向（深色白透明、浅色黑透明），这里不用再写浅色版。 */
@@ -1345,6 +1429,9 @@ html[data-host='web'] body {
   flex-shrink: 0;
   background: var(--bg-nav);
   --bg-hover: var(--bg-nav-hover);
+  /* 侧栏文字的两档就地换成菜单区自己的（浅色比通用的更轻，见 --nav-text）。 */
+  --text: var(--nav-text);
+  --text-dim: var(--nav-text-dim);
   display: flex;
   flex-direction: column;
   padding: 0 10px 10px;
@@ -1409,7 +1496,7 @@ html[data-host='web'] body {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.6px;
-  color: var(--text-faint);
+  color: var(--nav-caption);
   padding: 0 10px;
 }
 
@@ -3047,7 +3134,8 @@ html[data-host='web'] body {
 
 .msg.assistant {
   align-self: stretch;
-  color: var(--text);
+  /* 阅读用的暖白，见 :root 的 --md-text。 */
+  color: var(--md-text);
 }
 
 /* 键盘逐条跳到的那条消息（见 Transcript 的键盘导航）。只在键盘聚焦时画框。 */
@@ -3859,6 +3947,8 @@ html[data-host='web'] body {
 .chip[data-glyph]::before {
   content: attr(data-glyph);
   width: 14px;
+  /* seti 字形右侧自带留白，加上块的 4px gap 离文件名太远，吃进 3px。 */
+  margin-right: -3px;
   height: auto;
   opacity: 1;
   background: none;
@@ -4029,6 +4119,7 @@ html[data-host='web'] body {
    图标是字形不是文字，baseline 对不齐，这一种按中线排。 */
 .slash-file {
   align-items: center;
+  gap: 6px;
   padding-block: 4px;
 }
 
@@ -4908,8 +4999,10 @@ html[data-host='web'] body {
   font-size: 13px;
 }
 
-/* 全屏最浅的一块，靠底色差自己浮起来 —— 所以**不画描边**。底色已经
-   把它和正文区分开了，再套一圈线只是重复一遍同一件事。
+/* 深色：全屏最浅的一块，靠底色差自己浮起来 —— 所以**不画描边**。底色已经
+   把它和正文区分开了，再套一圈线只是重复一遍同一件事。浅色的框和正文
+   同白，改由细边 + 淡投影浮起来；两者都走 token（深色里是透明），几何
+   不分叉。
 
    代价是两样东西会溶进这块新底色，就地各抬一档：hover 反馈（图标键、
    pill、停止键都走 --bg-hover），以及 pill 的轮廓（深色 --border 对
@@ -4918,9 +5011,12 @@ html[data-host='web'] body {
    吃这个变量的是里面那排 pill。pill 的 hover 于是和常态描边同色，
    反馈由抬亮的底色承担。 */
 .composer {
-  background: var(--bg-input);
-  --bg-hover: var(--bg-input-hover);
-  --border: var(--border-strong);
+  background: var(--composer-bg);
+  --bg-hover: var(--composer-hover);
+  --border: var(--composer-pill-border);
+  box-shadow:
+    0 0 0 1px var(--composer-edge),
+    0 2px 12px var(--composer-shadow);
   border-radius: 20px;
   padding: 10px 12px 8px;
   /* 拖拽高亮走 inset 阴影（见 .composer.dragging）—— 没有常驻边框可
@@ -5138,7 +5234,7 @@ body.file-dragging.file-drop-hot * {
   position: absolute;
   left: 4px;
   top: 2px;
-  color: var(--text-faint);
+  color: var(--composer-placeholder);
   pointer-events: none;
 }
 
@@ -5194,7 +5290,7 @@ body.file-dragging.file-drop-hot * {
   background: transparent;
   border: none;
   border-radius: 7px;
-  color: var(--text-dim);
+  color: var(--composer-icon);
 }
 
 .composer-icon:hover:not(:disabled) {
@@ -5312,9 +5408,9 @@ body.file-dragging.file-drop-hot * {
   flex: 1;
 }
 
-/* 发送键是整页唯一的反色键：正文色当底、底色当图标（深色是白底黑箭头，
-   浅色自动翻成黑底白箭头）。图标走 --bg 而不是手写近黑 —— 深色下 #181818
-   和原先的 #111 差不出来，浅色下它就是白。 */
+/* 发送键：深色是整页唯一的反色键（正文色当底、底色当图标，白底黑箭头）；
+   浅色照 Codex 用亮蓝底白箭头（见 --send-bg）。图标走 --bg 而不是手写
+   近黑 —— 深色下 #181818 和原先的 #111 差不出来，浅色下它就是白。 */
 .send {
   flex: none;
   width: 28px;
@@ -5323,8 +5419,8 @@ body.file-dragging.file-drop-hot * {
   padding: 0;
   display: grid;
   place-items: center;
-  background: var(--text);
-  border-color: var(--text);
+  background: var(--send-bg);
+  border-color: var(--send-bg);
   color: var(--bg);
 }
 
@@ -5338,7 +5434,8 @@ body.file-dragging.file-drop-hot * {
 /* hover 推到极色（--lift-base：深色纯白、浅色纯黑）只属于"发送"态：
    busy 时这个按钮是停止键（.send.stop），有自己的底色语义，不能跟着变。 */
 .send:hover:not(:disabled):not(.stop) {
-  background: var(--lift-base);
+  background: var(--send-hover);
+  border-color: var(--send-hover);
 }
 
 /* 停止键：极色底 + 底色方块，和发送键的"反色底、底色图标"同一套语言 ——
@@ -6012,6 +6109,9 @@ body.file-dragging.file-drop-hot * {
 .tree-slot .file-icon {
   width: auto;
   font-size: 15px;
+  /* 槽宽要和目录箭头一致不能收，图标靠右贴名字，同样吃进字形留白。 */
+  justify-self: end;
+  margin-right: -3px;
 }
 
 .tree-slot .chevron {
@@ -6206,12 +6306,45 @@ body.file-dragging.file-drop-hot * {
   overflow: auto;
   overscroll-behavior: none;
   background: var(--bg);
+  /* 和对话里的回答同一个正文色（见 --md-text）。 */
+  color: var(--md-text);
   padding: 20px 24px 40px;
 }
 
 .markdown-doc .md {
   max-width: 760px;
   margin: 0 auto;
+}
+
+/* 文件预览是文档不是对话：一级、二级标题按文档的尺度放大，底下画线
+   分节（聊天里不画，回答里的 ## 太多，满屏横线）。 */
+.markdown-doc-body h1 {
+  font-size: 1.75em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border);
+}
+
+.markdown-doc-body h2 {
+  font-size: 1.4em;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--border);
+}
+
+.markdown-doc-body h3 {
+  font-size: 1.2em;
+}
+
+/* 预览走 micromark 出纯 HTML，代码块没有聊天里 CodeBlock 那层壳，
+   在这里补上同样的框。 */
+.markdown-doc-body pre {
+  margin: 0.8em 0;
+  padding: 12px 14px;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-side);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 /* 代码预览 / 编辑器（CodeMirror，见 lib/codeEditor）。滚动在编辑器自己的
@@ -9601,93 +9734,229 @@ button.field-slider-state:hover {
 }
 
 .md p {
-  margin: 0.55em 0;
+  margin: 0.65em 0;
   line-height: 1.7;
 }
 
+/* 标题要拉开层级：以前 h2 只比正文大 15%、h3/h4 干脆和粗体正文一样大，
+   一段回答里分了三级标题也读不出结构。字号拉开之外，上边距也给足 ——
+   新的一节从留白开始，比画分隔线安静。
+   思考 / 通知卡 / 计划面板里各自把标题收回正文字号（见那几处的覆盖），
+   这里的放大只管正文。 */
 .md h1,
 .md h2,
 .md h3,
 .md h4 {
-  margin: 1.1em 0 0.45em;
+  margin: 1.45em 0 0.5em;
   line-height: 1.35;
   font-weight: 600;
+  color: var(--md-heading);
+}
+
+.md strong {
+  color: var(--md-strong);
 }
 
 .md h1 {
-  font-size: 1.3em;
+  font-size: 1.45em;
 }
 
 .md h2 {
-  font-size: 1.15em;
+  font-size: 1.25em;
 }
 
-.md h3,
+.md h3 {
+  font-size: 1.1em;
+}
+
 .md h4 {
-  font-size: 1.02em;
+  font-size: 1em;
 }
 
 .md ul,
 .md ol {
-  margin: 0.45em 0;
-  padding-left: 1.5em;
+  margin: 0.6em 0;
+  padding-left: 1.6em;
 }
 
 .md li {
-  margin: 0.22em 0;
-  line-height: 1.65;
+  margin: 0.3em 0;
+  padding-left: 0.15em;
+  line-height: 1.7;
+}
+
+/* 嵌套列表贴着父条目，别和父列表一样留整段的上下边距。 */
+.md li > :is(ul, ol) {
+  margin: 0.25em 0;
 }
 
 .md li > p {
-  margin: 0.2em 0;
+  margin: 0.25em 0;
 }
 
-.md blockquote {
-  margin: 0.6em 0;
-  padding: 1px 12px;
-  border-left: 3px solid var(--border-strong);
+/* 序号用等宽数字，9. 和 10. 的点对得齐。 */
+.md li::marker {
+  color: var(--md-marker);
+}
+
+.md ol > li::marker {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 任务列表（`- [ ]` / `- [x]`）：勾选框放进项目符号的位置，文字和普通
+   条目对齐。勾选框是只读的展示，不能吃全局 input 的文本框皮肤（圆角
+   描边 + 内边距，disabled 再打半透明），这里整套重画。
+   聊天里 react-markdown 会挂 .task-list-item，文件预览的 micromark 不挂，
+   所以按结构认：条目的第一个子元素是勾选框（松散列表包在 <p> 里）。 */
+.md li:has(> input[type='checkbox']:first-child),
+.md li:has(> p:first-child > input[type='checkbox']:first-child) {
+  list-style: none;
+}
+
+.md li input[type='checkbox'] {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  /* 用 px 不用 em：input 的字号被全局钉在 13px，em 跟着它而不是正文。
+     右边距收得很小：勾选框后面还跟着源码里的那个空格，左移 19px、
+     框宽 14px、右距 1px 加上空格，文字正好落回普通条目的起始线。 */
+  margin: 0 1px 0 -19px;
+  padding: 0;
+  vertical-align: -2px;
+  border: 1.5px solid color-mix(in srgb, var(--text-faint) 70%, transparent);
+  border-radius: 4px;
+  background: transparent;
+  opacity: 1;
+}
+
+.md li input[type='checkbox']:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+/* 对勾：旋转 45° 的 L 形边框。 */
+.md li input[type='checkbox']:checked::after {
+  content: '';
+  position: absolute;
+  left: 3.5px;
+  top: 0.5px;
+  width: 3.5px;
+  height: 7px;
+  border: solid var(--on-accent);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+}
+
+/* 做完的条目退成次要色：一眼看出还剩哪几条。 */
+.md li:has(> input[type='checkbox']:checked:first-child),
+.md li:has(> p:first-child > input[type='checkbox']:checked:first-child) {
   color: var(--text-dim);
 }
 
-.md code {
+/* 引用：一条竖线 + 很淡的底，读起来是"旁注"而不是缩进错了的正文。
+   底色用 --lift-1 而不是实心灰 —— 思考、通知卡里底色各不相同。 */
+.md blockquote {
+  margin: 0.8em 0;
+  padding: 0.5em 14px;
+  border-left: 3px solid var(--md-quote-bar);
+  border-radius: 0 8px 8px 0;
+  background: var(--md-quote-bg);
+  color: var(--md-quote-text);
+}
+
+.md blockquote > :first-child {
+  margin-top: 0;
+}
+
+.md blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+/* 行内代码：卡片底 + 一圈细描边，在浅色白底上也认得出是一枚"块"。
+   字号比正文小一号 —— 等宽字体的字面比中文无衬线大，0.92em 会显得
+   比旁边的字还胖。
+   只管行内（`:not(pre) >`）：代码块里的 <code> 带着 highlight.js 的
+   .hljs 底色和正文色，这里的颜色一旦压上去，整块代码的底色字都会被染。 */
+.md :not(pre) > code {
   font-family: var(--mono);
-  font-size: 0.92em;
-  background: var(--bg-hover);
-  padding: 1.5px 5px;
+  font-size: 0.88em;
+  color: var(--md-code-text);
+  background: var(--md-code-bg);
+  border: 1px solid var(--md-code-border);
+  padding: 0.1em 0.4em;
   border-radius: 5px;
 }
 
+/* 链接里的代码随链接色，不然点得到却看不出是链接。 */
+.md a code {
+  color: inherit;
+}
+
+/* 表格：外框圆角 + 只画行线。全网格描边像电子表格，竖线把一行
+   拆成了几块，读行的时候反而被打断。
+   display:block 是为了宽表自己横向滚动；fit-content 让外框贴着内容，
+   不会窄表配一个满宽的空框。separate 才能让圆角裁住表头底色。 */
 .md table {
-  border-collapse: collapse;
-  margin: 0.6em 0;
   display: block;
+  width: fit-content;
+  max-width: 100%;
   overflow-x: auto;
+  margin: 0.8em 0;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
   font-size: 13px;
+  font-variant-numeric: tabular-nums;
 }
 
 .md th,
 .md td {
-  border: 1px solid var(--border);
-  padding: 5px 10px;
+  padding: 7px 14px;
+  border-bottom: 1px solid var(--border);
+  line-height: 1.55;
+}
+
+/* 默认左对齐（th 的 UA 默认是居中）。GFM 的 `---:` 对齐：聊天里
+   react-markdown 写成行内 style，优先级本来就高；文件预览的 micromark
+   写成 align 属性，那是比作者样式低的"表现提示"，得用 :not 让开。 */
+.md th:not([align]) {
+  text-align: left;
 }
 
 .md th {
-  background: var(--bg-side);
+  font-weight: 600;
+  color: var(--md-th-text);
+  background: var(--md-th-bg);
+}
+
+.md tbody tr:last-child > td {
+  border-bottom: none;
+}
+
+.md tbody tr:hover > td {
+  background: var(--lift-1);
 }
 
 .md hr {
   border: none;
   border-top: 1px solid var(--border);
-  margin: 1.1em 0;
+  margin: 1.6em 0;
 }
 
+/* 链接常驻一条淡下划线：只靠颜色区分的话，色弱用户和浅色主题下
+   都不够显眼。悬停时下划线实起来。 */
 .md a {
   color: var(--accent-text);
-  text-decoration: none;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-decoration-color: color-mix(in srgb, var(--accent-text) 35%, transparent);
+  text-underline-offset: 3px;
+  transition: text-decoration-color var(--dur-1) var(--ease-out);
 }
 
 .md a:hover {
-  text-decoration: underline;
+  text-decoration-color: currentColor;
 }
 
 /* 链接打开失败的行内提示。只改 title 的话得恰好悬停着才看得见，
@@ -10119,11 +10388,14 @@ button.field-slider-state:hover {
   background: var(--bg-side);
 }
 
+/* 标题条比代码区抬一档：语言名 / 文件路径和代码本身分得开，
+   不用只靠一条细线。 */
 .codeblock-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 4px 12px;
+  padding: 4px 6px 4px 12px;
+  background: var(--lift-1);
   border-bottom: 1px solid var(--border);
 }
 
@@ -10543,6 +10815,11 @@ button.think-head:hover,
 }
 
 .think-body {
+  /* 思考靠小字淡色压着（见下面标题的说明），正文的红代码在这里会
+     跳出来抢戏 —— 收回中性。加粗和序号本来就跟着 currentColor 走。 */
+  --md-code-text: currentColor;
+  --md-code-bg: var(--bg-card);
+  --md-code-border: var(--border);
   margin: 6px 0 0 2px;
   color: var(--text-faint);
   font-size: 13px;
@@ -11102,14 +11379,17 @@ button.fold-head:hover,
 }
 
 /* 文件类型图标：seti 字体字形，颜色由映射数据内联（跟 Cursor 一致）。
-   字号给到 15px —— seti 的字形设计得偏小，VS Code 自己也放 150%。 */
+   字号给到 16px —— seti 的字形设计得偏小，VS Code 自己也放 150%。 */
 .file-icon {
   flex-shrink: 0;
-  width: 22px;
+  /* 字形自带左右留白，框再宽就和文件名隔得太开；框收到和字形一样宽。 */
+  width: 16px;
+  /* 字形右侧还有留白，往名字那边再吃进 3px。 */
+  margin-right: -3px;
   display: grid;
   place-items: center;
   font-family: 'seti';
-  font-size: 18px;
+  font-size: 16px;
   line-height: 1;
   font-weight: 400;
   user-select: none;
@@ -11712,7 +11992,7 @@ button.fold-head:hover,
   background: none;
   border: none;
   text-align: left;
-  color: var(--text-faint);
+  color: var(--nav-caption);
 }
 
 .section-toggle:hover {
