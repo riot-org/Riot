@@ -342,7 +342,13 @@ function atGuardWall(root: HTMLElement, dir: 1 | -1): boolean {
   const text = cur.node.nodeValue ?? "";
   const rest = dir === -1 ? text.slice(0, cur.offset) : text.slice(cur.offset);
   if (rest.replace(PAD_RE, "") !== "") return false;
-  return (dir === -1 ? cur.node.previousSibling : cur.node.nextSibling) === null;
+  // "墙"是编辑区的边，不是所在节点的边：原生回车会把新行包进 `<div>`，
+  // 行首的文本节点在 div 里没有兄弟，只看这一层会把行首当成顶墙 ——
+  // 退格被吞掉，换行删不掉。一路看到 root 为止。
+  for (let n: Node | null = cur.node; n && n !== root; n = n.parentNode) {
+    if ((dir === -1 ? n.previousSibling : n.nextSibling) !== null) return false;
+  }
+  return true;
 }
 
 /**

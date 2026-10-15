@@ -52,7 +52,7 @@ import {
 import { findHits, findTextRanges } from "../lib/findHits";
 import { type LiveTextStore, useLiveText } from "../lib/liveText";
 import { ENTER_TRANSCRIPT_EVENT } from "../lib/transcriptNav";
-import { estimateTurnHeight, isLongUserText } from "../lib/turnHeight";
+import { estimateTurnHeight, isLongUserText, lastAssistantIndex } from "../lib/turnHeight";
 import { openPlanPanel } from "../lib/plan";
 import { Chevron } from "./Chevron";
 import { Chip, FileChip } from "./Chip";
@@ -1808,7 +1808,12 @@ export const Transcript = memo(function Transcript({
             {...(ti === turns.length - 1 ? { "data-tail": "" } : {})}
             {...(busy && ti === turns.length - 1 ? { "data-live": "" } : {})}
           >
-            {t.blocks.map((b, bi) => {
+            {(() => {
+              // 操作栏按轮挂：只给这一轮最后一条回答。生成中的那一轮先都不挂
+              // —— 后面还会冒出新正文，挂了又摘会让上面的内容跳一下；结束时
+              // 挂在轮尾，只往下长。
+              const actionsAt = busy && ti === turns.length - 1 ? -1 : lastAssistantIndex(t.blocks);
+              return t.blocks.map((b, bi) => {
               // 懒水合的窗口按块数算，所以要用块在 blocks 里的原下标。
               const i = t.from + bi;
               const rowKey = b.kind === "row" ? keyOf(b.item.id) : "";
@@ -1818,6 +1823,7 @@ export const Transcript = memo(function Transcript({
                   item={b.item}
                   enter={fresh.has(rowKey)}
                   hydrate={i >= hydrateFrom || findHydrate.has(b.item.id)}
+                  actions={bi === actionsAt}
                   regenEnabled={!busy}
                   mutateEnabled={!busy}
                   {...(onRegenerate ? { onRegenerate: requestRegenerate } : {})}
@@ -1842,7 +1848,8 @@ export const Transcript = memo(function Transcript({
                     : {})}
                 />
               );
-            })}
+              });
+            })()}
           </div>
         ))}
 
@@ -1949,6 +1956,7 @@ function LiveMarkdown({ live }: { live: LiveTextStore }) {
  */
 export const Row = memo(function Row({
   item,
+  actions = true,
   enter = false,
   onRegenerate,
   regenEnabled,
@@ -1964,6 +1972,8 @@ export const Row = memo(function Row({
   mutateEnabled,
 }: {
   item: Item;
+  /** 回答底下挂不挂操作栏：对话流里一轮只有最后一条回答挂（见 lastAssistantIndex）。默认挂。 */
+  actions?: boolean;
   /**
    * 这条是刚冒出来的（不是水合进来的历史）：挂上时轻轻淡入。只看挂载
    * 那一刻的值 —— 之后 Transcript 会把它翻回 false，动画不能因此被掐断。
@@ -2096,15 +2106,17 @@ export const Row = memo(function Row({
           {/* 半截话得说明白它为什么半截 —— 不标的话，用户过一会儿回来
               看到的是一句戛然而止的回答，分不清是自己停的还是模型崩了。 */}
           {item.stopped ? <div className="msg-stopped">{t("transcript.msg.stopped")}</div> : null}
-          <MsgActions
-            text={item.text}
-            regenEnabled={!!regenEnabled && !!onRegenerate}
-            mutateEnabled={!!mutateEnabled}
-            {...(item.at ? { at: item.at } : {})}
-            {...(onRegenerate ? { onRegenerate: () => onRegenerate(item.id) } : {})}
-            {...(onEditEntry ? { onEdit: () => setEditing(true) } : {})}
-            {...(onDeleteEntry ? { onDelete: () => onDeleteEntry(item) } : {})}
-          />
+          {actions ? (
+            <MsgActions
+              text={item.text}
+              regenEnabled={!!regenEnabled && !!onRegenerate}
+              mutateEnabled={!!mutateEnabled}
+              {...(item.at ? { at: item.at } : {})}
+              {...(onRegenerate ? { onRegenerate: () => onRegenerate(item.id) } : {})}
+              {...(onEditEntry ? { onEdit: () => setEditing(true) } : {})}
+              {...(onDeleteEntry ? { onDelete: () => onDeleteEntry(item) } : {})}
+            />
+          ) : null}
         </div>
       );
     case "thinking":

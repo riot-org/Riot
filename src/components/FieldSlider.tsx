@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useLayoutEffect, useRef } from "react";
 
 import type { Sampling } from "../bridge";
 import { useT } from "../i18n";
@@ -16,6 +16,39 @@ import { FieldNumber } from "./FieldNumber";
 import { HintTip } from "./HintTip";
 
 const SLIDER_STEPS = 1000;
+
+let measureCtx: CanvasRenderingContext2D | null = null;
+
+/**
+ * 数字格按里面的字撑宽。CSS 的宽度只够数字；占位里的「模型默认」各语言
+ * 长短差好几倍（英文、日文在 72px 里都被截掉），写死一个宽度要么英文截断、
+ * 要么中文空一大截。`field-sizing: content` 能做这件事，但 macOS 26 之前的
+ * WKWebView 不认，只能量。
+ *
+ * 只往宽里撑：CSS 的 `width` 当下限，数字态的格子宽度不变。
+ */
+function useFitWidth(text: string) {
+  const ref = useRef<HTMLInputElement>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    measureCtx ??= document.createElement("canvas").getContext("2d");
+    if (!measureCtx) return;
+    const cs = getComputedStyle(el);
+    measureCtx.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+    const chrome =
+      parseFloat(cs.paddingLeft) +
+      parseFloat(cs.paddingRight) +
+      parseFloat(cs.borderLeftWidth) +
+      parseFloat(cs.borderRightWidth);
+    // +2：亚像素取整和光标本身的宽度，正好贴边时末字会被裁掉半个。
+    const need = Math.ceil(measureCtx.measureText(text).width + chrome + 2);
+    // 设 min-width 不设 width：CSS 那个宽度自动当下限，也不用读布局 ——
+    // 面板还没展开时 offsetWidth 是 0。
+    el.style.minWidth = `${need}px`;
+  }, [text]);
+  return ref;
+}
 
 function parseDraft(raw: string): number | null {
   const t = raw.trim();
@@ -81,6 +114,9 @@ export function FieldSlider({
         ? defaultLabel
         : t("composer.sampling.inherit", { value: inheritLabel });
 
+  const placeholder = off || inheritLabel == null ? defaultLabel : inheritLabel;
+  const numRef = useFitWidth(value || placeholder);
+
   const pending = useRef<string | null>(null);
 
   const write = (n: number) => {
@@ -113,9 +149,10 @@ export function FieldSlider({
             填成真值的话，想设的数恰好等于继承值时敲不出变化 —— 而
             "0."、"-" 这类中间态也会被当成非法值抹掉。 */}
         <FieldNumber
+          ref={numRef}
           className="field-slider-num"
           value={value ?? ""}
-          placeholder={off || inheritLabel == null ? defaultLabel : inheritLabel}
+          placeholder={placeholder}
           onChange={(e) => onChange(e.target.value)}
           onBlur={() => {
             if (value === null) return;

@@ -414,7 +414,7 @@ export const ProcessGroup = memo(
                 {act.thinking && thinkingClock ? <LiveElapsed clock={thinkingClock} /> : null}
               </>
             ) : (
-              <span className={`fold-label${settledCls}`} title={summary}>
+              <span className={`fold-label${settledCls}`}>
                 {summary}
               </span>
             )}

@@ -345,7 +345,7 @@ const PlainToolCard = memo(function PlainToolCard({
       <span className="tool-name">{tool.name}</span>
       {/* 失败不能只靠 12px 图标变红 —— 扫视时根本发现不了 */}
       {tool.status === "error" ? <span className="tool-fail">{t("common.failed")}</span> : null}
-      <span className="tool-summary" title={filePathOf(tool) || summary}>
+      <span className="tool-summary" title={filePathOf(tool) || bashCommandOf(tool) || summary}>
         {summary}
       </span>
       {stat ? (
@@ -449,8 +449,11 @@ export function summarize(tool: Tool): string {
       const progress = t("transcript.tool.todo.progress", { done, total: todos.length });
       return `${progress}${doing?.activeForm ? ` · ${doing.activeForm}` : ""}`;
     }
+    // 摘要行放模型写的那句描述（照 Claude）：一长串命令截成一行没人读得完，
+    // 「列出摘要目录」才一眼看得懂。没给描述才退回命令；完整命令在悬停
+    // 提示和展开区。
     case "Bash":
-      return str("command");
+      return str("description").trim() || str("command");
     // 计划有自己的卡（PlanCard）；这条只给过程组的直播头和旧 transcript
     // 里的 ExitPlanMode 用。不写的话会落到 default，把整份计划 dump 进摘要行。
     case PLAN_TOOL:
@@ -621,6 +624,13 @@ function filePathOf(tool: Tool): string {
   if (!FILE_TOOLS.has(tool.name)) return "";
   const i = tool.input as Record<string, unknown>;
   const v = i?.path ?? i?.file_path;
+  return typeof v === "string" ? v : "";
+}
+
+/** Bash 的完整命令。摘要行放的是描述，命令留给悬停提示。 */
+function bashCommandOf(tool: Tool): string {
+  if (tool.name !== "Bash") return "";
+  const v = (tool.input as Record<string, unknown>)?.command;
   return typeof v === "string" ? v : "";
 }
 

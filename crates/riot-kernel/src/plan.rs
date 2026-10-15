@@ -31,7 +31,9 @@
 
 use std::path::Path;
 
-use riot_protocol::message::{AssistantContent, Message, ToolResultContent, UserContent};
+use riot_protocol::message::{
+    AssistantContent, Attachment, Message, ToolResultContent, UserContent,
+};
 use riot_tools::tools::names::{CREATE_PLAN, TODO_WRITE};
 use riot_tools::tools::plan::{PLAN_FILE_LINE_PREFIX, plan_rel_path, todos_of};
 
@@ -135,6 +137,26 @@ fn path_from_result(content: &ToolResultContent) -> Option<String> {
     let first = text.lines().next()?.trim();
     let rel = first.strip_prefix(PLAN_FILE_LINE_PREFIX)?.trim();
     (!rel.is_empty()).then(|| rel.to_owned())
+}
+
+/// 活历史里最近一份附上去的计划全文（[`crate::prompt::current_plan_context`]
+/// 的产物）。没有 = 从没附过，或者被压缩、回退截掉了 —— 两种情况都该重附。
+///
+/// 只看活历史、不看界面归档：归档里的那份模型已经看不见了。
+pub(crate) fn last_plan_context(live: &[Message]) -> Option<&str> {
+    live.iter().rev().find_map(|m| {
+        let Message::User { content, .. } = m else {
+            return None;
+        };
+        content.iter().rev().find_map(|c| match c {
+            UserContent::Attachment(Attachment::SystemReminder { text })
+                if text.starts_with(crate::prompt::PLAN_CONTEXT_LEAD) =>
+            {
+                Some(text.as_str())
+            }
+            _ => None,
+        })
+    })
 }
 
 /// 读回当前计划。文件不在了（用户删了）或读不出文本就是没有计划。

@@ -173,5 +173,4 @@ export default {
   "composer.chip.preview": "预览 {path}",
   "composer.textarea.resize": "拖动调整高度",
   "composer.paste.chip": "粘贴的文本 · {count} 行",
-  "composer.paste.expand": "点击展开成文字",
 };

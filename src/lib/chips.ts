@@ -15,7 +15,7 @@
 //! —— 它们只认 `data-chip`，不认具体是哪一种。
 
 import { iconFor } from "../components/FileIcon";
-import { t, tn } from "../i18n";
+import { tn } from "../i18n";
 import { basename, isDirRef } from "../pathDisplay";
 import type { Seg } from "./promptText";
 
@@ -64,11 +64,11 @@ export function chipLabel(seg: ChipSeg): string {
   }
 }
 
-/** 粘贴块悬停时预览的长度。 */
-const PASTE_PREVIEW = 600;
-
-/** 悬停给的全量信息 —— 块上那行是截断过的，点中的到底是哪个得能看清。 */
-export function chipTitle(seg: ChipSeg): string {
+/** 悬停给的全量信息 —— 块上那行是截断过的，点中的到底是哪个得能看清。
+ *
+ *  粘贴块不给：原生 title 提示框挡住对话、顶部还会被截掉，内容要看就点开。
+ *  返回 `| null` 而不是省掉那一支，理由同 `chipExtra`。 */
+export function chipTitle(seg: ChipSeg): string | null {
   switch (seg.kind) {
     case "ref":
       return seg.value;
@@ -76,10 +76,8 @@ export function chipTitle(seg: ChipSeg): string {
       return `/${seg.value}`;
     case "elem":
       return `${seg.label}\n${seg.value}`;
-    case "paste": {
-      const head = seg.value.length > PASTE_PREVIEW ? `${seg.value.slice(0, PASTE_PREVIEW)}…` : seg.value;
-      return `${head}\n\n${t("composer.paste.expand")}`;
-    }
+    case "paste":
+      return null;
   }
 }
 
@@ -104,7 +102,7 @@ export interface ChipAttrs {
   /** 文件引用按类型显示的 seti 字形（见 FileIcon）。CSS 用 `attr()` 取到
    *  `::before` 里 —— 块内不能有子节点，图标只能走伪元素。目录没有。 */
   "data-glyph"?: string;
-  title: string;
+  title?: string;
 }
 
 /**
@@ -146,13 +144,14 @@ function chipExtra(seg: ChipSeg): string | null {
 export function chipAttrs(seg: ChipSeg): ChipAttrs {
   const extra = chipExtra(seg);
   const glyph = seg.kind === "ref" && !isDirRef(seg.value) ? iconFor(seg.value).ch : null;
+  const title = chipTitle(seg);
   return {
     "data-chip": seg.kind,
     "data-value": seg.value,
     "data-label": chipLabel(seg),
     ...(extra === null ? {} : { "data-extra": extra }),
     ...(glyph === null ? {} : { "data-glyph": glyph }),
-    title: chipTitle(seg),
+    ...(title === null ? {} : { title }),
   };
 }
 

@@ -80,7 +80,20 @@ export function markdownHeight(text: string, widthPx: number): number {
   return Math.max(LINE, h);
 }
 
-function blockHeight(b: Block, widthPx: number): number {
+/**
+ * 一轮里带操作栏（时间、复制、重新生成……）的那条回答：最后一条正文。
+ * 操作栏按轮挂，不按条挂 —— 中间那些「我先跑一下……」的过渡句每条一个
+ * 操作栏，既占地方又没意义（Claude 同款）。没有正文返回 -1。
+ */
+export function lastAssistantIndex(blocks: Block[]): number {
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const b = blocks[i];
+    if (b?.kind === "row" && b.item.kind === "assistant") return i;
+  }
+  return -1;
+}
+
+function blockHeight(b: Block, widthPx: number, withActions: boolean): number {
   if (b.kind === "fold") return 26;
   const it = b.item;
   switch (it.kind) {
@@ -94,8 +107,8 @@ function blockHeight(b: Block, widthPx: number): number {
       return text + 28 + (it.images?.length ? 88 : 0);
     }
     case "assistant":
-      // 正文 + 底下一行操作栏（时间、复制……）。
-      return markdownHeight(it.text, widthPx) + 28;
+      // 正文 + 底下一行操作栏（时间、复制……），只有一轮的最后一条有。
+      return markdownHeight(it.text, widthPx) + (withActions ? 28 : 0);
     case "tool":
       // 卡片默认收着，只剩摘要行。
       return 24;
@@ -111,6 +124,9 @@ function blockHeight(b: Block, widthPx: number): number {
 /** 一轮的占位高度。 */
 export function estimateTurnHeight(blocks: Block[], widthPx: number): number {
   let h = 0;
-  for (const b of blocks) h += blockHeight(b, widthPx);
+  const last = lastAssistantIndex(blocks);
+  blocks.forEach((b, i) => {
+    h += blockHeight(b, widthPx, i === last);
+  });
   return Math.round(h + GAP * Math.max(0, blocks.length - 1));
 }

@@ -172,5 +172,4 @@ export default {
   "composer.chip.preview": "{path} をプレビュー",
   "composer.textarea.resize": "ドラッグで高さを調整",
   "composer.paste.chip": "貼り付けたテキスト · {count} 行",
-  "composer.paste.expand": "クリックでテキストに展開",
 } satisfies Dict<typeof zh>;

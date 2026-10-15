@@ -108,14 +108,15 @@ pub fn plan_mode_rules() -> String {
 /// 只有明确指着计划本身说"执行"才是执行 —— 而执行的入口是 SwitchMode
 /// 请用户确认，不是自己动手。
 ///
-/// 内核只在**上一轮就在规划模式且计划文件在**时给这一版，并且把文件的
-/// 当前内容和路径一起附在同一条消息里（`<plan_file>`）—— 所以这里不再
-/// 让模型去翻"你之前的 CreatePlan 结果"（可能已被压缩掉）或先 Read 一遍。
+/// 内核只在**上一轮就在规划模式且计划文件在**时给这一版，并且保证文件的
+/// 当前内容和路径在活历史里（`<plan_file>`）：变了就附在这条消息上，没变
+/// 就留在上一份、这条消息附一句指路 —— 所以这里不再让模型去翻"你之前的
+/// CreatePlan 结果"（可能已被压缩掉）或先 Read 一遍。
 pub fn plan_iteration_rules() -> String {
     format!(
         "Plan mode is still active and a plan file already exists — its path and current \
-         content are attached to this message as `<plan_file>`. Tell plan iteration apart from \
-         execution:\n\
+         content are attached as `<plan_file>` (to this message, or to an earlier one if the \
+         file has not changed since). Tell plan iteration apart from execution:\n\
          - The user is ITERATING when they give feedback, request changes, or describe how \
          something should work. In plan mode, actionable phrasing (\"use Redis for the cache\", \
          \"make the poller loop over shards\", \"add error handling for the timeout case\") means \

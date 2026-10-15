@@ -420,9 +420,9 @@ fn tools_for(kind: Kind) -> Vec<Arc<dyn Tool>> {
 
 /// 子 agent 的系统提示。
 ///
-/// 和主 agent 共用 [`crate::prompt`] 的分节装配：同名分节（`reporting_results`、
-/// `output_language`）用的是**同一个常量**。两边各写一份的话，改主 agent 的
-/// 汇报规矩时子 agent 不会跟着变 —— 而子 agent 的汇报是直接展示给用户的。
+/// 和主 agent 共用 [`crate::prompt`] 的分节装配：同名分节（`reporting_results`）
+/// 用的是**同一个常量**。两边各写一份的话，改主 agent 的
+/// 汇报规矩时子 agent 不会跟着变 —— 而子 agent 的汇报用户点开任务卡片就能看到。
 ///
 /// 刻意**不注入** AGENTS.md：那份东西是给"在这个项目里写代码"的人看的，
 /// 而侦察档只汇报。CC 源码注释说 Explore 省掉 CLAUDE.md 一项每周省
@@ -433,7 +433,7 @@ fn system_prompt_for(
     cwd: &std::path::Path,
     flavor: crate::prompt::Flavor,
 ) -> String {
-    use crate::prompt::{OUTPUT_LANGUAGE, REPORTING_RESULTS, Sections, powered_by};
+    use crate::prompt::{REPORTING_RESULTS, Sections, powered_by};
 
     // 侦察档可能走便宜档模型，和主 agent 不是同一个 —— 名字要报自己的。
     let identity = |base: &str| format!("{base} {}", powered_by(model));
@@ -477,7 +477,6 @@ fn system_prompt_for(
                 }
             },
         )
-        .push("output_language", OUTPUT_LANGUAGE)
         .push(
             "host_environment",
             format!(
@@ -886,11 +885,12 @@ pub fn fork_prelude(
              will not redo your work. Rules:\n\
              - NEVER fork yourself again with resume=\"self\" — it will be rejected. If the work \
                needs splitting, start synchronous subagents instead.\n\
-             - Do NOT ask the user questions. They cannot see your process, only your final \
-               reply, so a question just stalls the task. Pick the most reasonable reading and \
-               say which assumption you made in your report.\n\
-             - Your final reply is handed back to the main agent **verbatim** as your report, \
-               and the user sees it too. Write what you did, which files you changed, and how \
+             - Do NOT ask the user questions. They are not watching this branch, so a question \
+               just stalls the task. Pick the most reasonable reading and say which assumption \
+               you made in your report.\n\
+             - Your final reply is handed back to the main agent **verbatim** as your report; \
+               the user can also open it from the task card, but the main agent is the one who \
+               relays it. Write what you did, which files you changed, and how \
                verification went. If it failed, say so plainly — a report that hides a failure \
                makes the main agent build on something that does not work.",
             agent_id.as_str()
@@ -1057,8 +1057,9 @@ impl Tool for TaskTool {
          Write the prompt as if briefing a colleague on their first day: it CANNOT see any \
          part of this conversation. Spell out the background, the goal, the scope, the \
          directions you already ruled out, and the relevant file paths; say what shape of \
-         result you want back. Its reply is not shown to the user — you have to relay the \
-         key points yourself. You may start several Task calls in one message to run them \
+         result you want back. Its report is not in the conversation: the user sees only a \
+         task card and has to click it to read the report, so relay the key points yourself. You \
+         may start several Task calls in one message to run them \
          in parallel.\n\n\
          `run_in_background=true` puts it in the background: you get an agent id \
          immediately and can end your turn, and a notification message (carrying its \
@@ -1665,7 +1666,7 @@ mod tests {
     ///
     /// `[约束]` 「先结论，再证据」过去只写在子 agent 这边，主 agent 反而没有。
     /// 现在两边引用同一个常量 —— 各写一份的话，改主 agent 的汇报规矩时
-    /// 子 agent 不会跟着变，而子 agent 的汇报是直接展示给用户的。
+    /// 子 agent 不会跟着变，而子 agent 的汇报用户点开任务卡片就能看到。
     #[test]
     fn 子_agent_和主_agent_共用汇报分节() {
         let main = crate::prompt::system_prompt(&crate::prompt::SystemPromptInput {
@@ -1689,12 +1690,8 @@ mod tests {
                 sub.contains(crate::prompt::REPORTING_RESULTS),
                 "{kind:?} 少了共用的汇报分节"
             );
-            assert!(
-                sub.contains(crate::prompt::OUTPUT_LANGUAGE),
-                "{kind:?} 的输出语言也该跟主 agent 是同一句"
-            );
             assert!(sub.contains("<reporting_results>"), "分节标签要自动生成");
-            // 汇报会原样交回并展示给用户，两边的规矩必须逐字一致。
+            // 汇报会原样交回，用户点开卡片也看得到，两边的规矩必须逐字一致。
             assert!(main.contains(crate::prompt::REPORTING_RESULTS));
         }
     }
@@ -2269,5 +2266,53 @@ mod tests {
         assert!(text.contains("This is the call that forked you"));
         assert!(text.contains("把测试跑一遍"), "任务原文要原样带上");
         assert!(text.contains("NEVER fork yourself again with resume"));
+    }
+
+    /// 子 agent 的汇报用户要点开卡片才看得到 —— Task 描述、多任务准则、分叉
+    /// 前奏三处说法必须一致，都落到"主 agent 转述"。
+    ///
+    /// 曾经一处说"用户看不到、你要转述"，另两处说"用户也看得到"：多任务模式
+    /// 下模型读到后者，最可能的结果是不转述，用户只能自己逐个点开。
+    #[test]
+    fn 汇报可见性三处说法一致() {
+        use riot_protocol::message::{Attachment, UserContent};
+
+        let tool = TaskTool::new(deps(Arc::new(ScriptedProvider::new(vec![]))));
+        let ctx = PromptContext {
+            cwd: "/tmp".into(),
+            platform: "macos".into(),
+            sandboxed: false,
+            sibling_tools: vec![],
+            today: "2026年9月".into(),
+        };
+        let UserContent::Attachment(Attachment::SystemReminder { text: multitask }) =
+            crate::prompt::multitask_reminder(crate::prompt::MultitaskNote::Full)
+        else {
+            panic!("多任务准则该是 system-reminder");
+        };
+        let fork = format!(
+            "{:?}",
+            fork_prelude(
+                &[],
+                &AgentId::from_raw("agt_1"),
+                &ToolUseId::from_raw("tu_fork"),
+                "干活"
+            )
+        );
+        for (name, text) in [
+            ("Task", tool.prompt(&ctx)),
+            ("multitask", multitask),
+            ("fork", fork),
+        ] {
+            assert!(
+                text.contains("task card"),
+                "{name} 要说清用户得点开卡片：{text}"
+            );
+            assert!(text.contains("relay"), "{name} 要落到主 agent 转述：{text}");
+            assert!(
+                !text.contains("user sees it too") && !text.contains("user sees that report too"),
+                "{name} 不能再说用户直接看得到：{text}"
+            );
+        }
     }
 }

@@ -823,8 +823,9 @@ impl Session {
         crate::plan::load(&self.cwd, plan).await
     }
 
-    /// 这一轮和计划有关的注入，按顺序：当前计划的内容（有的话）、规划模式
-    /// 的提醒（规划模式下）。跟在用户正文之后、其它提醒之前。
+    /// 这一轮和计划有关的注入，按顺序：当前计划的内容（有计划、且和活历史里
+    /// 上一份不同时才附全文，见 `prompt::current_plan_context`）、规划模式的
+    /// 提醒（规划模式下）。跟在用户正文之后、其它提醒之前。
     ///
     /// 规划模式提醒的版本 = **上一轮就在规划模式 && 当前计划存在**（对照
     /// Cursor 的 `prevTurnMode === PLAN`）。两个条件缺一不可：只看"历史里
@@ -835,10 +836,11 @@ impl Session {
         let plan = self.current_plan(live).await;
         let iterating =
             *self.prev_turn_mode.lock().await == Some(PermissionMode::Plan) && plan.is_some();
+        let last = crate::plan::last_plan_context(live);
         let mut out = Vec::new();
         out.extend(
             plan.as_ref()
-                .map(|p| crate::prompt::current_plan_context(p, mode)),
+                .and_then(|p| crate::prompt::current_plan_context(p, mode, last)),
         );
         out.extend(crate::prompt::plan_mode_reminder(mode, iterating));
         out
@@ -6545,6 +6547,25 @@ mod tests {
         assert_eq!(building.len(), 1, "{building:?}");
         assert!(building[0].contains("Plan mode is over"), "{}", building[0]);
         assert!(building[0].contains("用户改过的一步"));
+
+        // 上一份全文已经在活历史里、文件没变：构建后一个字都不附；回到规划
+        // 模式（指引不同）照样重附。全文要是被压缩吞掉，扫不到就又是上面那种。
+        let mut attached = history.clone();
+        attached.push(Message::User {
+            id: MessageId::from_raw("u2"),
+            content: vec![UserContent::Attachment(Attachment::SystemReminder {
+                text: building[0].clone(),
+            })],
+            meta: MessageMeta::default(),
+        });
+        assert!(
+            s.plan_turn(PermissionMode::AcceptEdits, &attached)
+                .await
+                .is_empty(),
+            "没变就不重附"
+        );
+        let replanning = texts(s.plan_turn(PermissionMode::Plan, &attached).await);
+        assert!(replanning[0].contains("用户改过的一步"), "{replanning:?}");
 
         // 文件被删了 = 没有计划。
         std::fs::remove_file(dir.path().join(&rel)).expect("删文件");

@@ -183,5 +183,4 @@ export default {
   "composer.textarea.resize": "Drag to resize height",
   "composer.paste.chip#one": "Pasted text · {count} line",
   "composer.paste.chip": "Pasted text · {count} lines",
-  "composer.paste.expand": "Click to expand into text",
 } satisfies Dict<typeof zh>;

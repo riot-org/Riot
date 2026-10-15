@@ -174,5 +174,4 @@ export default {
   "composer.chip.preview": "{path} 미리보기",
   "composer.textarea.resize": "드래그하여 높이 조절",
   "composer.paste.chip": "붙여넣은 텍스트 · {count}줄",
-  "composer.paste.expand": "클릭하면 텍스트로 펼칩니다",
 } satisfies Dict<typeof zh>;

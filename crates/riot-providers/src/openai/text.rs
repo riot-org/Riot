@@ -79,29 +79,8 @@ pub(super) fn render_result(content: &ToolResultContent, is_error: bool) -> Stri
     }
 }
 
-/// 附件转成给模型的文字。和 Anthropic 那条路（`convert_attachment`）保持
-/// 同一套措辞 —— 模型换协议不该看到两种不同的注入格式。
+/// 附件转成给模型的文字。和 Anthropic 那条路（`convert_attachment`）共用
+/// [`Attachment::model_text`] —— 模型换协议不该看到两种不同的注入格式。
 pub(super) fn render_attachment(a: &Attachment) -> Option<String> {
-    Some(match a {
-        Attachment::Memory { path, content } => format!(
-            "<system-reminder>\nProject memory {}:\n{content}\n</system-reminder>",
-            path.display()
-        ),
-        Attachment::RestoredFile { path, content } => format!(
-            "<system-reminder>\nYou read {} before compaction:\n{content}\n</system-reminder>",
-            path.display()
-        ),
-        Attachment::UserFile { path, content } => format!(
-            "<system-reminder>\nThe user referenced {} in their message; its contents \
-             follow:\n{content}\n</system-reminder>",
-            path.display()
-        ),
-        Attachment::Environment { text } | Attachment::SystemReminder { text } => {
-            format!("<system-reminder>\n{text}\n</system-reminder>")
-        }
-        Attachment::DescribedImage { text, .. } => {
-            format!("<system-reminder>\n{text}\n</system-reminder>")
-        }
-        Attachment::Image { .. } => return None,
-    })
+    a.model_text()
 }

@@ -172,5 +172,4 @@ export default {
   "composer.chip.preview": "預覽 {path}",
   "composer.textarea.resize": "拖曳調整高度",
   "composer.paste.chip": "貼上的文字 · {count} 行",
-  "composer.paste.expand": "點擊展開成文字",
 } satisfies Dict<typeof zh>;

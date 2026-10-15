@@ -537,42 +537,16 @@ fn convert_tool_result_content(c: &ToolResultContent) -> serde_json::Value {
 
 fn convert_attachment(a: &riot_protocol::message::Attachment) -> serde_json::Value {
     use riot_protocol::message::Attachment;
+    // 文字附件（含视觉兼容的转述 —— 模型读转述，图片本体 `data` 只给界面，
+    // 不发出去）走共用的那一份渲染，内嵌的提醒标签在那里转义。
     let text = match a {
-        Attachment::Memory { path, content } => {
-            format!(
-                "<system-reminder>\nProject memory {}:\n{content}\n</system-reminder>",
-                path.display()
-            )
-        }
-        Attachment::RestoredFile { path, content } => {
-            format!(
-                "<system-reminder>\nYou read {} before compaction:\n{content}\n</system-reminder>",
-                path.display()
-            )
-        }
-        Attachment::UserFile { path, content } => {
-            format!(
-                "<system-reminder>\nThe user referenced {} in their message; its contents \
-                 follow:\n{content}\n</system-reminder>",
-                path.display()
-            )
-        }
-        Attachment::Environment { text } => {
-            format!("<system-reminder>\n{text}\n</system-reminder>")
-        }
-        Attachment::SystemReminder { text } => {
-            format!("<system-reminder>\n{text}\n</system-reminder>")
-        }
-        // 视觉兼容：模型读转述，图片本体（`data`）只给界面，不发出去。
-        Attachment::DescribedImage { text, .. } => {
-            format!("<system-reminder>\n{text}\n</system-reminder>")
-        }
         Attachment::Image { media_type, data } => {
             return serde_json::json!({
                 "type": "image",
                 "source": { "type": "base64", "media_type": media_type, "data": data },
             });
         }
+        other => other.model_text().unwrap_or_default(),
     };
     serde_json::json!({ "type": "text", "text": text })
 }
