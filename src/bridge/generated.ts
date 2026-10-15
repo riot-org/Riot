@@ -1316,6 +1316,11 @@ export interface MessageMeta {
  */
 export interface TaskNotice {
   agent_id: string;
+  /**
+   * 登记项的类型（[`BackgroundTaskView::kind`]）。`shell` = 后台命令，
+   * 没有会话可点开。老数据没有这个字段，按子 agent 处理。
+   */
+  kind?: string;
   status: BackgroundTaskStatus;
   title: string;
 }
@@ -1436,7 +1441,7 @@ export interface BackgroundTaskView {
   finished_at_ms?: number | null;
   id: string;
   /**
-   * `explore` / `general-purpose` / `fork`。
+   * `explore` / `general-purpose` / `fork`；后台命令是 `shell`。
    */
   kind: string;
   /**

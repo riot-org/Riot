@@ -4211,6 +4211,7 @@ mod tests {
             web: Arc::new(riot_protocol::web::NoWeb),
             browser,
             terminal: Arc::new(riot_protocol::terminal::NoTerminal),
+            jobs: std::sync::Arc::new(riot_protocol::jobs::NoJobs),
             vision: Arc::new(vision),
             clock: Arc::new(FixedClock::default()),
         }

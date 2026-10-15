@@ -57,6 +57,7 @@ fn harness_with(web: FakeWeb, vision: Arc<dyn VisionAccess>, fs: Arc<dyn FileSys
         web: Arc::clone(&web) as Arc<_>,
         browser: Arc::new(riot_protocol::browser::NoBrowser),
         terminal: Arc::new(riot_protocol::terminal::NoTerminal),
+        jobs: std::sync::Arc::new(riot_protocol::jobs::NoJobs),
         vision,
         clock: Arc::clone(&clock) as Arc<_>,
     };

@@ -76,7 +76,8 @@ impl Tool for TerminalOutput {
                不会白等。\n\
              \n\
              反面：`wait_for` 不是「睡一会儿」。没有哨兵可等就直接读，\
-             别拿一个匹配不到的正则当定时器。",
+             别拿一个匹配不到的正则当定时器。也不是拿来等一条会自己结束的长命令\
+             （盯 CI、长测试）—— 那种用 Bash 的 `run_in_background`，结束时会通知你。",
             DEFAULT_WAIT_MS / 1000,
             MAX_WAIT_MS / 1000,
         )
@@ -265,6 +266,7 @@ mod tests {
             web: Arc::new(riot_protocol::web::NoWeb),
             browser: Arc::new(riot_protocol::browser::NoBrowser),
             terminal: term,
+            jobs: std::sync::Arc::new(riot_protocol::jobs::NoJobs),
             vision: Arc::new(riot_protocol::vision::NoVision),
             clock,
         }

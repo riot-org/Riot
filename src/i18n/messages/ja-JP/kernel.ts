@@ -77,6 +77,7 @@ export default {
   "kernel.task.activity.started": "起動",
   "kernel.task.activity.tool": "→ {name}",
   "kernel.task.activity.said": "{text}",
+  "kernel.task.activity.shell": "{command}",
   "kernel.task.activity.completed": "完了",
   "kernel.task.activity.failed": "失敗",
   "kernel.task.activity.cancelled": "停止",

@@ -419,6 +419,12 @@ impl BackgroundTasks {
                      重新发起一个新任务即可。"
                 ));
             };
+            if e.kind == Kind::Shell {
+                return Err(format!(
+                    "「{}」（{id}）是一条后台命令，不是子 agent，没有可续接的会话。",
+                    e.view.title
+                ));
+            }
             if e.view.status == BackgroundTaskStatus::Running {
                 return Err(format!(
                     "子 agent「{}」（{id}）还在跑，等它完成的通知到了再续接。",
@@ -775,6 +781,54 @@ pub fn notice_message(
                 agent_id: view.id.clone(),
                 title: view.title.clone(),
                 status: view.status,
+                kind: view.kind.clone(),
+            }),
+            ..Default::default()
+        },
+    }
+}
+
+/// 后台命令（Bash `run_in_background`）结束的通知。
+///
+/// 和子 agent 的 [`notice_message`] 同一个形状（SystemReminder 正文 +
+/// `task_notice` 标记 + 同一个汇报分隔符），界面画成同一种卡片。
+pub fn shell_notice_message(
+    id: MessageId,
+    view: &BackgroundTaskView,
+    command: &str,
+    report: &str,
+    now_ms: u64,
+) -> Message {
+    let verb = match view.status {
+        BackgroundTaskStatus::Running => "is still running",
+        BackgroundTaskStatus::Completed => "has finished",
+        BackgroundTaskStatus::Failed => "failed",
+        BackgroundTaskStatus::Cancelled => "was stopped",
+    };
+    let secs = view
+        .finished_at_ms
+        .map_or(0, |f| f.saturating_sub(view.started_at_ms) / 1000);
+    let text = format!(
+        "The background command \"{}\" {verb} after {secs}s (id: {}).\n\
+         Command: `{command}`\n\
+         Its exit status and output follow. Act on the result: report what it means, fix what \
+         it shows is broken, or carry on with the work that was waiting on it. Do not re-run it \
+         just to see the output again.\n\n\
+         --- 汇报 ---\n{report}",
+        view.title,
+        view.id.as_str(),
+    );
+    Message::User {
+        id,
+        content: vec![UserContent::Attachment(Attachment::SystemReminder { text })],
+        meta: MessageMeta {
+            synthetic: true,
+            created_at_ms: Some(now_ms),
+            task_notice: Some(TaskNotice {
+                agent_id: view.id.clone(),
+                title: view.title.clone(),
+                status: view.status,
+                kind: view.kind.clone(),
             }),
             ..Default::default()
         },
@@ -820,6 +874,48 @@ mod tests {
             vec![msg("q")],
             0,
         );
+    }
+
+    #[tokio::test]
+    async fn 后台命令不能续接_通知带上类型和命令() {
+        let t = BackgroundTasks::new(SessionSink::default());
+        let mut v = view("job_1", true);
+        v.kind = Kind::Shell.as_str().into();
+        v.title = "盯 CI".into();
+        t.start(v, Kind::Shell, CancellationToken::new(), Vec::new(), 0);
+        let done = t
+            .finish(
+                &AgentId::from_raw("job_1"),
+                BackgroundTaskStatus::Failed,
+                Vec::new(),
+                0,
+                0,
+                90_000,
+            )
+            .expect("登记过");
+
+        let err = t.resume_source("job_1").await.unwrap_err();
+        assert!(err.contains("后台命令"), "{err}");
+
+        let n = shell_notice_message(
+            MessageId::from_raw("n"),
+            &done,
+            "gh run watch 42 --exit-status",
+            "命令退出码 1。",
+            90_000,
+        );
+        let Message::User { content, meta, .. } = &n else {
+            panic!("通知是 user 消息");
+        };
+        let notice = meta.task_notice.as_ref().expect("带通知标记");
+        assert_eq!(notice.kind, "shell", "界面靠它不给「查看会话」");
+        let UserContent::Attachment(Attachment::SystemReminder { text }) = &content[0] else {
+            panic!("正文在 SystemReminder 里");
+        };
+        assert!(text.contains("gh run watch 42"), "{text}");
+        assert!(text.contains("failed after 90s"), "{text}");
+        // 界面按这个分隔符切出汇报本体，和子 agent 的通知同一个。
+        assert!(text.contains("--- 汇报 ---\n命令退出码 1。"), "{text}");
     }
 
     #[test]

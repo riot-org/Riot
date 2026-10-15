@@ -32,6 +32,13 @@ const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 /// 超时上限。模型可以调大,但不能无限。
 const MAX_TIMEOUT_MS: u64 = 600_000;
 
+/// 后台命令（`run_in_background`）的默认超时。CI 一跑二三十分钟很平常。
+const JOB_DEFAULT_TIMEOUT_MS: u64 = 3_600_000;
+
+/// 后台命令的超时上限。不给无限：忘了结束条件的命令（`gh run watch` 盯错了
+/// run）不能在面板上挂一整天。
+const JOB_MAX_TIMEOUT_MS: u64 = 4 * 3_600_000;
+
 /// stdout / stderr 各自的字符上限。
 const MAX_STREAM_CHARS: usize = 30_000;
 
@@ -51,14 +58,21 @@ struct Input {
     #[serde(default)]
     #[allow(dead_code)]
     description: Option<String>,
-    /// Timeout in milliseconds. Defaults to 120000, capped at 600000.
+    /// Timeout in milliseconds. Defaults to 120000, capped at 600000. With
+    /// `run_in_background` it defaults to 3600000 and is capped at 14400000.
     #[serde(default)]
     timeout_ms: Option<u64>,
-    /// Set true for anything long-lived (dev server, watch build): the command
-    /// runs in the user's terminal panel and returns a terminal id immediately
-    /// instead of blocking.
+    /// Set true for a long-lived service that never exits on its own (dev
+    /// server, watch build): the command runs in the user's terminal panel and
+    /// returns a terminal id immediately instead of blocking.
     #[serde(default)]
     background: bool,
+    /// Set true for a command that WILL exit on its own but takes long
+    /// (watching CI, a long test suite or build): it runs detached and returns
+    /// immediately; when it exits you are notified with its exit status and
+    /// output. End your turn instead of waiting for it.
+    #[serde(default)]
+    run_in_background: bool,
     /// Set false to run this command OUTSIDE the OS sandbox. Prompts the user
     /// for confirmation.
     ///
@@ -177,6 +191,15 @@ impl Tool for Bash {
              panel and returns a terminal id immediately. Without it the command either \
              burns the whole timeout or gets killed with the process group at cleanup. \
              Then read its log with {TERMINAL_OUTPUT} and stop it with {TERMINAL_KILL}.\n\
+             - A command that **will finish on its own but takes minutes** — waiting for CI \
+             (`gh run watch <id> --exit-status`, `gh pr checks --watch`), a long test suite or \
+             build — sets `run_in_background: true` instead. It runs detached (no terminal \
+             tab; the user sees it in the background-task panel and can stop it), the call \
+             returns at once, and when it exits a notification with its exit status and \
+             output wakes you. After starting it, END YOUR TURN or move on to independent \
+             work: do not poll it, do not `sleep`, and do not run it in `background: true` \
+             and wait on {TERMINAL_OUTPUT} — that keeps the turn busy for nothing. Make the \
+             command itself block until the condition is met and exit non-zero on failure.\n\
              - Long output keeps the head and the tail and elides the middle. Do not \
              re-run a command just to see the part that was elided; narrow the command.\n\
              - Quote paths that contain spaces: `cd \"/a/My Documents\"`, not \
@@ -363,6 +386,24 @@ impl Tool for Bash {
                 "`command` 不能为空。请提供要执行的命令。",
             ));
         }
+        if parsed.background && parsed.run_in_background {
+            return Err(ValidationError::rejected(
+                "`background` 和 `run_in_background` 只能选一个：会一直跑下去的服务（dev \
+                 server）用 `background`；会自己结束、只是要跑很久的（盯 CI、长测试）用 \
+                 `run_in_background`。",
+            ));
+        }
+        if parsed.run_in_background {
+            if let Some(t) = parsed.timeout_ms
+                && t > JOB_MAX_TIMEOUT_MS
+            {
+                return Err(ValidationError::rejected(format!(
+                    "后台命令的 `timeout_ms` 最大 {JOB_MAX_TIMEOUT_MS}（{} 小时）。",
+                    JOB_MAX_TIMEOUT_MS / 3_600_000
+                )));
+            }
+            return Ok(());
+        }
         if let Some(t) = parsed.timeout_ms
             && t > MAX_TIMEOUT_MS
         {
@@ -383,6 +424,9 @@ impl Tool for Bash {
 
         if parsed.background {
             return spawn_service(&parsed, &ctx).await;
+        }
+        if parsed.run_in_background {
+            return spawn_job(parsed, ctx);
         }
 
         let timeout_ms = parsed
@@ -674,7 +718,8 @@ fn render(
              下一步选一条，别原样重跑：\n\
              - 这是长期服务（dev server、watch）→ 用 `background: true` 重跑，\
                然后用 TerminalOutput 的 `wait_for` 等它就绪；\n\
-             - 确实需要跑更久 → 调大 `timeout_ms`（上限 10 分钟）；\n\
+             - 确实需要跑更久、但会自己结束（盯 CI、长测试）→ 用 `run_in_background: true` \
+               重跑，它结束时你会收到通知，不用干等；\n\
              - 只是范围太大 → 缩小它（跑单个测试、单个包）。\n\
              以下是超时前的输出，它通常直接指出卡在哪一步：",
             timeout_ms / 1000
@@ -756,6 +801,91 @@ fn spawn_hint(e: &std::io::Error) -> String {
     }
 }
 
+/// 把一条会自己结束、但要跑很久的命令放到后台（`run_in_background`）。
+///
+/// 执行和前台同一条路：同一个 `ctx.proc`（沙箱照套）、同一套非交互环境、
+/// 同一种输出裁剪 —— 差别只在不等它，结果改由会话在它结束时以通知交给
+/// 模型（见 `riot_protocol::jobs`）。取消用会话给的令牌，不用本次调用的：
+/// 调用一返回、回合一结束，本次调用的令牌就作废了。
+fn spawn_job(parsed: Input, ctx: ToolContext) -> ToolOutcome {
+    let title = parsed
+        .description
+        .as_deref()
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+        .map_or_else(|| clamp_chars(parsed.command.trim(), 30), str::to_owned);
+    let timeout_ms = parsed
+        .timeout_ms
+        .unwrap_or(JOB_DEFAULT_TIMEOUT_MS)
+        .min(JOB_MAX_TIMEOUT_MS);
+    let command = parsed.command.clone();
+    let spec = ProcessSpec {
+        program: shell_program(),
+        args: vec!["-c".to_owned(), parsed.command.clone()],
+        cwd: ctx.cwd.clone(),
+        env: non_interactive_env(),
+        timeout_ms: Some(timeout_ms),
+        sandbox_exempt: parsed.sandbox == Some(false) || bash::escapes_sandbox(&parsed.command),
+    };
+    let jobs = std::sync::Arc::clone(&ctx.jobs);
+    let run_ctx = ctx.clone();
+    let run: riot_protocol::jobs::JobRun = Box::new(move |cancel| {
+        Box::pin(async move {
+            use riot_protocol::task::BackgroundTaskStatus;
+            let pre = super::bash_effects::capture(&command, &run_ctx).await;
+            let out = match run_ctx.proc.run(spec, cancel.clone()).await {
+                Ok(o) => o,
+                Err(e) => {
+                    return riot_protocol::jobs::JobReport {
+                        status: BackgroundTaskStatus::Failed,
+                        report: spawn_hint(&e),
+                    };
+                }
+            };
+            if !pre.is_empty() {
+                super::bash_effects::settle(pre, &run_ctx).await;
+            }
+            let status = if cancel.is_cancelled() {
+                BackgroundTaskStatus::Cancelled
+            } else if out.timed_out || out.exit_code != 0 {
+                BackgroundTaskStatus::Failed
+            } else {
+                BackgroundTaskStatus::Completed
+            };
+            let report = render(
+                &clamp_stream(&out.stdout),
+                &clamp_stream(&out.stderr),
+                out.exit_code,
+                out.timed_out,
+                timeout_ms,
+            );
+            riot_protocol::jobs::JobReport { status, report }
+        })
+    });
+
+    match jobs.spawn(
+        riot_protocol::jobs::JobSpec {
+            title,
+            command: parsed.command.clone(),
+            tool_use_id: ctx.tool_use_id.clone(),
+        },
+        run,
+    ) {
+        Ok(id) => ToolOutcome::Ok {
+            model_content: riot_protocol::message::ToolResultContent::text(format!(
+                "已在后台跑起来（id {id}）：{}\n\
+                 它结束时你会收到一条通知，里面有退出码和输出。现在不要等它、不要轮询、\
+                 不要 sleep：结束本轮回复，或者去做别的独立的事。用户在后台任务面板里看得到它，\
+                 也能自己停掉。",
+                parsed.command.trim()
+            )),
+            ui_payload: None,
+            side_messages: Vec::new(),
+        },
+        Err(e) => ToolOutcome::failed(e),
+    }
+}
+
 /// 把长期服务交给终端面板。
 ///
 /// 不能走 `ctx.proc`：那条路收尾时会清掉整个进程组（见 riot-runtime 的
@@ -792,7 +922,10 @@ fn schema_hint(e: &serde_json::Error) -> String {
         return "缺少必需参数 `command`。请提供要执行的 shell 命令。".to_owned();
     }
     if raw.contains("unknown field") {
-        return format!("Bash 只接受 `command`、`description`、`timeout_ms` 三个参数。（{raw}）");
+        return format!(
+            "Bash 只接受 `command`、`description`、`timeout_ms`、`background`、\
+             `run_in_background`、`sandbox` 这几个参数。（{raw}）"
+        );
     }
     format!("参数格式不对：{raw}。请检查参数类型。")
 }

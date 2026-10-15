@@ -53,7 +53,7 @@ pub struct BackgroundTaskView {
     pub id: AgentId,
     /// 模型给的任务名（Task 工具的 `description`）。续接时可以换。
     pub title: String,
-    /// `explore` / `general-purpose` / `fork`。
+    /// `explore` / `general-purpose` / `fork`；后台命令是 `shell`。
     pub kind: String,
     /// 它实际用的模型名（便宜档生效时和主模型不同）。
     #[serde(default)]
@@ -139,6 +139,10 @@ pub struct TaskNotice {
     pub agent_id: AgentId,
     pub title: String,
     pub status: BackgroundTaskStatus,
+    /// 登记项的类型（[`BackgroundTaskView::kind`]）。`shell` = 后台命令，
+    /// 没有会话可点开。老数据没有这个字段，按子 agent 处理。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub kind: String,
 }
 
 #[cfg(test)]

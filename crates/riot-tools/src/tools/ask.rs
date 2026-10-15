@@ -323,6 +323,7 @@ mod tests {
             web: Arc::new(riot_protocol::web::NoWeb),
             browser: Arc::new(riot_protocol::browser::NoBrowser),
             terminal: Arc::new(riot_protocol::terminal::NoTerminal),
+            jobs: std::sync::Arc::new(riot_protocol::jobs::NoJobs),
             vision: Arc::new(riot_protocol::vision::NoVision),
             clock: Arc::new(crate::testing::FixedClock::default()),
         }

@@ -3745,6 +3745,15 @@ impl Session {
         } else {
             scheduler
         };
+        // 后台命令登记进本会话的后台任务面板，结束时走子 agent 同一条通知。
+        // 只装在主 agent 这里：分叉 / 子 agent 的调度器不另装，它们开的后台
+        // 命令没有一个"该被唤醒"的回合可交。
+        let scheduler = scheduler.with_jobs(Arc::new(SessionJobs {
+            tasks: Arc::clone(&self.tasks),
+            session: Arc::downgrade(self),
+            ids: Arc::clone(&self.ids) as Arc<dyn IdGenerator>,
+            clock: clock.clone(),
+        }));
 
         let tools_runner: Arc<dyn riot_core::state::ToolRunner> = Arc::new(scheduler);
 
@@ -4246,6 +4255,87 @@ impl crate::subagent::TaskHost for SessionTaskHost {
             Some(s) => s.fork_job(agent_id, title, prompt, fork_call).await,
             None => Err("会话已不在，不能分叉。".into()),
         }
+    }
+}
+
+/// Bash `run_in_background` 通向会话的那一头（见 [`riot_protocol::jobs`]）。
+///
+/// 命令登记进子 agent 的同一张登记表（类型 `shell`）：后台任务面板、停止键、
+/// 关会话时一并取消，全都现成。结束时的通知走 [`Session::deliver_task_notice`]
+/// —— 会话在跑就排进插话队列，空闲就唤起新的一轮。
+///
+/// 抓 `Weak`，理由同 [`SessionTaskHost`]：工具注册表在会话里。
+struct SessionJobs {
+    tasks: Arc<crate::tasks::BackgroundTasks>,
+    session: std::sync::Weak<Session>,
+    ids: Arc<dyn IdGenerator>,
+    clock: Arc<dyn riot_protocol::tool::Clock>,
+}
+
+impl riot_protocol::jobs::BackgroundJobs for SessionJobs {
+    fn spawn(
+        &self,
+        spec: riot_protocol::jobs::JobSpec,
+        run: riot_protocol::jobs::JobRun,
+    ) -> Result<String, String> {
+        use riot_protocol::task::{BackgroundTaskStatus, BackgroundTaskView};
+
+        let id = riot_protocol::id::AgentId::from_raw(self.ids.next_id("job"));
+        let cancel = CancellationToken::new();
+        self.tasks.start(
+            BackgroundTaskView {
+                id: id.clone(),
+                title: spec.title.clone(),
+                kind: crate::subagent::Kind::Shell.as_str().to_owned(),
+                model: String::new(),
+                background: true,
+                tool_use_id: spec.tool_use_id.clone(),
+                parent: None,
+                status: BackgroundTaskStatus::Running,
+                // 面板那一行显示命令本身：命令没有"正在做什么"可直播。
+                activity: riot_protocol::ui_text!(
+                    "kernel.task.activity.shell",
+                    command = spec.command.clone()
+                ),
+                tool_uses: 0,
+                tokens: 0,
+                started_at_ms: self.clock.now_ms(),
+                finished_at_ms: None,
+                todo: None,
+            },
+            crate::subagent::Kind::Shell,
+            cancel.clone(),
+            Vec::new(),
+            0,
+        );
+
+        let tasks = Arc::clone(&self.tasks);
+        let session = self.session.clone();
+        let ids = Arc::clone(&self.ids);
+        let clock = Arc::clone(&self.clock);
+        let task_id = id.clone();
+        tokio::spawn(async move {
+            let report = run(cancel).await;
+            let now = clock.now_ms();
+            let view = tasks.finish(&task_id, report.status, Vec::new(), 0, 0, now);
+            tracing::info!(job = %task_id.as_str(), status = ?report.status, "后台命令结束");
+            // 被停止的不通知，理由同后台子 agent：用户亲手按的，他知道。
+            if report.status == BackgroundTaskStatus::Cancelled {
+                return;
+            }
+            let (Some(view), Some(session)) = (view, session.upgrade()) else {
+                return;
+            };
+            let notice = crate::tasks::shell_notice_message(
+                MessageId::from_raw(ids.next_id("msg")),
+                &view,
+                &spec.command,
+                &report.report,
+                now,
+            );
+            session.deliver_task_notice(notice).await;
+        });
+        Ok(id.as_str().to_owned())
     }
 }
 
@@ -5088,6 +5178,7 @@ mod tests {
             web: Arc::new(riot_protocol::web::NoWeb),
             browser: Arc::new(riot_protocol::browser::NoBrowser),
             terminal: Arc::new(riot_protocol::terminal::NoTerminal),
+            jobs: std::sync::Arc::new(riot_protocol::jobs::NoJobs),
             vision: Arc::new(riot_protocol::vision::NoVision),
             clock: Arc::new(riot_providers::watchdog::TokioClock),
         }
@@ -6392,6 +6483,95 @@ mod tests {
         view.status = riot_protocol::task::BackgroundTaskStatus::Completed;
         view.finished_at_ms = Some(1);
         crate::tasks::notice_message(MessageId::from_raw(id), &view, "m", "改好了", 1)
+    }
+
+    /// Bash `run_in_background` 端到端：调用立刻返回、回合照常结束；命令
+    /// 跑完后它的输出作为通知唤起新的一轮，面板上那一行收成完成。
+    #[tokio::test]
+    // 等一个 spawn 出去的命令和唤醒轮收场，真睡是刻意的（没有注入时钟可推）。
+    #[allow(clippy::disallowed_methods)]
+    async fn 后台命令结束时唤起新的一轮并交回输出() {
+        use riot_protocol::message::AssistantContent;
+        use riot_protocol::provider::ProviderEvent;
+
+        let dir = tempfile::tempdir().expect("临时目录");
+        let s = Arc::new(Session::new(
+            SessionId::from_raw("s1"),
+            dir.path().to_path_buf(),
+            None,
+        ));
+        let scripted = Arc::new(riot_core::testing::ScriptedProvider::new(vec![
+            vec![ProviderEvent::Message(Message::Assistant {
+                id: MessageId::from_raw("a1"),
+                content: vec![AssistantContent::ToolUse {
+                    id: riot_protocol::id::ToolUseId::from_raw("tu_bg"),
+                    name: riot_tools::tools::names::BASH.into(),
+                    input: serde_json::json!({
+                        "command": "echo ci-green",
+                        "description": "盯 CI",
+                        "run_in_background": true,
+                    }),
+                }],
+                usage: None,
+                meta: MessageMeta::default(),
+            })],
+            vec![ProviderEvent::Message(hist_assistant("a2", "挂到后台了"))],
+            vec![ProviderEvent::Message(hist_assistant("a3", "CI 过了"))],
+        ]));
+        assert!(
+            s.test_provider
+                .set(Arc::clone(&scripted) as Arc<dyn Provider>)
+                .is_ok()
+        );
+        // 唤醒轮走的是会话自己的出口（没有宿主替它现给一个），出口得活着。
+        struct Discard;
+        impl EventSink for Discard {
+            fn send(&self, _event: AgentEvent) -> Result<(), SinkClosed> {
+                Ok(())
+            }
+        }
+        s.sink().attach(Arc::new(Discard));
+        s.run_turn(
+            TurnInput {
+                text: "推完盯一下 CI".into(),
+                ..Default::default()
+            },
+            test_model(),
+            test_caps(),
+            s.sink(),
+            test_limits(),
+        )
+        .await
+        .expect("这一轮要跑完");
+
+        // 唤醒轮在后台起：等第三次请求出现。
+        for _ in 0..500 {
+            if scripted.requests().len() >= 3 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(scripted.requests().len(), 3, "命令跑完要唤起新的一轮");
+
+        let reqs = scripted.requests();
+        let first_result = serde_json::to_string(&reqs[1].messages).expect("可序列化");
+        assert!(
+            first_result.contains("已在后台跑起来"),
+            "调用立刻返回：{first_result}"
+        );
+        let woke =
+            serde_json::to_string(reqs[2].messages.last().expect("有消息")).expect("可序列化");
+        assert!(woke.contains("The background command"), "{woke}");
+        assert!(woke.contains("ci-green"), "输出要交回给模型：{woke}");
+
+        let snap = s.tasks_snapshot();
+        let job = snap.iter().find(|t| t.kind == "shell").expect("进了登记表");
+        assert!(job.background);
+        assert_eq!(job.title, "盯 CI");
+        assert_eq!(
+            job.status,
+            riot_protocol::task::BackgroundTaskStatus::Completed
+        );
     }
 
     /// 父在跑：通知进队列、安全点注入 —— 但排队面板看不见它，也删不到它。

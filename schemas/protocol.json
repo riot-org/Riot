@@ -899,7 +899,7 @@
           "type": "string"
         },
         "kind": {
-          "description": "`explore` / `general-purpose` / `fork`。",
+          "description": "`explore` / `general-purpose` / `fork`；后台命令是 `shell`。",
           "type": "string"
         },
         "model": {
@@ -4901,6 +4901,10 @@
       "description": "打在完成通知消息上的标记（`MessageMeta::task_notice`）。\n\n通知本体是一条 user 消息，正文放在 `SystemReminder` 附件里给模型读；\n这份标记给界面 —— 靠它把那条消息画成\"后台任务完成\"卡片而不是\n用户气泡。meta 不进 wire 格式，模型只看得到附件里的文字。",
       "properties": {
         "agent_id": {
+          "type": "string"
+        },
+        "kind": {
+          "description": "登记项的类型（[`BackgroundTaskView::kind`]）。`shell` = 后台命令，\n没有会话可点开。老数据没有这个字段，按子 agent 处理。",
           "type": "string"
         },
         "status": {

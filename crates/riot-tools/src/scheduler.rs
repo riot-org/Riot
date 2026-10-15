@@ -57,6 +57,8 @@ pub struct Scheduler {
     browser: Arc<dyn riot_protocol::browser::BrowserAccess>,
     /// 注入的终端面板。长期服务跑在这里。默认 NoTerminal。
     terminal: Arc<dyn riot_protocol::terminal::TerminalAccess>,
+    /// 后台命令。默认 NoJobs。
+    jobs: Arc<dyn riot_protocol::jobs::BackgroundJobs>,
     /// 图片能力。默认 [`riot_protocol::vision::NoVision`]（模型不收图片、
     /// 也没有兼容模型）。
     vision: Arc<dyn riot_protocol::vision::VisionAccess>,
@@ -104,6 +106,7 @@ impl Scheduler {
             web: Arc::new(riot_protocol::web::NoWeb),
             browser: Arc::new(riot_protocol::browser::NoBrowser),
             terminal: Arc::new(riot_protocol::terminal::NoTerminal),
+            jobs: Arc::new(riot_protocol::jobs::NoJobs),
             vision: Arc::new(riot_protocol::vision::NoVision),
             web_injected: false,
             gate: None,
@@ -145,6 +148,11 @@ impl Scheduler {
         terminal: Arc<dyn riot_protocol::terminal::TerminalAccess>,
     ) -> Self {
         self.terminal = terminal;
+        self
+    }
+
+    pub fn with_jobs(mut self, jobs: Arc<dyn riot_protocol::jobs::BackgroundJobs>) -> Self {
+        self.jobs = jobs;
         self
     }
 
@@ -202,6 +210,7 @@ impl ToolRunner for Scheduler {
         let web = Arc::clone(&self.web);
         let browser = Arc::clone(&self.browser);
         let terminal = Arc::clone(&self.terminal);
+        let jobs = Arc::clone(&self.jobs);
         let vision = Arc::clone(&self.vision);
         let ids = Arc::clone(&self.ids);
         let cwd = self.prompt_ctx.cwd.clone();
@@ -249,6 +258,7 @@ impl ToolRunner for Scheduler {
                             web: Arc::clone(&web),
                             browser: Arc::clone(&browser),
                             terminal: Arc::clone(&terminal),
+                            jobs: Arc::clone(&jobs),
                             vision: Arc::clone(&vision),
                             cwd: cwd.clone(),
                             artifacts_dir: artifacts_dir.clone(),
@@ -341,6 +351,7 @@ struct ToolDeps {
     web: Arc<dyn riot_protocol::web::WebAccess>,
     browser: Arc<dyn riot_protocol::browser::BrowserAccess>,
     terminal: Arc<dyn riot_protocol::terminal::TerminalAccess>,
+    jobs: Arc<dyn riot_protocol::jobs::BackgroundJobs>,
     vision: Arc<dyn riot_protocol::vision::VisionAccess>,
     cwd: std::path::PathBuf,
     artifacts_dir: std::path::PathBuf,
@@ -451,6 +462,7 @@ async fn run_one(
         web: deps.web,
         browser: deps.browser,
         terminal: deps.terminal,
+        jobs: deps.jobs,
         vision: deps.vision,
         clock: deps.clock,
     };

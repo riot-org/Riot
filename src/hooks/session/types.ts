@@ -66,6 +66,8 @@ export type Item =
       agentId: string;
       title: string;
       status: BackgroundTaskStatus;
+      /** 登记项类型。`shell` = 后台命令（Bash run_in_background），没有会话可点开。 */
+      taskKind?: string;
       text: string;
       at?: number;
     }

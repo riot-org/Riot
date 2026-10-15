@@ -77,6 +77,7 @@ export default {
   "kernel.task.activity.started": "시작",
   "kernel.task.activity.tool": "→ {name}",
   "kernel.task.activity.said": "{text}",
+  "kernel.task.activity.shell": "{command}",
   "kernel.task.activity.completed": "완료",
   "kernel.task.activity.failed": "실패",
   "kernel.task.activity.cancelled": "중지됨",

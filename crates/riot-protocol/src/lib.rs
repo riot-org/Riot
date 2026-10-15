@@ -14,6 +14,7 @@ pub mod event;
 pub mod hook;
 pub mod hostcall;
 pub mod id;
+pub mod jobs;
 pub mod message;
 pub mod permission;
 pub mod provider;

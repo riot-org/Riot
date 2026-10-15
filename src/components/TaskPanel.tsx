@@ -31,6 +31,8 @@ export function kindLabel(kind: string): string {
       return t("transcript.task.kind.explore");
     case "fork":
       return t("transcript.task.kind.fork");
+    case "shell":
+      return t("transcript.task.kind.shell");
     default:
       return t("transcript.task.kind.run");
   }
@@ -79,25 +81,28 @@ export const TaskNoticeCard = memo(function TaskNoticeCard({ item }: { item: Not
           {item.title}
         </span>
         {/* 点 id 打开那个子 agent 的完整会话（不是展开汇报）。span 而不是
-            button：外层已经是 button，button 套 button 是非法 HTML。 */}
-        <span
-          className="task-notice-id task-link"
-          role="link"
-          tabIndex={0}
-          title={t("transcript.task.openSession")}
-          onClick={(e) => {
-            e.stopPropagation();
-            openSubagent(item.agentId, item.title);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
+            button：外层已经是 button，button 套 button 是非法 HTML。
+            后台命令没有会话，输出就在展开的正文里。 */}
+        {item.taskKind === "shell" ? null : (
+          <span
+            className="task-notice-id task-link"
+            role="link"
+            tabIndex={0}
+            title={t("transcript.task.openSession")}
+            onClick={(e) => {
               e.stopPropagation();
               openSubagent(item.agentId, item.title);
-            }
-          }}
-        >
-          {t("transcript.taskNotice.view")}
-        </span>
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.stopPropagation();
+                openSubagent(item.agentId, item.title);
+              }
+            }}
+          >
+            {t("transcript.taskNotice.view")}
+          </span>
+        )}
       </button>
       <SmoothFold open={open}>
         <div className="task-notice-body">
@@ -183,17 +188,24 @@ export function BackgroundTasksPanel({
                 {task.status === "running" ? "◐" : task.status === "completed" ? "✓" : "✕"}
               </span>
               <span className="task-kind">{kindLabel(task.kind)}</span>
-              <button
-                type="button"
-                className="task-title task-link"
-                title={t("transcript.task.openSession")}
-                onClick={() => openSubagent(task.id, task.title)}
-              >
-                {/* 流光挂在里层 span 上：挂在 button 自己身上的话，全局
-                    button:hover 的 background 简写会把 background-clip:text
-                    重置掉，而字的填充色还是透明 —— 悬停时字直接消失。 */}
-                <span className="task-title-text">{task.title}</span>
-              </button>
+              {/* 后台命令没有会话可点开：标题只是标题，活动列显示命令本身。 */}
+              {task.kind === "shell" ? (
+                <span className="task-title">
+                  <span className="task-title-text">{task.title}</span>
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  className="task-title task-link"
+                  title={t("transcript.task.openSession")}
+                  onClick={() => openSubagent(task.id, task.title)}
+                >
+                  {/* 流光挂在里层 span 上：挂在 button 自己身上的话，全局
+                      button:hover 的 background 简写会把 background-clip:text
+                      重置掉，而字的填充色还是透明 —— 悬停时字直接消失。 */}
+                  <span className="task-title-text">{task.title}</span>
+                </button>
+              )}
               {/* 它自己的清单进度。「转到后台」之后前台面板不再显示那份
                   清单（见 TodoPanel），进度就看这里。 */}
               {task.status === "running" && task.todo ? (

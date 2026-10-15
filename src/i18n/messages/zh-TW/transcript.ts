@@ -98,6 +98,7 @@ export default {
   "transcript.task.kind.fork": "分岔",
   "transcript.task.kind.resume": "續接",
   "transcript.task.kind.run": "執行",
+  "transcript.task.kind.shell": "命令",
   "transcript.task.status.completed": "完成",
   "transcript.task.status.cancelled": "已停止",
   "transcript.taskNotice.running": "背景任務執行中",

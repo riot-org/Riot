@@ -111,6 +111,7 @@ export default {
   "transcript.task.kind.fork": "Fork",
   "transcript.task.kind.resume": "Resume",
   "transcript.task.kind.run": "Run",
+  "transcript.task.kind.shell": "Command",
   "transcript.task.status.completed": "Completed",
   "transcript.task.status.cancelled": "Stopped",
   "transcript.taskNotice.running": "Background task running",

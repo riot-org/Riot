@@ -176,6 +176,7 @@ export function taskNoticeItem(msg: Extract<Message, { role: "user" }>): Item | 
     agentId: notice.agent_id,
     title: notice.title,
     status: notice.status,
+    ...(notice.kind ? { taskKind: notice.kind } : {}),
     text: stripNoticePreamble(text),
     ...stampOf(msg.meta),
   };

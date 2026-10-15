@@ -336,6 +336,9 @@ pub struct ToolContext {
     ///
     /// 默认是 [`crate::terminal::NoTerminal`]，同 web / browser 的规矩。
     pub terminal: Arc<dyn crate::terminal::TerminalAccess>,
+    /// 后台命令（会自己结束、但要跑很久的）。登记进会话的后台任务面板，
+    /// 结束时通知模型。默认 [`crate::jobs::NoJobs`]，同 terminal 的规矩。
+    pub jobs: Arc<dyn crate::jobs::BackgroundJobs>,
     /// 图片怎么交给模型。产出图片的工具（截图）用它。
     ///
     /// 默认是 [`crate::vision::NoVision`]（"模型不收图片，也没配兼容模型"）

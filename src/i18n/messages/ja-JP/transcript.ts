@@ -100,6 +100,7 @@ export default {
   "transcript.task.kind.fork": "分岐",
   "transcript.task.kind.resume": "再開",
   "transcript.task.kind.run": "実行",
+  "transcript.task.kind.shell": "コマンド",
   "transcript.task.status.completed": "完了",
   "transcript.task.status.cancelled": "停止",
   "transcript.taskNotice.running": "バックグラウンドタスク実行中",

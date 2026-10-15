@@ -44,6 +44,7 @@ fn harness(proc: FakeProc) -> Harness {
         web: Arc::new(riot_protocol::web::NoWeb),
         browser: Arc::new(riot_protocol::browser::NoBrowser),
         terminal: Arc::new(riot_protocol::terminal::NoTerminal),
+        jobs: std::sync::Arc::new(riot_protocol::jobs::NoJobs),
         vision: Arc::new(riot_protocol::vision::NoVision),
         clock: Arc::new(crate::testing::FixedClock::default()),
     };
@@ -816,4 +817,142 @@ async fn describe_在没有描述时截断命令() {
         "太长了：{}",
         shown.chars().count()
     );
+}
+
+// ── 后台命令（run_in_background）──────────────────────
+
+/// 记下交过来的命令，并且当场把它跑完 —— 测的是"交过去的那段跑起来
+/// 是什么结果"，不是会话怎么排期。
+#[derive(Default)]
+struct RecordJobs {
+    got: std::sync::Mutex<Vec<riot_protocol::jobs::JobSpec>>,
+    runs: std::sync::Mutex<Vec<riot_protocol::jobs::JobRun>>,
+}
+
+impl riot_protocol::jobs::BackgroundJobs for RecordJobs {
+    fn spawn(
+        &self,
+        spec: riot_protocol::jobs::JobSpec,
+        run: riot_protocol::jobs::JobRun,
+    ) -> Result<String, String> {
+        self.got.lock().unwrap().push(spec);
+        self.runs.lock().unwrap().push(run);
+        Ok("job-1".into())
+    }
+}
+
+impl RecordJobs {
+    /// 把第一条交过来的命令跑完，返回它的结果。
+    async fn finish_first(&self) -> riot_protocol::jobs::JobReport {
+        let run = self.runs.lock().unwrap().remove(0);
+        run(CancellationToken::new()).await
+    }
+}
+
+async fn run_bg(h: &Harness, args: serde_json::Value) -> ToolOutcome {
+    if let Err(e) = Bash.validate_input(&args, &h.ctx).await {
+        return ToolOutcome::failed(e.to_string());
+    }
+    Bash.call(args, h.ctx.clone()).await
+}
+
+#[tokio::test]
+async fn 后台命令立刻返回_结束时交回退出码和输出() {
+    let mut h = harness(FakeProc::new().on(
+        "gh run watch 42 --exit-status",
+        Script::Exit {
+            stdout: "✓ build\nX test\n".into(),
+            stderr: String::new(),
+            code: 1,
+        },
+    ));
+    let jobs = Arc::new(RecordJobs::default());
+    h.ctx.jobs = Arc::clone(&jobs) as Arc<_>;
+
+    let out = run_bg(
+        &h,
+        serde_json::json!({
+            "command": "gh run watch 42 --exit-status",
+            "description": "盯 CI",
+            "run_in_background": true,
+        }),
+    )
+    .await;
+
+    // 调用本身不等命令：进程还没起，模型拿到的是 id 和"别等"。
+    assert!(is_ok(&out), "{}", text_of(&out));
+    assert!(text_of(&out).contains("job-1"), "{}", text_of(&out));
+    assert_eq!(h.proc.call_count(), 0, "调用返回前不该跑命令");
+    {
+        let got = jobs.got.lock().unwrap();
+        assert_eq!(got[0].title, "盯 CI");
+        assert_eq!(got[0].command, "gh run watch 42 --exit-status");
+    }
+
+    let report = jobs.finish_first().await;
+    assert_eq!(
+        report.status,
+        riot_protocol::task::BackgroundTaskStatus::Failed
+    );
+    assert!(report.report.contains("X test"), "{}", report.report);
+    assert!(report.report.contains("退出码 1"), "{}", report.report);
+    // 默认超时按后台那一档给，不是前台的两分钟。
+    assert_eq!(h.proc.last_spec().unwrap().timeout_ms, Some(3_600_000));
+}
+
+#[tokio::test]
+async fn 后台命令成功算完成() {
+    let mut h = harness(FakeProc::new().on("cargo test", Script::ok("ok\n")));
+    let jobs = Arc::new(RecordJobs::default());
+    h.ctx.jobs = Arc::clone(&jobs) as Arc<_>;
+    run_bg(
+        &h,
+        serde_json::json!({ "command": "cargo test", "run_in_background": true }),
+    )
+    .await;
+    let report = jobs.finish_first().await;
+    assert_eq!(
+        report.status,
+        riot_protocol::task::BackgroundTaskStatus::Completed
+    );
+}
+
+#[tokio::test]
+async fn 后台命令可以超过前台的超时上限() {
+    let h = harness(FakeProc::new());
+    let args = serde_json::json!({
+        "command": "x", "run_in_background": true, "timeout_ms": 7_200_000u64,
+    });
+    assert!(Bash.validate_input(&args, &h.ctx).await.is_ok());
+    let too_long = serde_json::json!({
+        "command": "x", "run_in_background": true, "timeout_ms": 99_999_999u64,
+    });
+    assert!(Bash.validate_input(&too_long, &h.ctx).await.is_err());
+}
+
+#[tokio::test]
+async fn 服务和后台命令不能同时要() {
+    let h = harness(FakeProc::new());
+    let args = serde_json::json!({
+        "command": "x", "background": true, "run_in_background": true,
+    });
+    let err = Bash.validate_input(&args, &h.ctx).await.unwrap_err();
+    assert!(err.to_string().contains("只能选一个"), "{err}");
+}
+
+#[tokio::test]
+async fn 没装配后台就明说_不在前台偷偷跑() {
+    let h = harness(FakeProc::new().default_script(Script::ok("x")));
+    let out = run_bg(
+        &h,
+        serde_json::json!({ "command": "x", "run_in_background": true }),
+    )
+    .await;
+    assert!(!is_ok(&out));
+    assert!(
+        text_of(&out).contains("不支持后台命令"),
+        "{}",
+        text_of(&out)
+    );
+    assert_eq!(h.proc.call_count(), 0);
 }

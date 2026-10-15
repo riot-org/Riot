@@ -516,6 +516,7 @@ mod tests {
                     agent_id: riot_protocol::id::AgentId::from_raw("ag1"),
                     title: "扒源码".into(),
                     status: riot_protocol::task::BackgroundTaskStatus::Completed,
+                    kind: String::new(),
                 }),
                 ..Default::default()
             },

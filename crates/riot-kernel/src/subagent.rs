@@ -317,6 +317,10 @@ pub enum Kind {
     /// 父自己的复制品。不能从 `subagent_type` 选出来，只由 `resume: "self"`
     /// 产生；工具、模型、系统提示全部跟父。
     Fork,
+    /// 不是子 agent：Bash `run_in_background` 放到后台的命令（见
+    /// `riot_protocol::jobs`）。借登记表进同一个后台任务面板、走同一条
+    /// 完成通知；没有会话历史，不能续接。
+    Shell,
 }
 
 impl Kind {
@@ -334,6 +338,7 @@ impl Kind {
             Self::GeneralPurpose => "general-purpose",
             Self::Explore => "explore",
             Self::Fork => "fork",
+            Self::Shell => "shell",
         }
     }
 
@@ -342,6 +347,7 @@ impl Kind {
     pub fn from_label(s: &str) -> Option<Self> {
         match s {
             "fork" => Some(Self::Fork),
+            "shell" => Some(Self::Shell),
             _ => Self::parse(s),
         }
     }
@@ -362,7 +368,7 @@ impl Kind {
     /// 这一档的轮数上限。父会话的上限是天花板，只能更小不能更大。
     fn max_turns(self, parent: u32) -> u32 {
         match self {
-            Self::GeneralPurpose | Self::Fork => parent,
+            Self::GeneralPurpose | Self::Fork | Self::Shell => parent,
             Self::Explore => parent.min(EXPLORE_MAX_TURNS),
         }
     }
@@ -402,7 +408,7 @@ fn tools_for(kind: Kind) -> Vec<Arc<dyn Tool>> {
             Arc::new(tools::WebSearch),
             Arc::new(tools::WebFetch::new(cache)),
         ],
-        Kind::GeneralPurpose | Kind::Fork => vec![
+        Kind::GeneralPurpose | Kind::Fork | Kind::Shell => vec![
             Arc::new(tools::Read),
             Arc::new(tools::Edit),
             Arc::new(tools::Write),
@@ -448,7 +454,7 @@ fn system_prompt_for(
              closely at the hits. Searching one pattern at a time is the single biggest waste of \
              time in this kind of task.",
         ),
-        Kind::GeneralPurpose | Kind::Fork => {
+        Kind::GeneralPurpose | Kind::Fork | Kind::Shell => {
             s.push("agent_identity", identity(WORKER_IDENTITY)).push(
                 "operating_rules",
                 "- Look before you touch: Read a file before you edit it, use Grep to find the \
@@ -469,7 +475,7 @@ fn system_prompt_for(
                     "Your reply is handed back VERBATIM as the investigation result. Write it as \
                      one compact report."
                 }
-                Kind::GeneralPurpose | Kind::Fork => {
+                Kind::GeneralPurpose | Kind::Fork | Kind::Shell => {
                     "Your last reply is handed back VERBATIM as the task result. Say what you \
                      did, which files you changed, and how you verified it. If you failed, say \
                      so and say why — a dressed-up \"done\" sends the delegator onward with a \
@@ -1600,6 +1606,7 @@ mod tests {
                 web: Arc::new(riot_protocol::web::NoWeb),
                 browser: Arc::new(riot_protocol::browser::NoBrowser),
                 terminal: Arc::new(riot_protocol::terminal::NoTerminal),
+                jobs: std::sync::Arc::new(riot_protocol::jobs::NoJobs),
                 vision: Arc::new(riot_protocol::vision::NoVision),
                 clock: Arc::new(riot_providers::watchdog::TokioClock),
             },
