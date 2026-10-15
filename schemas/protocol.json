@@ -5047,7 +5047,7 @@
           "type": "object"
         },
         {
-          "description": "自适应：首请求中档（那一次要理解任务、定计划），工具续轮低档\n（多数续轮只是\"读结果、发起下一步\"，全力思考纯属烧钱烧时间）。",
+          "description": "自适应：首请求中档（那一次要理解任务、定计划），工具续轮低档\n（多数续轮只是\"读结果、发起下一步\"，全力思考纯属烧钱烧时间）。\nAnthropic 上例外：整会话同一档，见 [`ThinkingConfig::Adaptive`]。",
           "properties": {
             "mode": {
               "const": "adaptive",
