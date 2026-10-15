@@ -619,10 +619,20 @@ export const Transcript = memo(function Transcript({
    *
    * - `"restore"`：切回会话还原位置。这一拍里的 scroll 一律不算用户的 ——
    *   正式包揭开面板时 WKWebView 会把 scrollTop 清成 0 再冒一次。
-   * - `"bottom"`：贴底。只挡**落在底部**的那次 scroll；落在别处说明用户
-   *   同一帧里在往上翻，必须按用户算。
+   * - `"bottom"`：贴底。只挡**落在自己写下的位置**（pinnedTop）的那次
+   *   scroll；落在别处说明用户同一帧里在往上翻，必须按用户算。
    */
   const pinning = useRef<null | "bottom" | "restore">(null);
+  /**
+   * 贴底写入后 scrollTop 的回读值。
+   *
+   * `[约束]` 认"自己那次 scroll"必须比写下的值，不能比"此刻的底"。scroll
+   * 事件下一帧才派发，这期间内容可能又长了（生成中几乎每帧都在长），底
+   * 已经不在写下的地方 —— 按位置认就会当成用户滚回了底部，把跟随接回去。
+   * 用户恰好在这一帧之间点开一段思考的话，点击刚交出的跟随被当场收回，
+   * 点开的内容随即被往上推走。
+   */
+  const pinnedTop = useRef(0);
   /**
    * 翻历史时的滚动锚点：视口里第一个顶边完整可见的块 + 它到视口顶的距离。
    *
@@ -916,6 +926,7 @@ export const Transcript = memo(function Transcript({
     if (Math.abs(box.scrollTop - target) > 0.5) {
       pinning.current = "bottom";
       box.scrollTop = target;
+      pinnedTop.current = box.scrollTop;
       requestAnimationFrame(() => {
         if (pinning.current === "bottom") pinning.current = null;
       });
@@ -1121,7 +1132,7 @@ export const Transcript = memo(function Transcript({
       // false，这次滚动不是用户翻的，不能写进缓存、也不能改 stick。
       if (!armedRef.current) return;
       if (pinning.current === "restore") return;
-      if (pinning.current === "bottom" && Math.abs(top - bottomTop(box)) <= 1) return;
+      if (pinning.current === "bottom" && Math.abs(top - pinnedTop.current) <= 1) return;
       const dfb = distFromBottom(box);
       if (delta < 0 && dfb > 1 && (!stick.current || userScrolling())) {
         // 往上翻。dfb > 1 挡掉两种假象：底部橡皮筋回弹，以及内容变短时
@@ -1737,7 +1748,7 @@ export const Transcript = memo(function Transcript({
   }, [items]);
 
   const liveTail = busy && !streaming;
-  const blocks = useMemo(() => groupBlocks(items, liveTail), [items, liveTail]);
+  const blocks = useMemo(() => groupBlocks(items, liveTail, thinking), [items, liveTail, thinking]);
   // 再按轮收一层。离屏的轮整个跳过排版绘制，这一层就是那个开关挂的地方
   // （见 groupTurns 和 styles.css 的 `.turn`）。
   const turns = useMemo(() => groupTurns(blocks, keyOf), [blocks, keyOf]);
@@ -1751,10 +1762,13 @@ export const Transcript = memo(function Transcript({
     () => turns.map((t) => liveTurnHeights.current.get(t.key) ?? estimateTurnHeight(t.blocks, colWidth)),
     [turns, colWidth],
   );
-  // 正在流的思考并进尾部直播组（组头滚思考预览、落定进组行数不变），
-  // 没有直播组可挂时才单独成行 —— 那一行随后被组头原地接替，也不跳。
+  // 正在流的思考挂进尾部那个组的组尾 —— 它落定后就进这个组（见
+  // groupBlocks 的 liveThink），挂在别处落定时就是一次换位。正文已经
+  // 开始流、组不再直播时也照挂。尾部没有组（前面是正文或提问）才单独
+  // 成行：落定后还是这一行；接着开了工具就和工具成组（用户展开着在读
+  // 的话组跟着开，见 ProcessGroup）。
   const tailBlock = blocks[blocks.length - 1];
-  const liveFold = tailBlock?.kind === "fold" && tailBlock.live ? tailBlock : undefined;
+  const liveFold = tailBlock?.kind === "fold" ? tailBlock : undefined;
   // 贴底的那几条立刻走完整 markdown / diff。更早的等进视野再解析，
   // 否则长会话第一次打开会把主线程卡死。查找时全量水合，否则搜不到。
   const hydrateFrom = Math.max(0, blocks.length - 12);

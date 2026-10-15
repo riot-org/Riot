@@ -1,7 +1,8 @@
 import { afterAll, describe, expect, it } from "vitest";
 
 import { setLocaleChoice } from "../i18n";
-import { type FoldItem, foldStat, foldSummary } from "./ProcessFold";
+import type { Item } from "../hooks/useSession";
+import { type Block, type FoldItem, foldStat, foldSummary, groupBlocks } from "./ProcessFold";
 
 let n = 0;
 function tool(name: string, input: Record<string, unknown> = {}, result?: string): FoldItem {
@@ -103,5 +104,39 @@ describe("foldSummary", () => {
   it("只有思考时落到思考时长", () => {
     setLocaleChoice("zh-CN");
     expect(foldSummary([think(3000), think(2000)])).toBe("思考过程 · 5 秒");
+  });
+});
+
+describe("groupBlocks", () => {
+  const user: Item = { kind: "user", id: "u1", text: "问" };
+  const answer: Item = { kind: "assistant", id: "a1", text: "答" };
+  /** 块的骨架：组按 id，行按条目 id。比的是"排出来是什么样"。 */
+  const shape = (bs: Block[]) => bs.map((b) => (b.kind === "fold" ? `fold:${b.id}` : `row:${b.item.id}`));
+
+  // 生成中（思考还在流、正文已经开始流）和消息落定后，分组必须一样。
+  // 不一样的话，用户点开读着的那段思考落定时会换到别处（并进收着的组）。
+  it("还没落定的思考预先算进尾部那段：落定前后分组不变", () => {
+    const read = tool("Read");
+    const settled = think(1000);
+    // 前面只有一条工具：正文在流（liveTail 假）时它不该退回成一行
+    const live = groupBlocks([user, read], false, true);
+    const done = groupBlocks([user, read, settled, answer], false, false);
+    expect(shape(live)).toEqual(["row:u1", `fold:${read.id}`]);
+    expect(shape(done).slice(0, 2)).toEqual(shape(live));
+  });
+
+  it("前面已经成组：思考落定进同一个组", () => {
+    const k0 = think(500);
+    const read = tool("Read");
+    const live = groupBlocks([user, k0, read], false, true);
+    const done = groupBlocks([user, k0, read, think(800), answer], false, false);
+    expect(shape(live)).toEqual(["row:u1", `fold:${k0.id}`]);
+    expect(shape(done).slice(0, 2)).toEqual(shape(live));
+  });
+
+  it("尾部没有过程时思考不凭空成组（单独成行，落定还是一行）", () => {
+    const k = think(500);
+    expect(shape(groupBlocks([user], false, true))).toEqual(["row:u1"]);
+    expect(shape(groupBlocks([user, k, answer], false, false))).toEqual(["row:u1", `row:${k.id}`, "row:a1"]);
   });
 });

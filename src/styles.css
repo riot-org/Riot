@@ -10441,14 +10441,14 @@ button.field-slider-state:hover {
   color: var(--text-faint);
   font-size: 12px;
   padding: 2px 0;
-  /* 直播时预览要占满剩余宽度，标题必须整行铺开。 */
   max-width: 100%;
 }
 
+/* 直播只换颜色，不换盒子。`[约束]` 早先这里是整行铺开的 flex（标题后
+   面滚思考预览，预览已去掉）：inline-flex 落在行盒里比 flex 多出行高
+   支柱的那一截，直播块落定成条目那一下标题行高了 2px，下面正读着的
+   展开思考跟着往下跳。 */
 .think-block.live .think-head {
-  display: flex;
-  width: 100%;
-  text-align: left;
   color: var(--text-dim);
 }
 

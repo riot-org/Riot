@@ -84,6 +84,13 @@ function foldable(it: Item): it is FoldItem {
  * 组头恒为一行，工具完成只换行内文字，不再有"独立行收进组"的增删。
  * 单条的段落等轮到正文或轮次结束时自然还原成普通一行（组头和单行
  * 都是一行高，这次还原不跳）。
+ *
+ * `liveThink`（有还没落定的思考）把那段思考**预先算进**尾部这段过程：
+ * 它落定时就排在这段的末尾（思考在正文之前落定），分组按落定后的样子
+ * 提前定好。`[约束]` 不能等落定了再并：正文开始流之后 liveTail 已经是
+ * 假，早先尾部那段（哪怕一条）不成组，思考只能单独成行挂在下面 ——
+ * 用户把它点开读着，消息一收尾它被并进上面那个收着的组，正读着的几千
+ * 像素当场消失，下面整体顶上来。
  */
 /**
  * 用户展开过的过程组（按组 id，即首条的 id）。
@@ -109,14 +116,15 @@ function rememberFold(id: string, open: boolean) {
   }
 }
 
-export function groupBlocks(items: Item[], liveTail = false): Block[] {
+export function groupBlocks(items: Item[], liveTail = false, liveThink = false): Block[] {
   const blocks: Block[] = [];
   let run: FoldItem[] = [];
   const flush = (tail: boolean) => {
     const first = run[0];
     if (!first) return;
     const live = tail && liveTail;
-    if (run.length >= 2 || live || openFolds.has(first.id)) {
+    const size = run.length + (tail && liveThink ? 1 : 0);
+    if (size >= 2 || live || openFolds.has(first.id)) {
       blocks.push({ kind: "fold", id: first.id, items: run, live });
     } else {
       blocks.push({ kind: "row", item: first });
@@ -347,7 +355,15 @@ export const ProcessGroup = memo(
     thinkingClock?: ThinkClock | null;
   }) {
     const { tn } = useT();
-    const [open, setOpenRaw] = useState(() => openFolds.has(id));
+    const [open, setOpenRaw] = useState(() => {
+      if (openFolds.has(id)) return true;
+      // 生成中刚成组，收进来的是用户正展开着读的那段思考（它单独成行时
+      // 被点开，随后工具开始、两条成了组）：组跟着开。收着的话正读着的
+      // 内容当场消失，下面整体顶上来。
+      if (!live || !items.some((it) => it.kind === "thinking" && isThinkOpen(it.text))) return false;
+      rememberFold(id, true);
+      return true;
+    });
     const setOpen = (v: boolean) => {
       setOpenRaw(v);
       rememberFold(id, v);
@@ -459,6 +475,8 @@ export const ProcessGroup = memo(
 const expandedThinks = new Map<string, true>();
 /** 认人够用就行，键留太长白占内存。 */
 const thinkKey = (text: string) => text.slice(0, 80);
+/** 这段思考被用户展开着。 */
+const isThinkOpen = (text: string) => expandedThinks.has(thinkKey(text));
 /** 展开过的块不清会一直攒着。上限之外按最早展开的先丢。 */
 const EXPANDED_MAX = 200;
 
