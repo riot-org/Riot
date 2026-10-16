@@ -2831,6 +2831,7 @@ impl AppState {
             &spec.when,
             session_id,
             root.display().to_string(),
+            true,
         )
         .await
     }
@@ -2864,7 +2865,7 @@ impl AppState {
         if prompt.is_empty() {
             return Err(ui_error!("host.schedule.promptEmpty"));
         }
-        self.insert_schedule(name, prompt, &draft.when, session_id, root)
+        self.insert_schedule(name, prompt, &draft.when, session_id, root, false)
             .await
     }
 
@@ -2876,6 +2877,7 @@ impl AppState {
         when: &WhenSpec,
         session_id: Option<String>,
         root: String,
+        by_agent: bool,
     ) -> Result<ScheduledTask, UiError> {
         let now = crate::schedule::now_ms();
         let (repeat, first_run) = crate::schedule::resolve_spec(when, now)?;
@@ -2893,6 +2895,7 @@ impl AppState {
             last_session_id: None,
             created_at_ms: now,
             runs: Vec::new(),
+            by_agent,
         };
 
         {
@@ -3231,6 +3234,15 @@ impl AppState {
             let name = g.tasks.iter_mut().find(|t| t.id == task_id).map(|t| {
                 t.finish_run(session_id, now);
                 t.name.clone()
+            });
+            // 模型给自己定的一次性闹钟，响过就收掉 —— 不然"已完成"越攒越多，
+            // 用户得自己去清。结果在会话里，列表里这条没有别的用处。
+            g.tasks.retain(|t| {
+                let spent = t.id == task_id && t.spent_agent_once();
+                if spent {
+                    tracing::info!(task = %t.id, "agent one-time task finished, removing it");
+                }
+                !spent
             });
             if name.is_some() {
                 self.persist_schedules(&g);

@@ -87,9 +87,28 @@ pub struct PersistedTask {
     /// 运行历史，新的在前，最多 [`MAX_RUNS`] 条。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runs: Vec<PersistedRun>,
+    /// 模型自己建的（Schedule 工具），不是用户在表单里设的。一次性的这种
+    /// 是模型给自己定的闹钟（"等会儿回来看发版结果"），成功跑完就删掉
+    /// （见 [`Self::spent_agent_once`]）。老数据没有这个字段，按用户建的算。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub by_agent: bool,
 }
 
 impl PersistedTask {
+    /// 模型建的一次性任务、已经跑过、最近一次成功跑完 —— 留着只是列表里的
+    /// 一条"已完成"，结果在它续跑 / 新开的会话里。失败的不算：留给用户看
+    /// 错因、决定要不要重跑。
+    pub fn spent_agent_once(&self) -> bool {
+        self.by_agent
+            && self.repeat == Repeat::Once
+            && !self.enabled
+            && self.next_run_ms.is_none()
+            && self
+                .runs
+                .first()
+                .is_some_and(|r| r.finished_at_ms.is_some() && r.error.is_none())
+    }
+
     /// 记一次开跑（或开跑即失败）。新的插在最前，超出上限的从尾部掐掉。
     /// 顺手维护 `last_run_ms` / `last_session_id` —— 它们是历史的头一条
     /// 的投影，两处分开写迟早对不上。
@@ -753,6 +772,7 @@ mod tests {
                 last_session_id: None,
                 created_at_ms: 1,
                 runs: Vec::new(),
+                by_agent: false,
             }],
         };
         save(dir.path(), &book).expect("保存");
@@ -785,6 +805,7 @@ mod tests {
             last_session_id: None,
             created_at_ms: 1,
             runs: Vec::new(),
+            by_agent: false,
         }
     }
 
@@ -871,6 +892,39 @@ mod tests {
             "推进到明天，不能开机就补跑"
         );
         assert!(tasks[0].enabled, "周期任务照常跑下去");
+    }
+
+    /// 模型建的一次性任务成功跑完才算"用完了"；失败的、用户建的、周期的、
+    /// 还没跑的都不算。
+    #[test]
+    fn 模型的一次性闹钟_成功跑完才算用完() {
+        let mut t = task(Repeat::Once, None);
+        t.enabled = false;
+        t.by_agent = true;
+        assert!(!t.spent_agent_once(), "还没跑过");
+        t.push_run(1, Some("s1".into()), None);
+        assert!(!t.spent_agent_once(), "还在跑");
+        t.finish_run("s1", 2);
+        assert!(t.spent_agent_once());
+
+        let mut failed = t.clone();
+        failed.push_run(3, None, Some(ui_error!("host.session.missing")));
+        assert!(!failed.spent_agent_once(), "失败的留给用户看");
+
+        let mut by_user = t.clone();
+        by_user.by_agent = false;
+        assert!(!by_user.spent_agent_once(), "用户建的不动");
+
+        let mut revived = t.clone();
+        revived.enabled = true;
+        revived.next_run_ms = Some(10);
+        assert!(!revived.spent_agent_once(), "重设了时间的不动");
+
+        let mut daily = t;
+        daily.repeat = Repeat::Daily {
+            time: "09:00".into(),
+        };
+        assert!(!daily.spent_agent_once(), "周期任务不动");
     }
 
     #[test]
