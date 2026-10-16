@@ -6086,6 +6086,9 @@ body.file-dragging.file-drop-hot * {
 /* 一行：缩进（内联 paddingLeft）+ 图标槛 + 名字。紧凑无边框（Codex /
    Cursor 同款），一屏能扫三十行。名字不换行、超宽截断 —— 整条相对路径
    在 title 里。 */
+/* 文件名 13px、--text-soft：和代码预览同一档字号，颜色比旁边的路径灰亮
+   一档（--text-dim 在一整列文件名上太暗，看久了累），又不和正文抢。
+   悬停 / 选中再提到 --text。 */
 .tree-row {
   position: relative;
   display: flex;
@@ -6094,8 +6097,8 @@ body.file-dragging.file-drop-hot * {
   height: 24px;
   padding-right: 8px;
   border-radius: 6px;
-  font-size: 12.5px;
-  color: var(--text-dim);
+  font-size: 13px;
+  color: var(--text-soft);
   white-space: nowrap;
   cursor: default;
   user-select: none;
@@ -6169,7 +6172,7 @@ body.file-dragging.file-drop-hot * {
   margin-left: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--text-faint);
 }
 
@@ -6382,8 +6385,8 @@ body.file-dragging.file-drop-hot * {
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--bg-side);
-  font-size: 12px;
-  line-height: 1.6;
+  font-size: 13px;
+  line-height: 1.5385;
 }
 
 /* 代码预览 / 编辑器（CodeMirror，见 lib/codeEditor）。滚动在编辑器自己的
@@ -9913,13 +9916,15 @@ button.field-slider-state:hover {
 
 /* 行内代码：只有底色，不描边 —— 描边在行距里显得比底色高，折行时上下
    两行的块框几乎碰在一起，像连成一片。
-   字号比正文小一号 —— 等宽字体的字面比中文无衬线大，0.92em 会显得
-   比旁边的字还胖。
+   字号是正文的 13/14（正文 14px 时正好 13px），对齐 Claude 桌面端和
+   代码块的 13px。早先用过 0.88em：等宽字体的字面比中文无衬线大，0.92em
+   左右会显得比旁边的字略胖；现在为了和代码块、代码预览同一档而接受
+   这一点。
    只管行内（`:not(pre) >`）：代码块里的 <code> 带着 highlight.js 的
    .hljs 底色和正文色，这里的颜色一旦压上去，整块代码的底色字都会被染。 */
 .md :not(pre) > code {
   font-family: var(--mono);
-  font-size: 0.88em;
+  font-size: 0.928571em;
   color: var(--md-code-text);
   background: var(--md-code-bg);
   padding: 0.1em 0.4em;
@@ -10584,13 +10589,16 @@ button.field-slider-state:hover {
   background: var(--bg-hover);
 }
 
+/* 代码一律 13px、20px 一行：对齐 Claude 桌面端（正文 14px，代码只小一号）。
+   代码预览的编辑器（lib/codeEditor 的 THEME）、文件预览里的 md 代码块是
+   同一档，改要一起改。 */
 .codeblock pre {
   margin: 0;
   padding: 12px 14px;
   overflow-x: auto;
   font-family: var(--mono);
-  font-size: 12px;
-  line-height: 1.6;
+  font-size: 13px;
+  line-height: 1.5385;
 }
 
 /* highlight.js 主题自带底色，去掉 —— 容器已经有自己的背景 */

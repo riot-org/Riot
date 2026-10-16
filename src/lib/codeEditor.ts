@@ -105,16 +105,18 @@ function describeLanguage(name: string): LanguageDescription | null {
 }
 
 /**
- * 编辑器外观。尺寸和字体照旧版代码预览（.code-view 的 pre / 行号栏），
- * 颜色全走 Riot 的 CSS 变量 —— 深浅主题切换时不用重建编辑器。
+ * 编辑器外观。字号、行高和回答里的代码块是同一档（13px / 20px 一行，对齐
+ * Claude 桌面端的代码字号：正文 14px，代码只小一号 —— 小两号的话，代码里
+ * 的中文注释紧挨着 14px 的对话正文，明显矮一截）。颜色全走 Riot 的 CSS
+ * 变量 —— 深浅主题切换时不用重建编辑器。
  */
 const THEME = EditorView.theme({
-  "&": { height: "100%", fontSize: "12px", backgroundColor: "transparent" },
+  "&": { height: "100%", fontSize: "13px", backgroundColor: "transparent" },
   "&.cm-focused": { outline: "none" },
   // 不回弹：抽屉里的独立面板，滚到头没有外层要接力（同 .file-tree-list）。
   ".cm-scroller": {
     fontFamily: "var(--mono)",
-    lineHeight: "1.65",
+    lineHeight: "1.5385",
     overflowX: "hidden",
     overscrollBehavior: "none",
   },
