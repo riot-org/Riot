@@ -5,6 +5,36 @@ import { useT } from "../i18n";
 import { Chevron } from "./Chevron";
 import { FileChangeList } from "./FileChangeList";
 
+/** 每个会话"关掉时的改动规模"。纯 UI 状态，存 localStorage —— 切会话、
+ *  重启都记得，不然关掉的条切回来又冒出来。 */
+const DISMISSED_KEY = "riot.changesBar.dismissed";
+/** 最多记多少个会话。删掉的会话没人来清，封个顶免得无限长。 */
+const DISMISSED_MAX = 200;
+
+function loadDismissed(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(DISMISSED_KEY);
+    const obj: unknown = raw ? JSON.parse(raw) : {};
+    return obj && typeof obj === "object" ? (obj as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveDismissed(sessionId: string, signature: string) {
+  try {
+    const all = loadDismissed();
+    delete all[sessionId];
+    all[sessionId] = signature;
+    // 插入顺序即新旧顺序，超了从最老的砍。
+    const keys = Object.keys(all);
+    for (const k of keys.slice(0, Math.max(0, keys.length - DISMISSED_MAX))) delete all[k];
+    localStorage.setItem(DISMISSED_KEY, JSON.stringify(all));
+  } catch {
+    // 存不下就只在这次挂载里生效。
+  }
+}
+
 /**
  * 输入框上方的"本次会话改动"条(Cursor 同款位置)。
  *
@@ -33,10 +63,12 @@ export const SessionChangesBar = memo(function SessionChangesBar({
   /**
    * 手动关掉时记下的是**那一刻的改动规模**，不是一个布尔：之后又改了
    * 文件（规模变了）条自己回来 —— 用户关掉的是"这些我看过了"，不是
-   * 永久不要这个条。换会话清掉。
+   * 永久不要这个条。按会话记、落盘（见 DISMISSED_KEY）。
    */
-  const [dismissedAt, setDismissedAt] = useState<string | null>(null);
-  useEffect(() => setDismissedAt(null), [sessionId]);
+  const [dismissedAt, setDismissedAt] = useState<string | null>(
+    () => loadDismissed()[sessionId] ?? null,
+  );
+  useEffect(() => setDismissedAt(loadDismissed()[sessionId] ?? null), [sessionId]);
 
   useEffect(() => {
     if (paused) return;
@@ -94,6 +126,7 @@ export const SessionChangesBar = memo(function SessionChangesBar({
           onClick={() => {
             setOpen(false);
             setDismissedAt(signature);
+            saveDismissed(sessionId, signature);
           }}
           title={t("transcript.changesBar.closeTitle")}
           aria-label={t("transcript.changesBar.close")}
