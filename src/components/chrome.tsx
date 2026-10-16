@@ -159,6 +159,7 @@ export function TopBar({
 export function WindowControls({
   terminalOpen,
   terminalEnabled,
+  terminalRunning = 0,
   onToggleTerminal,
   drawerOpen,
   drawerEnabled,
@@ -167,6 +168,9 @@ export function WindowControls({
   terminalOpen: boolean;
   /** 终端组跟着会话走（每个会话一份），没有会话时置灰。 */
   terminalEnabled: boolean;
+  /** 当前会话里模型起的、还在跑的终端数。>0 时按钮上带个计数 —— 认领
+   *  不再弹面板，这是"后台有服务在跑"的唯一线索。 */
+  terminalRunning?: number;
   onToggleTerminal: () => void;
   /** 右侧工作台抽屉。里面装什么由抽屉自己的标签栏 / 空状态管，
    *  这里只有总开关（Codex 同款）。 */
@@ -188,6 +192,14 @@ export function WindowControls({
         aria-pressed={terminalOpen}
       >
         <TerminalIcon />
+        {terminalRunning > 0 ? (
+          <span
+            className="tb-count"
+            aria-label={t("app.win.terminalRunning", { count: terminalRunning })}
+          >
+            {terminalRunning}
+          </span>
+        ) : null}
       </button>
       <button
         className={drawerOpen ? "tb-btn active" : "tb-btn"}

@@ -97,6 +97,7 @@ export default {
   "app.win.terminal": "터미널 패널",
   "app.win.terminalTitle": "터미널 패널 (⌘J)",
   "app.win.terminalNeedSession": "터미널을 사용하려면 먼저 세션을 열어 주세요",
+  "app.win.terminalRunning": "터미널에서 서비스 {count}개 실행 중",
   "app.win.drawer": "사이드 패널",
   "app.scopeBadge.title": "{count}개 사이트에 침투 테스트 권한이 부여되어 있습니다 — 클릭하여 확인 또는 철회",
   "app.scopeBadge.label": "침투 테스트 범위: {count}개 사이트",

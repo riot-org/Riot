@@ -97,6 +97,7 @@ export default {
   "app.win.terminal": "終端機面板",
   "app.win.terminalTitle": "終端機面板（⌘J）",
   "app.win.terminalNeedSession": "請先開啟一個會話再使用終端機",
+  "app.win.terminalRunning": "{count} 個服務在終端機裡執行中",
   "app.win.drawer": "側邊面板",
   "app.scopeBadge.title": "{count} 個網站已授權侵入性滲透操作 —— 點擊查看與撤銷",
   "app.scopeBadge.label": "滲透授權 {count} 個網站",

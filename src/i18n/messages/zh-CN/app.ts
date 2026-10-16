@@ -98,6 +98,7 @@ export default {
   "app.win.terminal": "终端面板",
   "app.win.terminalTitle": "终端面板（⌘J）",
   "app.win.terminalNeedSession": "先打开一个会话再用终端",
+  "app.win.terminalRunning": "{count} 个服务在终端里跑着",
   "app.win.drawer": "侧边面板",
   "app.scopeBadge.title": "{count} 个站点授权了侵入性渗透操作 —— 点击查看和撤销",
   "app.scopeBadge.label": "渗透授权 {count} 个站点",

@@ -101,6 +101,7 @@ export default {
   "app.win.terminal": "Terminal panel",
   "app.win.terminalTitle": "Terminal panel (⌘J)",
   "app.win.terminalNeedSession": "Open a session to use the terminal",
+  "app.win.terminalRunning": "{count} service(s) running in the terminal",
   "app.win.drawer": "Side panel",
   "app.scopeBadge.title": "{count} sites are authorized for intrusive pentesting — click to review or revoke",
   "app.scopeBadge.title#one": "{count} site is authorized for intrusive pentesting — click to review or revoke",

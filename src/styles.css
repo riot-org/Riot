@@ -1002,6 +1002,25 @@ html[data-resizing] .slide-panel {
   font-weight: 600;
 }
 
+/* 终端按钮右上角的计数：模型起的服务在跑。认领不再弹面板，这是唯一的
+   线索 —— 要看得见，但不能像告警：用强调色的小圆底，不闪不跳。 */
+.tb-count {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 13px;
+  text-align: center;
+  pointer-events: none;
+}
+
 .tb-btn:hover:not(:disabled) {
   background: var(--bg-hover);
   color: var(--text);
@@ -3649,6 +3668,22 @@ html[data-host='web'] body {
 
 .tool-head-row > .tool-thumb {
   margin-right: 8px;
+}
+
+/* Bash 起的服务：摘要行右侧的"查看终端"。和摘要同一档字号，链接色，
+   不抢摘要行的视线。 */
+.tool-term-link {
+  flex: none;
+  padding: 0 4px;
+  border: none;
+  background: none;
+  font-size: 12px;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.tool-term-link:hover {
+  text-decoration: underline;
 }
 
 .group-thumbs {

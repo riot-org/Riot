@@ -71,6 +71,11 @@ import { newPresetId } from "./lib/prompts";
 import { inheritedSampling } from "./lib/sampling";
 import { subscribeSessionOpen } from "./lib/sessionLink";
 import { subscribeSubagentOpen } from "./lib/subagentLink";
+import {
+  openAgentTerminal,
+  subscribeAgentTerminalOpen,
+  useRunningAgentTerminals,
+} from "./lib/agentTerminals";
 import { transcriptView } from "./components/Transcript";
 import {
   ContextMenu,
@@ -199,6 +204,7 @@ export function App() {
    *  面板里乱切一通（渲染器会白做适配）。 */
   const lastPreview = useRef<string | null>(null);
   const [showTerm, setShowTerm] = useState(false);
+  const runningAgentTerms = useRunningAgentTerminals();
   const [showSessionCfg, setShowSessionCfg] = useState(false);
   /**
    * 每个会话生效中的权限档，由 Composer 上报。SessionInfo.mode 是宿主侧
@@ -305,6 +311,8 @@ export function App() {
   // effect 依赖它 —— 等于每渲染一次就把 window 的 keydown 解绑重绑一次。
   const projects = useMemo(() => projectList ?? [], [projectList]);
   const activeSession = sessions.find((s) => s.id === active) ?? null;
+  /** 当前会话里模型起的、还在跑的终端数。顶栏终端按钮上的计数。 */
+  const agentTermsHere = runningAgentTerms.filter((x) => x.sessionId === active).length;
   /** 当前会话生效中的权限档，顶栏标记和会话设置弹窗共用。Composer 还没
    *  上报时退到宿主侧的值；那时它是 plan 的话说明还没有人记得进规划前
    *  那一档，按最严的算。 */
@@ -554,6 +562,9 @@ export function App() {
       ),
     [openTab],
   );
+  // 模型起的终端：顶栏计数、工具卡片的"查看终端"。选哪个标签是
+  // TerminalPanel 的事，这里只管把面板打开。
+  useEffect(() => subscribeAgentTerminalOpen(() => setShowTerm(true)), []);
   // 计划面板：对话里的计划卡点开它。
   useEffect(() => subscribePlanOpen(() => openTab({ kind: "plan" })), [openTab]);
   // 历史会话：回答里的 `riot://session/<id>` 链接。会话已删就告诉链接
@@ -1345,7 +1356,12 @@ export function App() {
     <WindowControls
       terminalOpen={showTerm}
       terminalEnabled={activeSession !== null}
-      onToggleTerminal={() => setShowTerm((v) => !v)}
+      terminalRunning={agentTermsHere}
+      // 收着、且有模型的服务在跑：打开时直接切到它 —— 计数就是在说"这里
+      // 有东西"，点开却落在一个空 shell 上等于答非所问。
+      onToggleTerminal={() =>
+        !showTerm && agentTermsHere > 0 ? openAgentTerminal() : setShowTerm((v) => !v)
+      }
       drawerOpen={wb.open}
       drawerEnabled={activeSession !== null}
       onToggleDrawer={() => {
@@ -1629,7 +1645,6 @@ export function App() {
             sessionId={activeSession?.id ?? null}
             defaultRoot={activeSession?.root ?? projects[0] ?? null}
             onHide={() => setShowTerm(false)}
-            onAgentTerminal={() => setShowTerm(true)}
             onSendSelection={setTermSnippet}
           />
         </SlidePanel>

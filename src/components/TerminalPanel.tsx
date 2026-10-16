@@ -19,6 +19,7 @@ import {
 import { type ConfirmRequest, ConfirmDialog } from "./ConfirmDialog";
 import { TerminalIcon } from "./icons";
 import { t as msg, useT } from "../i18n";
+import { setRunningAgentTerminals, subscribeAgentTerminalOpen } from "../lib/agentTerminals";
 import { basename } from "../pathDisplay";
 import { type Theme, getTheme, useTheme } from "../theme";
 
@@ -50,7 +51,6 @@ export function TerminalPanel({
   sessionId,
   defaultRoot,
   onHide,
-  onAgentTerminal,
   onSendSelection,
 }: {
   visible: boolean;
@@ -62,8 +62,6 @@ export function TerminalPanel({
   defaultRoot: string | null;
   /** 用户收面板、或最后一个标签关闭。shell 不一定死，见组件注释。 */
   onHide: () => void;
-  /** 模型起了个服务。面板该自己弹出来 —— 那是它跑在哪里的唯一线索。 */
-  onAgentTerminal?: () => void;
   /** 把选中的输出交给输入框。用户的终端模型读不到，要给就这么给。 */
   onSendSelection?: (text: string) => void;
 }) {
@@ -219,13 +217,41 @@ export function TerminalPanel({
     return () => timers.forEach((id) => window.clearTimeout(id));
   }, [state.tabs]);
 
+  // 在跑的模型终端推给顶栏计数和工具卡片（见 lib/agentTerminals）。
+  useEffect(() => {
+    setRunningAgentTerminals(
+      state.tabs.flatMap((x) =>
+        x.fromAgent && !x.exited && x.hostId != null
+          ? [{ hostId: x.hostId, sessionId: x.sessionId }]
+          : [],
+      ),
+    );
+  }, [state.tabs]);
+
+  // 点顶栏计数 / 工具卡片：切到那个模型终端（开面板是 App 的事）。没指定
+  // 就切到当前会话最近认领的那个。不在当前会话组里的不切 —— 切过去也看不见。
+  useEffect(
+    () =>
+      subscribeAgentTerminalOpen((hostId) => {
+        setState((prev) => {
+          const own = prev.tabs.filter(
+            (x) => x.fromAgent && !x.exited && x.sessionId === sessionRef.current,
+          );
+          const target =
+            hostId == null ? own[own.length - 1] : own.find((x) => x.hostId === hostId);
+          return target && target.uid !== prev.active ? { ...prev, active: target.uid } : prev;
+        });
+      }),
+    [],
+  );
+
   // 模型起的服务：宿主那边已经在跑了，这里认领过来变成一个标签。
   //
-  // 轮询而不是等事件：起服务发生在一轮的中间，等轮次结束才显示的话，
-  // 用户要盯着一个"它在干什么"的空白等上几分钟。三秒一次 IPC 返回几个
-  // 小结构，这点开销换的是"服务一起来就看得见"。
-  const agentRef = useRef(onAgentTerminal);
-  agentRef.current = onAgentTerminal;
+  // 轮询而不是等事件：起服务发生在一轮的中间，等轮次结束才出现的话，
+  // 顶栏的计数要滞后几分钟。三秒一次 IPC 返回几个小结构。
+  //
+  // 认领**不弹面板**：大部分时候用户不关心服务日志，弹出来是打断。线索
+  // 在顶栏终端按钮的计数和工具卡片的"查看终端"上，点了才开。
   useEffect(() => {
     let alive = true;
     const scan = () => {
@@ -254,9 +280,9 @@ export function TerminalPanel({
                 adoptTab(t.id, t.title ?? msg("panels.terminal.title"), t.owner ?? sessionRef.current),
               );
             if (add.length === 0) return prev;
-            // 不抢 active —— 用户正看着/用着当前标签，服务在后台认领即可，
-            // 面板底部会亮出"模型"标签作为线索。只有当前会话的组原本
-            // 空着、且新服务就属于当前会话时才切过去。
+            // 不抢 active —— 用户正看着/用着当前标签，服务在后台认领即可。
+            // 只有当前会话的组原本空着、且新服务就属于当前会话时才切过去
+            // （面板收着时也这么做：用户点开时第一眼就是它）。
             const sid = sessionRef.current;
             const groupHasActive = prev.tabs.some(
               (t) => t.sessionId === sid && t.uid === prev.active,
@@ -265,11 +291,6 @@ export function TerminalPanel({
             const active = !groupHasActive && lastOwn ? lastOwn.uid : prev.active;
             return { tabs: [...prev.tabs, ...add], active };
           });
-          // 弹面板只为当前会话的服务 —— 别的会话起的服务在这里不可见，
-          // 弹出来只会让人对着无关的组困惑。
-          if (fresh.some((t) => (t.owner ?? sessionRef.current) === sessionRef.current)) {
-            agentRef.current?.();
-          }
         })
         .catch(() => {
           // 宿主还没起来 / 命令被拒。下一轮再说。

@@ -97,6 +97,7 @@ export default {
   "app.win.terminal": "ターミナルパネル",
   "app.win.terminalTitle": "ターミナルパネル（⌘J）",
   "app.win.terminalNeedSession": "ターミナルを使うには先にセッションを開いてください",
+  "app.win.terminalRunning": "{count} 個のサービスがターミナルで実行中",
   "app.win.drawer": "サイドパネル",
   "app.scopeBadge.title": "{count} 件のサイトで侵入的なペネトレーション操作が許可されています —— クリックして確認・取り消し",
   "app.scopeBadge.label": "ペンテスト許可：{count} サイト",

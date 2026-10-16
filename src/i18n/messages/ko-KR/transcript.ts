@@ -110,6 +110,7 @@ export default {
   "transcript.task.kind.resume": "이어서",
   "transcript.task.kind.run": "실행",
   "transcript.task.kind.shell": "명령",
+  "transcript.tool.openTerminal": "터미널 보기",
   "transcript.task.status.completed": "완료",
   "transcript.task.status.cancelled": "중지됨",
   "transcript.taskNotice.running": "백그라운드 작업 실행 중",

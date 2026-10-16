@@ -111,6 +111,7 @@ export default {
   "transcript.task.kind.resume": "续接",
   "transcript.task.kind.run": "执行",
   "transcript.task.kind.shell": "命令",
+  "transcript.tool.openTerminal": "查看终端",
   "transcript.task.status.completed": "完成",
   "transcript.task.status.cancelled": "已停止",
   "transcript.taskNotice.running": "后台任务运行中",

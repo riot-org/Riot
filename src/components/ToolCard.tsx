@@ -4,6 +4,11 @@ import { createPortal } from "react-dom";
 import { type BackgroundTaskView, readImage, renderUiText } from "../bridge";
 import type { Item } from "../hooks/useSession";
 import { t, tn, useT } from "../i18n";
+import {
+  openAgentTerminal,
+  terminalIdFromResult,
+  useRunningAgentTerminals,
+} from "../lib/agentTerminals";
 import { LEGACY_PLAN_TOOL, openPlanPanel, PLAN_TOOL, SWITCH_MODE_TOOL } from "../lib/plan";
 import { agentIdFromResult, openSubagent, SubagentsContext } from "../lib/subagentLink";
 import { Chevron } from "./Chevron";
@@ -379,6 +384,7 @@ const PlainToolCard = memo(function PlainToolCard({
           <div className="tool-head">{head}</div>
         )}
         {hasImage(tool) ? <ToolThumb tool={tool} /> : null}
+        {tool.name === "Bash" ? <OpenTerminalButton tool={tool} /> : null}
       </div>
 
       {detail ? (
@@ -389,6 +395,26 @@ const PlainToolCard = memo(function PlainToolCard({
     </div>
   );
 });
+
+/**
+ * Bash 起的服务（`background: true`）：摘要行右侧一个"查看终端"。
+ *
+ * 认领服务不再弹终端面板（见 lib/agentTerminals），想看日志就点这里。只在
+ * 那个终端还在跑时出现 —— 退出后标签会自动收掉，点了也没处可去。
+ */
+function OpenTerminalButton({ tool }: { tool: Tool }) {
+  const { t } = useT();
+  const running = useRunningAgentTerminals();
+  const i = tool.input as Record<string, unknown>;
+  if (i?.background !== true) return null;
+  const id = terminalIdFromResult(tool.result);
+  if (id == null || !running.some((x) => x.hostId === id)) return null;
+  return (
+    <button type="button" className="tool-term-link" onClick={() => openAgentTerminal(id)}>
+      {t("transcript.tool.openTerminal")}
+    </button>
+  );
+}
 
 /**
  * 最近被画成"运行中"的工具（卡片或直播组头都算）。跑完时以终态新挂上的
