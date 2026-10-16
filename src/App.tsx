@@ -119,7 +119,9 @@ import {
   drawerDefault,
   drawerDragLayout,
   rightPanelMax,
+  rightShare,
   savePx,
+  sidebarDragMax,
   sidebarPushCollapses,
 } from "./lib/layout";
 import {
@@ -302,6 +304,12 @@ export function App() {
    *  松手就清掉（收起或弹回），见 drawerDragLayout。 */
   const [sidebarShown, setSidebarShown] = useState<number | null>(null);
   const sidebarShownLive = useRef<number | null>(null);
+  /** 拖左栏时右列跟着按比例变（见 rightShare）：按下那一刻是哪个右列、
+   *  占「窗口 − 左栏」的比例，以及拖动中的最新宽度（松手写盘用）。
+   *  右列没开、或窄屏浮层时为 null。 */
+  const sidebarDragRight = useRef<{ kind: "drawer" | "sched"; ratio: number; live: number } | null>(
+    null,
+  );
 
   useEffect(() => {
     // 必须 catch。没有它的话，任何一次失败都表现为永远停在"启动中" ——
@@ -1482,13 +1490,39 @@ export function App() {
           onStart={() => {
             dragFrom.current = sidebarW;
             dragLive.current = sidebarW;
+            const avail = window.innerWidth - sidebarW;
+            const right = isMobile
+              ? null
+              : schedRailOpen
+                ? { kind: "sched" as const, w: schedDetailW }
+                : rightDrawerOpen
+                  ? { kind: "drawer" as const, w: drawerW }
+                  : null;
+            sidebarDragRight.current =
+              right && avail > 0 ? { kind: right.kind, ratio: right.w / avail, live: right.w } : null;
           }}
           onDelta={(d) => {
-            const w = clamp(dragFrom.current + d, SIDEBAR.min, SIDEBAR.max);
+            // 左栏变宽变窄时，主区和右列按按下那一刻的比例一起让、一起回来
+            // （见 rightShare）。右列开着时左栏最多拖到给两者都留够下限。
+            const right = sidebarDragRight.current;
+            const rightMin = right ? (right.kind === "sched" ? SCHED_DETAIL.min : DRAWER_MIN) : 0;
+            const w = clamp(dragFrom.current + d, SIDEBAR.min, sidebarDragMax(rightMin));
             dragLive.current = w;
             setSidebarW(w);
+            if (right?.kind === "drawer") {
+              right.live = rightShare(right.ratio, w, DRAWER_MIN);
+              setDrawerW(right.live);
+            } else if (right?.kind === "sched") {
+              right.live = rightShare(right.ratio, w, SCHED_DETAIL.min, SCHED_DETAIL.max);
+              setSchedDetailW(right.live);
+            }
           }}
-          onEnd={() => savePx(LS.sidebar, dragLive.current)}
+          onEnd={() => {
+            savePx(LS.sidebar, dragLive.current);
+            const right = sidebarDragRight.current;
+            sidebarDragRight.current = null;
+            if (right) savePx(right.kind === "sched" ? LS.schedDetail : LS.drawer, right.live);
+          }}
           onReset={() => {
             setSidebarW(SIDEBAR.def);
             savePx(LS.sidebar, SIDEBAR.def);

@@ -58,6 +58,31 @@ export function rightPanelMax(sidebar: number, min: number): number {
   return Math.max(min, window.innerWidth - sidebar - MAIN_MIN);
 }
 
+/**
+ * 拖左栏时右列这一帧该多宽：按下时右列占「窗口 − 左栏」的比例保持不变。
+ *
+ * 只让主区吸收左栏的变化的话，主区先被挤到下限、右列才开始让（还是被
+ * resize 的 fit 硬压的），往回拖时多出来的宽度又全给了主区 —— 两栏一先
+ * 一后，看着像右列卡住了。按比例分，主区和右列一起变、一起回来。
+ *
+ * 结果夹在右列自己的下限和「主区留够 MAIN_MIN」之间；`max` 是右列自己
+ * 的上限（任务详情有，工作台抽屉没有）。
+ */
+export function rightShare(ratio: number, sidebar: number, min: number, max = Infinity): number {
+  const avail = window.innerWidth - sidebar;
+  return clamp(Math.round(ratio * avail), min, Math.min(max, rightPanelMax(sidebar, min)));
+}
+
+/**
+ * 左栏最宽能拖到多少：右列开着时要给主区和右列都留够下限。不然左栏
+ * 还能往右拖，可主区和右列都已经到底了 —— 右列只能被顶出窗口裁掉。
+ * `rightMin` 为 0 表示右列没开。窗口窄到连 SIDEBAR.min 都留不出时，
+ * 以 SIDEBAR.min 为准。
+ */
+export function sidebarDragMax(rightMin: number): number {
+  return clamp(window.innerWidth - MAIN_MIN - rightMin, SIDEBAR.min, SIDEBAR.max);
+}
+
 /** macOS 红绿灯占住的那一段（窗口左缘起）。左栏被推到比这还窄时，红绿灯
  *  就压到主区顶栏的标题上了 —— 推挤到这里为止，剩下的交给松手后的动画。
  *  和 styles.css 里 `.tb-traffic.show.lights` 的 84 是同一个数。 */
