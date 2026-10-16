@@ -101,6 +101,10 @@
   /* 正文和 --text-dim 之间的一档：文件块的文字、改动列表的文件名 ——
      要比旁边的路径灰亮一档，又不能和正文抢。 */
   --text-soft: #dcdce4;
+  /* 文件树的文件名和目录箭头。深色用 soft / faint 正好；浅色白底上同样
+     那一档看着发虚，各加深一档（见浅色块）。 */
+  --tree-text: var(--text-soft);
+  --tree-chevron: var(--text-faint);
   --text-dim: #a2a2ad;
   /* 最淡一级也要够得着 WCAG AA 的正文线 —— 它大量用在 11–13px 的
      必读小字上（标签标题、placeholder、说明），不是纯装饰。想再淡的
@@ -360,6 +364,8 @@ html[data-theme='light'] {
   --border-strong: #d0d0d0;
   --text: #1a1a1a;
   --text-soft: #3c3c44;
+  --tree-text: var(--text);
+  --tree-chevron: var(--text-dim);
   --text-dim: #5f5f68;
   /* WCAG AA 按最灰的底算：输入条 --bg-input ≈4.7:1，菜单 --bg-nav ≈4.9:1，
      正文 ≈5.3:1；连 hover 底 --bg-hover 也还有 ≈4.5:1。再淡就掉线，
@@ -6086,9 +6092,9 @@ body.file-dragging.file-drop-hot * {
 /* 一行：缩进（内联 paddingLeft）+ 图标槛 + 名字。紧凑无边框（Codex /
    Cursor 同款），一屏能扫三十行。名字不换行、超宽截断 —— 整条相对路径
    在 title 里。 */
-/* 文件名 13px、--text-soft：和代码预览同一档字号，颜色比旁边的路径灰亮
-   一档（--text-dim 在一整列文件名上太暗，看久了累），又不和正文抢。
-   悬停 / 选中再提到 --text。 */
+/* 文件名 13px，和代码预览同一档字号。颜色走 --tree-text：深色是比路径灰
+   亮一档的 --text-soft（--text-dim 在一整列文件名上太暗，看久了累），
+   浅色直接用正文色（白底上 soft 那一档发虚）。悬停 / 选中再提到 --text。 */
 .tree-row {
   position: relative;
   display: flex;
@@ -6098,7 +6104,7 @@ body.file-dragging.file-drop-hot * {
   padding-right: 8px;
   border-radius: 6px;
   font-size: 13px;
-  color: var(--text-soft);
+  color: var(--tree-text);
   white-space: nowrap;
   cursor: default;
   user-select: none;
@@ -6148,16 +6154,24 @@ body.file-dragging.file-drop-hot * {
   place-items: center;
 }
 
+/* 图标跟着文件名的 13px 放大（15 → 16，箭头 12 → 13）。槽宽 18px 不动：
+   槽的中心就是缩进引导线的位置（见 .tree-row::before），改槽宽得一起改
+   FileTree 的缩进常量和引导线的渐变。 */
 .tree-slot .file-icon {
   width: auto;
-  font-size: 15px;
+  font-size: 16px;
   /* 槽宽要和目录箭头一致不能收，图标靠右贴名字，同样吃进字形留白。 */
   justify-self: end;
   margin-right: -3px;
 }
 
+.tree-slot .chevron svg {
+  width: 13px;
+  height: 13px;
+}
+
 .tree-slot .chevron {
-  color: var(--text-faint);
+  color: var(--tree-chevron);
 }
 
 .tree-name {
