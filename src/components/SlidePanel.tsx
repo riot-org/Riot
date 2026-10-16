@@ -72,6 +72,7 @@ export function useSlideSettled(ref: RefObject<HTMLElement | null>): boolean {
 export function SlidePanel({
   open,
   size,
+  shown,
   axis,
   anchor = "start",
   keepMounted,
@@ -82,6 +83,9 @@ export function SlidePanel({
   open: boolean;
   /** 展开后的宽（axis=x）或高（axis=y）。拖宽时它高频变化，瞬时跟随。 */
   size: number;
+  /** 开着时壳只露出这么多（内层仍是 `size`，按 anchor 裁掉一侧）。拖抽屉
+   *  推左栏时用：左栏被一点点推出窗口，松手前不改它的真实宽度。 */
+  shown?: number | null;
   axis: "x" | "y";
   /** 裁哪一边。右侧抽屉 / 底栏必须 `end`：壳变窄时贴着窗口外缘，
    *  裁的是靠主区的那一侧。默认 `start` 是左侧栏。 */
@@ -123,7 +127,8 @@ export function SlidePanel({
     .join(" ");
   // 直接读 open，不再经一层 state 延后一拍。新挂载的元素没有"变化前"的
   // 值，不会播过渡 —— 启动时就开着的面板照旧安静地在那儿。
-  const shellStyle = axis === "x" ? { width: open ? size : 0 } : { height: open ? size : 0 };
+  const extent = open ? (shown ?? size) : 0;
+  const shellStyle = axis === "x" ? { width: extent } : { height: extent };
   const innerStyle = axis === "x" ? { width: size } : { height: size };
   // 有现场 children 就用（侧栏 / 终端 keepMounted 一直有）。
   // 父级已经卸掉内容时（抽屉、任务详情关了），退出动画用最后一帧。

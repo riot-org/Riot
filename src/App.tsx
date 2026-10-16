@@ -79,6 +79,7 @@ import {
 import { transcriptView } from "./components/Transcript";
 import {
   ContextMenu,
+  IS_MAC,
   type MenuState,
   Resizer,
   TopBar,
@@ -104,15 +105,18 @@ import { Welcome } from "./components/Welcome";
 import { type PermissionPick, forgetComposerSession } from "./components/Composer";
 import { asDirRef, basename, looksAbsPath } from "./pathDisplay";
 import {
-  DRAWER_MIN,
   LS,
   SCHED_DETAIL,
   SIDEBAR,
   TERM,
   clamp,
+  DRAWER_MIN,
+  SIDEBAR_PUSH_FLOOR_LIGHTS,
   drawerDefault,
+  drawerDragLayout,
   rightPanelMax,
   savePx,
+  sidebarPushCollapses,
 } from "./lib/layout";
 import {
   isMissingProjectError,
@@ -256,6 +260,7 @@ export function App() {
     setSidebarVisual,
     closeSidebarIfMobile,
     toggleSidebar,
+    collapseSidebar,
     sidebarW,
     setSidebarW,
     drawerW,
@@ -289,6 +294,10 @@ export function App() {
   /** 壳真正开始改宽度的那一拍。窗口开关跟这个走：跟收起动画对齐
    *  坐回顶栏，设置钮才不会先被主区拽到窗口右缘、再被开关挤回来。 */
   const [drawerVisual, setDrawerVisual] = useState(false);
+  /** 拖抽屉把左栏往外推时，左栏这一刻露出的宽度。只在那次拖动里有值，
+   *  松手就清掉（收起或弹回），见 drawerDragLayout。 */
+  const [sidebarShown, setSidebarShown] = useState<number | null>(null);
+  const sidebarShownLive = useRef<number | null>(null);
 
   useEffect(() => {
     // 必须 catch。没有它的话，任何一次失败都表现为永远停在"启动中" ——
@@ -1389,6 +1398,7 @@ export function App() {
         className="side"
         open={sidebarOpen}
         size={sidebarW}
+        shown={sidebarShown}
         keepMounted
         onVisualOpen={setSidebarVisual}
       >
@@ -1738,16 +1748,38 @@ export function App() {
             dragLive.current = drawerW;
           }}
           onDelta={(d) => {
-            // 抽屉拖的是左缘：往左（负位移）变宽
-            const w = clamp(
+            // 抽屉拖的是左缘：往左（负位移）变宽。顶到主区下限还继续往左，
+            // 就把左栏一点点推出窗口（主区宽度不动），往回拖它跟着回来。
+            // 推到红绿灯那一段为止，免得红绿灯压到顶栏标题上。
+            const { drawer, sidebarShown: shown } = drawerDragLayout(
               dragFrom.current - d,
-              DRAWER_MIN,
-              rightPanelMax(sidebarOpen ? sidebarW : 0, DRAWER_MIN),
+              sidebarOpen ? sidebarW : 0,
+              sidebarOpen && !isMobile,
+              IS_MAC && !fullscreen ? SIDEBAR_PUSH_FLOOR_LIGHTS : 0,
             );
-            dragLive.current = w;
-            setDrawerW(w);
+            dragLive.current = drawer;
+            sidebarShownLive.current = shown;
+            setDrawerW(drawer);
+            setSidebarShown(shown);
           }}
-          onEnd={() => savePx(LS.drawer, dragLive.current)}
+          onEnd={() => {
+            // 松手时决定被推的左栏去留。这一拍 .dragging 跟着摘掉，面板
+            // 过渡恢复，两种结局都从当前位置沿面板曲线走完，不跳。
+            const shown = sidebarShownLive.current;
+            if (shown !== null) {
+              sidebarShownLive.current = null;
+              setSidebarShown(null);
+              if (sidebarPushCollapses(shown, sidebarW)) {
+                // 抽屉留在原宽；左栏收到 0，主区接住腾出来的宽度。
+                collapseSidebar();
+              } else {
+                // 弹回：左栏回全宽，抽屉同步退回主区下限那一档。
+                dragLive.current = rightPanelMax(sidebarW, DRAWER_MIN);
+                setDrawerW(dragLive.current);
+              }
+            }
+            savePx(LS.drawer, dragLive.current);
+          }}
           onReset={() => {
             const w = drawerDefault();
             setDrawerW(w);

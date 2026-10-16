@@ -100,6 +100,16 @@ export function usePanelLayout() {
     });
   }, []);
 
+  /** 拖抽屉推左栏、松手时露出不到一半就收起左栏。已经收着、或窄屏浮层上是空操作。 */
+  const collapseSidebar = useCallback(() => {
+    if (isMobileNow()) return;
+    setSidebarOpen((open) => {
+      if (!open) return open;
+      localStorage.setItem(LS.sidebarOpen, "0");
+      return false;
+    });
+  }, []);
+
   return {
     isMobile,
     sidebarOpen,
@@ -108,6 +118,7 @@ export function usePanelLayout() {
     setSidebarVisual,
     closeSidebarIfMobile,
     toggleSidebar,
+    collapseSidebar,
     sidebarW,
     setSidebarW,
     drawerW,

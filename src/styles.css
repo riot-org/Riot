@@ -924,7 +924,7 @@ html[data-resizing] .slide-panel {
    短缺让抽屉去承担（被 shell 裁掉右缘）。 */
 .main {
   flex: 1;
-  min-width: 280px;
+  min-width: 500px;
   display: flex;
   flex-direction: column;
 }

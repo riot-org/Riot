@@ -40,7 +40,7 @@ export const TERM = { def: 260, min: 110 };
 /** 定时任务详情（占用系统右侧栏的位置，宽度独立于工作台抽屉）。 */
 export const SCHED_DETAIL = { def: 612, min: 500, max: 1008 };
 /** 主区挤到底还要留的宽度。跟 .main 的 min-width 是同一个数。 */
-export const MAIN_MIN = 280;
+export const MAIN_MIN = 500;
 
 /** 抽屉的默认宽度跟着窗口走 —— 固定像素在小窗口上会把对话挤没。 */
 export const drawerDefault = () => Math.round(window.innerWidth * 0.42);
@@ -56,6 +56,44 @@ export const drawerDefault = () => Math.round(window.innerWidth * 0.42);
  */
 export function rightPanelMax(sidebar: number, min: number): number {
   return Math.max(min, window.innerWidth - sidebar - MAIN_MIN);
+}
+
+/** macOS 红绿灯占住的那一段（窗口左缘起）。左栏被推到比这还窄时，红绿灯
+ *  就压到主区顶栏的标题上了 —— 推挤到这里为止，剩下的交给松手后的动画。
+ *  和 styles.css 里 `.tb-traffic.show.lights` 的 84 是同一个数。 */
+export const SIDEBAR_PUSH_FLOOR_LIGHTS = 84;
+
+/**
+ * 拖抽屉左缘时这一帧的布局。往左拖是加宽。
+ *
+ * 加到主区下限（`rightPanelMax`）之前只改抽屉。顶到下限还继续往左，并且
+ * `canPush`（左栏开着、不是窄屏浮层），就改成**推左栏**：主区宽度钉在
+ * `MAIN_MIN` 不动，左栏的可见宽度跟指针 1:1 变窄（`sidebarShown`），最窄到
+ * `floor`。主区不变宽，正文就不会在某一帧整块重排；往回拖左栏跟着回来。
+ *
+ * `sidebarShown` 只是这一次拖动的临时值，不改侧栏宽度、不写盘。收不收
+ * 由松手时的 `sidebarPushCollapses` 决定。不在推挤时它是 null。
+ */
+export function drawerDragLayout(
+  desired: number,
+  /** 左栏的完整宽度。收起时为 0。 */
+  sidebar: number,
+  canPush: boolean,
+  /** 推挤时左栏最窄留多少。 */
+  floor = 0,
+): { drawer: number; sidebarShown: number | null } {
+  const max = rightPanelMax(sidebar, DRAWER_MIN);
+  if (!canPush || sidebar <= 0 || desired <= max) {
+    return { drawer: clamp(desired, DRAWER_MIN, max), sidebarShown: null };
+  }
+  const room = window.innerWidth - MAIN_MIN;
+  const shown = clamp(room - desired, Math.min(floor, sidebar), sidebar);
+  return { drawer: Math.max(DRAWER_MIN, room - shown), sidebarShown: shown };
+}
+
+/** 松手时被推的左栏收不收：露出来的不到一半就收，否则弹回全宽。 */
+export function sidebarPushCollapses(shown: number, sidebar: number): boolean {
+  return shown < sidebar / 2;
 }
 
 export function loadPx(key: string, fallback: number): number {
