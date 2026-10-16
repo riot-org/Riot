@@ -10,8 +10,11 @@ import {
 import {
   addProject,
   browserCloseTab,
+  browserNavigate,
   browserNewTab,
+  browserReload,
   browserSelectTab,
+  browserState,
   type ConfigStatus,
   createSession,
   deleteSession,
@@ -66,6 +69,7 @@ import { useSchedules } from "./hooks/useSchedules";
 import { useSessionRecency } from "./hooks/useSessionRecency";
 import { useBrowserPanel } from "./hooks/useBrowserPanel";
 import { useT } from "./i18n";
+import { planPanelOpen, subscribePanelBrowser } from "./lib/linkIntent";
 import { type PlanState, samePlan, sameTodos, subscribePlanOpen } from "./lib/plan";
 import { newPresetId } from "./lib/prompts";
 import { inheritedSampling } from "./lib/sampling";
@@ -100,7 +104,7 @@ import {
   SchedulesPage,
 } from "./components/SchedulesPage";
 import { Sidebar } from "./components/Sidebar";
-import { SlidePanel, usePresence } from "./components/SlidePanel";
+import { SlidePanel, slidesSettled, usePresence } from "./components/SlidePanel";
 import { Welcome } from "./components/Welcome";
 import { type PermissionPick, forgetComposerSession } from "./components/Composer";
 import { asDirRef, basename, looksAbsPath } from "./pathDisplay";
@@ -562,6 +566,35 @@ export function App() {
     () => subscribeFilePreview((p) => openTab({ kind: "preview", path: p })),
     [openTab],
   );
+  // 回答里的 `browser:` 链接（见 lib/linkIntent）：在内置浏览器里开。
+  // 先问宿主手上有哪些页 —— 面板没开时 browserPages 是空的，可模型的
+  // 浏览器工具可能早开过页了。切页、就地导航还是新开，见 planPanelOpen。
+  // 就地导航时宿主会自己开第一页，和面板挂载时的 browser_open 在宿主
+  // 那边排同一把锁，不会多出一个空白页。
+  //
+  // 这一串等抽屉滑完再发：切页、刷新会把 App 整棵树重渲染几次，页面
+  // 重载又带来一阵帧，压在开合动画中段就是一帧卡上百毫秒（实测 106ms，
+  // 点右上角开关只开面板时是 18ms）。面板本来就开着时没有动画，不等。
+  useEffect(() => {
+    const sid = activeSession?.id;
+    if (!sid) return;
+    return subscribePanelBrowser((url) => {
+      openTab({ kind: "browser" });
+      void slidesSettled()
+        .then(() => browserState(sid))
+        .then(async (s) => {
+          const plan = planPanelOpen(s, url);
+          if (plan.kind === "select") {
+            applyBrowserPanel(await browserSelectTab(sid, plan.tab));
+            if (plan.reload) await browserReload(sid);
+            return;
+          }
+          if (plan.kind === "newTab") applyBrowserPanel(await browserNewTab(sid));
+          await browserNavigate(sid, url);
+        })
+        .catch((e: unknown) => console.warn("Failed to open link in browser panel", e));
+    });
+  }, [activeSession?.id, openTab, applyBrowserPanel]);
   // 子 agent 会话：Task 卡片、后台任务面板、回答里的 `agent:` 链接都走
   // 这一条。同一个 agent 只开一个标签（tabId 按 agentId）。
   useEffect(

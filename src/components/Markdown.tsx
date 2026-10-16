@@ -11,16 +11,24 @@ import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
 
-import { openInBrowser, openPath, readFileBytes } from "../bridge";
+import { openInBrowser, openPath, readFileBytes, revealInFinder } from "../bridge";
 import { useTimedFlag } from "../hooks/useTimedFlag";
 import { t, useT } from "../i18n";
 import { openSession, sessionIdFromHref } from "../lib/sessionLink";
 import { AGENT_LINK_SCHEME, openSubagent } from "../lib/subagentLink";
 import { splitMarkdownBlocks } from "../lib/mdBlocks";
+import {
+  browserOpenableFile,
+  fileUrlOf,
+  openInPanelBrowser,
+  splitLinkIntent,
+} from "../lib/linkIntent";
+import { findAbsPathFor } from "../lib/relinkPath";
+import { cellFloorEm } from "../lib/tableCellFloor";
 import { basename, joinRoot, looksAbsPath } from "../pathDisplay";
 import { type Theme, getTheme, subscribeTheme } from "../theme";
 import { audioMimeOf, imageMimeOf, openFilePreview, videoMimeOf } from "./FilePreview";
-import { ForkIcon } from "./icons";
+import { BrowserIcon, FolderIcon, ForkIcon } from "./icons";
 import { AudioPlayer } from "./AudioPlayer";
 import { FullscreenGlyph, MediaBar, VolumeGlyph, useMediaPlayback, useVideoFullscreen } from "./MediaControls";
 import { MermaidBlock } from "./Mermaid";
@@ -233,6 +241,61 @@ function remarkCodeRefs() {
   };
 }
 
+/**
+ * 给每个表格单元格写上保底宽度 `--md-cell-floor`，CSS 拿它做 min-width。
+ * 为什么按内容估、估法和封顶见 [`cellFloorEm`]。
+ *
+ * 做在 mdast 层：`tableCell` 的 `data.hProperties` 会被 mdast-util-to-hast
+ * 合并到生成的 `<th>` / `<td>` 上，GFM 对齐写成的 `text-align` 照样叠加，
+ * 不用接管单元格的渲染。第一行是表头（粗体）。
+ */
+function remarkTableCellFloor() {
+  return (tree: MdNode) => {
+    walk(tree, (node) => {
+      if (node.type !== "table") return;
+      node.children?.forEach((row, r) => {
+        for (const cell of row.children ?? []) {
+          const em = cellFloorEm(plainText(cell), r === 0);
+          cell.data = {
+            ...cell.data,
+            hProperties: { ...cell.data?.hProperties, style: `--md-cell-floor:${em}em` },
+          };
+        }
+      });
+    });
+  };
+}
+
+/**
+ * 相对路径的文件链接，换成同一块文字里写明的绝对路径。为什么见
+ * [`findAbsPathFor`]。按块（段落、列表…）收集候选，链接和贴在旁边的
+ * 路径通常在同一句里。
+ */
+function remarkRelinkPaths() {
+  return (tree: MdNode) => {
+    const links: MdNode[] = [];
+    const texts: string[] = [];
+    walk(tree, (node) => {
+      if (node.type === "link") links.push(node);
+      else if (node.type === "text" || node.type === "inlineCode") texts.push(node.value ?? "");
+    });
+    for (const link of links) {
+      // 意图前缀（`browser:` / `reveal:`）后面的那段照样纠正，前缀留着。
+      const decoded = tryDecodePath(link.url ?? "");
+      const intent = splitLinkIntent(decoded);
+      const url = intent ? intent.rest : decoded;
+      if (!url || url.startsWith("#") || /^[a-z][a-z0-9+.-]*:/i.test(url)) continue;
+      const abs = findAbsPathFor(url, texts);
+      if (abs) link.url = intent ? `${intent.intent}:${abs}` : abs;
+    }
+  };
+}
+
+function plainText(node: MdNode): string {
+  if (node.value !== undefined) return node.value;
+  return (node.children ?? []).map(plainText).join("");
+}
+
 function walk(node: MdNode, visit: (n: MdNode) => void) {
   visit(node);
   for (const child of node.children ?? []) walk(child, visit);
@@ -284,7 +347,13 @@ export const Markdown = memo(function Markdown({
   );
 });
 
-const REMARK_PLUGINS = [remarkGfm, remarkCjkAutolinks, remarkCodeRefs];
+const REMARK_PLUGINS = [
+  remarkGfm,
+  remarkCjkAutolinks,
+  remarkCodeRefs,
+  remarkTableCellFloor,
+  remarkRelinkPaths,
+];
 const REMARK_PLUGINS_BREAKS = [...REMARK_PLUGINS, remarkSoftBreaks];
 const REHYPE_PLUGINS: NonNullable<Parameters<typeof ReactMarkdown>[0]["rehypePlugins"]> = [
   [rehypeHighlight, { ignoreMissing: true, detect: false }],
@@ -321,8 +390,9 @@ const MdChunk = memo(function MdChunk({ text, breaks }: { text: string; breaks: 
  */
 function keepFileUrls(url: string): string {
   // `agent:` 是子 agent 链接（Task 工具让模型这么写），`riot:` 是历史会话
-  // 链接（系统提示词 past_sessions 一节），都由 MdLink 接管。
-  if (/^(file|agent|riot):/i.test(url)) return url;
+  // 链接（系统提示词 past_sessions 一节），`browser:` / `reveal:` 是链接
+  // 意图（见 lib/linkIntent），都由 MdLink 接管。
+  if (/^(file|agent|riot|browser|reveal):/i.test(url)) return url;
   // Windows 盘符路径（`C:\…`、`D:/…`）：白名单把 `C` 当成未知协议清掉，
   // 模型写的绝对路径就没了。它不是 URL，也不会交给 webview 导航。
   if (/^[a-z]:[\\/]/i.test(url)) return url;
@@ -441,10 +511,18 @@ function MdLink({
       if (!openSession(target.value)) flashErr(true);
       return;
     }
+    if (target.kind === "reveal") {
+      revealInFinder(target.value).catch(() => flashErr(true));
+      return;
+    }
+    if (target.kind === "browser" && openInPanelBrowser(target.value)) return;
     openInBrowser(target.value).catch(() => flashErr(true));
   };
 
   const chip = target.kind === "agent" || target.kind === "session";
+  // 带意图的链接前面挂一枚动作图标：点之前就知道是开浏览器还是开文件夹。
+  const intentIcon =
+    target.kind === "browser" ? <BrowserIcon /> : target.kind === "reveal" ? <FolderIcon /> : null;
   const errText =
     target.kind === "session" ? t("transcript.md.sessionDeleted") : t("transcript.md.cantOpen");
 
@@ -452,13 +530,20 @@ function MdLink({
     <>
       <a
         href={target.href}
-        className={chip ? `md-agent-link md-${target.kind}-link` : undefined}
+        className={
+          chip ? `md-agent-link md-${target.kind}-link` : intentIcon ? "md-intent-link" : undefined
+        }
         title={err ? errText : target.title}
         onClick={onClick}
       >
         {chip ? (
           <span className="md-agent-icon" aria-hidden>
             {target.kind === "agent" ? <ForkIcon /> : "↶"}
+          </span>
+        ) : null}
+        {intentIcon ? (
+          <span className="md-link-icon" aria-hidden>
+            {intentIcon}
           </span>
         ) : null}
         {children}
@@ -473,7 +558,8 @@ function MdLink({
 }
 
 type MdLinkTarget = {
-  kind: "url" | "file" | "agent" | "session";
+  /** browser：内置浏览器打开 `value`（网址或 file:// 地址）；reveal：在文件夹中显示 `value`。 */
+  kind: "url" | "file" | "agent" | "session" | "browser" | "reveal";
   value: string;
   href: string;
   title: string;
@@ -485,6 +571,24 @@ type MdLinkTarget = {
  */
 function resolveMdLink(href: string | undefined, label: string, root: string): MdLinkTarget | null {
   const raw = (href ?? "").trim();
+
+  // `browser:…` / `reveal:…`：模型写明了点击意图（见 lib/linkIntent）。
+  // 前缀后面那段按普通链接解析；意图对它不成立时（网址没法"在文件夹
+  // 中显示"、`.json` 不该开进浏览器）退回普通链接的默认行为。
+  const split = splitLinkIntent(raw);
+  if (split) {
+    const inner = resolveMdLink(split.rest, label, root);
+    if (split.intent === "reveal" && inner?.kind === "file") {
+      return { ...inner, kind: "reveal" };
+    }
+    if (split.intent === "browser" && inner?.kind === "url" && /^https?:/i.test(inner.value)) {
+      return { ...inner, kind: "browser" };
+    }
+    if (split.intent === "browser" && inner?.kind === "file" && browserOpenableFile(inner.value)) {
+      return { ...inner, kind: "browser", value: fileUrlOf(inner.value) };
+    }
+    return inner;
+  }
 
   // `agent:agt_xxx`：子 agent 的会话（Task 工具提示词里教模型这么写）。
   if (raw.toLowerCase().startsWith(AGENT_LINK_SCHEME)) {

@@ -9941,11 +9941,30 @@ button.field-slider-state:hover {
   font-variant-numeric: tabular-nums;
 }
 
+/* 每格保底宽度，不然短列会被挤成一字一行（原因见 lib/tableCellFloor）。
+   --md-cell-floor 是聊天渲染按格子内容估出来的内容宽度（短格 = 整行，
+   长格封顶），加上左右 padding 就是 min-width（全局 border-box）。
+   所有列的保底加起来超过容器时，表格变宽、由上面的 overflow-x 横向
+   滚动，而不是继续往窄里挤。文件预览走 micromark，没有这个变量，
+   退回固定的 6em（约 6 个汉字）。
+   .msg 上的 overflow-wrap:anywhere（以及 word-break:break-word）
+   同样会把 min-content 降到一个字符 —— 连「600000」「10.21」都被
+   从中间劈开 —— 表格里退回只在真放不下时才断词的 break-word。
+   链接和行内代码（长 URL、长路径）仍可任意断开，否则一个 URL 就把
+   整列的下限撑到几百 px。 */
 .md th,
 .md td {
-  padding: 7px 14px;
+  --md-cell-pad-x: 14px;
+  min-width: calc(var(--md-cell-floor, 6em) + 2 * var(--md-cell-pad-x));
+  padding: 7px var(--md-cell-pad-x);
   border-bottom: 1px solid var(--border);
   line-height: 1.55;
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+
+.md :is(th, td) :is(a, code) {
+  overflow-wrap: anywhere;
 }
 
 /* 默认左对齐（th 的 UA 默认是居中）。GFM 的 `---:` 对齐：聊天里
@@ -9988,6 +10007,22 @@ button.field-slider-state:hover {
 
 .md a:hover {
   text-decoration-color: currentColor;
+}
+
+/* 带意图的链接（`browser:` / `reveal:`）：前面一枚动作图标，说明点了是开
+   浏览器还是开文件夹。图标不吃下划线 —— 下划线只画在文字下面，图标
+   挂在一行里像个标点；inline-flex 是原子行内盒，下划线本来就不会
+   传进去。尺寸跟字号走，链接写在表格里（13px）也不显大。 */
+.md-link-icon {
+  display: inline-flex;
+  vertical-align: -0.12em;
+  margin-right: 0.25em;
+  opacity: 0.85;
+}
+
+.md-link-icon svg {
+  width: 0.95em;
+  height: 0.95em;
 }
 
 /* 链接打开失败的行内提示。只改 title 的话得恰好悬停着才看得见，

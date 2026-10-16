@@ -105,7 +105,7 @@ const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"]);
  * 一眼就知道是二进制的扩展名：不读、不嗅探，直接访达定位。读一个
  * 30 MB 的压缩包只为了确认它不是文本，不值。名单外的未知扩展名
  * （`.env`、`Makefile`、`.lock`、没有扩展名的脚本）读进来嗅探：像文本
- * 就按纯文本显示，不像就给"系统应用打开"。
+ * 就按纯文本显示，不像就访达定位。
  */
 const BINARY_EXTS = new Set([
   "zip", "gz", "tgz", "tar", "bz2", "xz", "zst", "7z", "rar", "jar", "war",
@@ -214,9 +214,11 @@ export type PreviewRoute = "preview" | "image" | "reveal";
 /**
  * 打开一个文件。传绝对路径。按类型分流：白名单文档和代码进预览
  * 抽屉（代码走自制高亮视图），图片开全屏查看，明确的二进制访达定位，
- * 剩下的未知类型也进抽屉、读进来嗅探（见 BINARY_EXTS）—— 调用方（聊天
+ * 剩下的未知类型先读进来嗅探：像文本进抽屉，不像也访达定位（见
+ * [`sniffThenOpen`]）—— 调用方（聊天
  * 引用、改动列表、Markdown 链接、文档互链、文件树）不用各自判断。
- * 返回走了哪条路，文件树据此决定要不要把树钉住。
+ * 返回走了哪条路，文件树据此决定要不要把树钉住。嗅探的那条要等读完才知道
+ * 结果，先按"preview"报 —— 最坏是树多钉了一次。
  */
 export function openFilePreview(path: string): PreviewRoute {
   const ext = extOf(path);
@@ -228,8 +230,29 @@ export function openFilePreview(path: string): PreviewRoute {
     void revealInFinder(path);
     return "reveal";
   }
-  listener?.(path);
+  if (PREVIEWABLE_EXTS.has(ext) || MD_EXTS.has(ext) || CODE_EXTS.has(ext)) {
+    listener?.(path);
+    return "preview";
+  }
+  void sniffThenOpen(path);
   return "preview";
+}
+
+/**
+ * 名单外的扩展名先嗅探再决定：像文本才开预览标签，不像就在文件夹中
+ * 显示 —— 预览不了的文件开一个只写着"二进制文件"的标签，用户还得
+ * 自己再点一下、再关掉标签。读不到（路径不存在、越界）照样开标签，
+ * 让面板把真实的错误说出来。
+ */
+async function sniffThenOpen(path: string) {
+  let text = true;
+  try {
+    text = looksLikeText(await readFileBytes(path));
+  } catch {
+    // 交给面板报错。
+  }
+  if (text) listener?.(path);
+  else void revealInFinder(path).catch(() => listener?.(path));
 }
 
 /**

@@ -69,6 +69,25 @@ export function useSlideSettled(ref: RefObject<HTMLElement | null>): boolean {
   return settled;
 }
 
+/**
+ * [`useSlideSettled`] 的命令式版本：等这一拍的提交落地，再等所有面板壳
+ * 正在播的开合动画播完。给事件回调里"刚把面板打开、接着要做一串重活"
+ * 的场合用 —— 道理同上：重活压在动画中段，抽屉滑到一半顿住。
+ *
+ * 先等一帧：调用时 React 往往还没提交（`openTab` 只是 setState），壳的
+ * 尺寸还没变，这时看不到过渡。没有在动的面板就下一帧放行，不白等。
+ */
+export function slidesSettled(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      const running = [...document.querySelectorAll(".slide-panel")].flatMap((el) =>
+        el.getAnimations().filter((a) => a.playState === "running"),
+      );
+      void Promise.allSettled(running.map((a) => a.finished)).then(() => resolve());
+    });
+  });
+}
+
 export function SlidePanel({
   open,
   size,

@@ -517,16 +517,18 @@ The UI draws it. Do NOT write HTML, pull in mermaid.js, and open a browser to sh
 diagram — the browser is for checking pages you changed, not for use as a drawing surface.";
 
 const LINKING_TO_LOCAL_FILES: &str = "\
-To point at a local file (a document, report, or script you just wrote), use a Markdown link \
-whose target is the file path, relative to the working directory or absolute:
+To point at a local file, use a Markdown link whose target is its path: relative to the working \
+directory, or absolute for a file outside it (a bare name resolves against the working directory):
 
 [打开 报告.docx](报告.docx)
 
-The UI opens it with the system default application. Write the link text as 「打开」 or just \
-the file name. NEVER write 「下载」 (download): the file is already on the user's disk, nothing \
-is being fetched, and that word makes them expect a network round trip. NEVER invent an \
-`http://` URL either — this application is not a web page and there is no local server handing \
-out files. Reserve http(s) links for pages that really exist online.";
+A click previews the file, or shows it in its folder if it can't be previewed. Prefix the target \
+when the context calls for something else: `browser:` opens a web page or an .html/.svg/.pdf file \
+in the built-in browser — [打开报告](browser:/Users/me/Documents/报告.html); `reveal:` shows the \
+file in its folder — [报告所在位置](reveal:/Users/me/Documents/报告.html).
+
+Link text: 「打开」 or the file name. NEVER write 「下载」 (download): the file is already on the \
+user's disk. NEVER invent an `http://` URL — no local server hands out files.";
 
 /// 给用户看图不用经过模型。
 ///
@@ -1140,6 +1142,14 @@ mod tests {
         assert!(
             p.contains("[打开 报告.docx](报告.docx)"),
             "要给一个路径链接例子"
+        );
+        assert!(
+            p.contains("absolute for a file outside it"),
+            "工作目录外的文件要写绝对路径 —— 只写文件名会按工作目录拼，点开找不到"
+        );
+        assert!(
+            p.contains("(browser:/Users/me/Documents/报告.html)") && p.contains("(reveal:"),
+            "要教链接意图前缀 —— 同一个 .html 是看效果还是找文件，只有模型知道"
         );
         assert!(
             p.contains("NEVER invent an `http://` URL"),
