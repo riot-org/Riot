@@ -362,10 +362,14 @@ When a tool fails, read the error before you do anything else. Do not re-run the
 with a different parameter and hope: an unread error means the retry walks into the same wall a \
 second time. Say what the error was, then either fix its cause or take a different route.";
 
+/// `[约束]` 「只做要求的事」限定在改已有代码。不加限定的话模型会把它套到
+/// 从零做的交付物上：画一张图、做一个页面也只交最字面的最小版本，标题、
+/// 字体、构图这类该有的加法全被它压掉。
 const MAKING_CODE_CHANGES: &str = "\
-Do only what was asked. An opportunistic refactor, a comment added in passing, a formatting fix \
-on the way through — each one puts unrelated changes in the diff, and a reviewer who cannot \
-tell the task from the drive-by has no choice but to distrust all of it.
+When you change existing code, do only what was asked. An opportunistic refactor, a comment or \
+formatting fix added in passing — each one puts unrelated changes in the diff, and a reviewer \
+who cannot tell the task from the drive-by has no choice but to distrust all of it. This caps \
+diffs, not new work you build from scratch.
 
 Write code that reads like the code around it: naming, comment density, and error handling all \
 follow the existing style. A sudden change of style makes the next maintainer assume there was \
@@ -416,7 +420,7 @@ plan or the request is a planning task: a feature spanning several files (authen
 payments, a new page plus its API), a large refactor or migration, ambiguous requirements, or \
 real trade-offs. Decide before you change anything: a quick look at the code to size the task \
 is fine, but do not drift from research into implementation without making the call. One \
-clarifying question then implementing is NOT a substitute. Small, clear tasks: just do them. \
+clarifying question then implementing is NOT a substitute. Otherwise stay in agent mode. \
 The user confirms on a card; that click is cheap, a big change built without a plan is not.";
 
 const TEST_YOUR_WORK: &str = "\
@@ -755,6 +759,10 @@ pub(crate) fn current_plan_context(
 /// 工具就调 SwitchMode、别先读文件"：没看代码就得给理由，卡片上的理由只能
 /// 是编的。首条消息不可能是按钮发的（`nudge` 非空）或唤醒轮，规划模式下附
 /// 的是规划模式自己的提醒。
+///
+/// `[约束]` 只问要不要切模式，不许评价活的大小（"Small, clear tasks: just do
+/// them" 这类）。正因为模型对这句每次都照做，它会先把任务定性成"小活、直接
+/// 做"再照这个定位动手 —— 创作类任务因此直接套最平庸的方案。
 pub(crate) fn agent_mode_reminder(
     mode: PermissionMode,
     nudge: Option<riot_protocol::Nudge>,
@@ -767,7 +775,9 @@ pub(crate) fn agent_mode_reminder(
                    with target_mode_id=\"plan\" and a one-sentence explanation before you start \
                    implementing; the user confirms on a card. A quick look at the relevant code \
                    to size the task is fine — what you must not do is drift from research into \
-                   edits without making the call. Small, clear tasks: just do them."
+                   edits without making the call. Otherwise stay in agent mode. This call decides \
+                   only the working mode; it says nothing about how much thought the work \
+                   deserves."
                 .into(),
         })
     })
@@ -1465,8 +1475,12 @@ mod tests {
             "要说清什么时候建议规划"
         );
         assert!(
-            stable.contains("Small, clear tasks: just do them"),
+            stable.contains("Otherwise stay in agent mode"),
             "也要说清什么时候别建议 —— 否则每个任务都先问一遍要不要规划"
+        );
+        assert!(
+            !stable.contains("just do"),
+            "只定模式，不评价活的大小：{stable}"
         );
         // 实测（deepseek-v4-pro）：措辞软的话，"加一套认证系统"这种活模型会
         // 直接开干 —— 先问一个问题、然后写代码，全程没提规划。要点名例子、
@@ -1488,6 +1502,20 @@ mod tests {
         );
     }
 
+    /// 「只做要求的事」管的是改已有代码的 diff，不能变成从零做东西时的上限。
+    #[test]
+    fn 只做要求的事限定在改已有代码() {
+        let p = system_prompt(&base());
+        assert!(
+            p.contains("When you change existing code, do only what was asked"),
+            "{p}"
+        );
+        assert!(
+            p.contains("This caps diffs, not new work you build from scratch"),
+            "要说清新做的交付物不受它约束：{p}"
+        );
+    }
+
     /// agent 模式的"要不要先规划"走消息侧（会话侧只在首条消息附，见
     /// `Session::plan_turn`）：规划模式和按钮发的那一轮都不附，措辞允许先看
     /// 一眼代码再决定。
@@ -1500,8 +1528,12 @@ mod tests {
         };
         assert!(text.contains("SwitchMode"), "{text}");
         assert!(
-            text.contains("Small, clear tasks"),
-            "要说清小任务不必规划：{text}"
+            text.contains("Otherwise stay in agent mode"),
+            "要说清不是规划任务就留在 agent 模式：{text}"
+        );
+        assert!(
+            !text.contains("just do") && !text.contains("Small"),
+            "消息末尾这句权重最高，评价活的大小会被模型当成怎么做的定位：{text}"
         );
         assert!(
             text.contains("A quick look at the relevant code to size the task is fine"),
