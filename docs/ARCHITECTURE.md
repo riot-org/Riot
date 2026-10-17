@@ -522,7 +522,7 @@ AgentEvent::RequestStart { turn: u32, model: String, after: Option<Transition> }
 | 计数器                        | 防什么                                   | 何时重置                            |
 | ----------------------------- | ---------------------------------------- | ----------------------------------- |
 | `attempted_reactive_compact`  | 单轮内「压缩 → 还是溢出 → 又压缩」死循环 | `advance_turn()`,即正常推进下一轮时 |
-| `output_limit_recovery_count` | 单轮内无限对半砍输出上限                 | 同上                                |
+| `output_limit_recovery_count` | 单轮内无限重试被截断的输出               | 同上                                |
 | `compact_failure_streak`      | **跨会话**反复压缩失败                   | 只在压缩真正成功时清零              |
 
 `[约束]` 重置只能发生在 `AgentState::advance_turn()` 里。恢复重试路径(`continue` 回循环开头)绝不能调它。
@@ -1608,7 +1608,7 @@ Chat Completions 翻译时有四条不能违反的规矩。违反了服务端只
 1. **`role=tool` 必须紧跟带 `tool_calls` 的 assistant 消息**,且每个 `tool_call_id` 恰好一条。内部一条 User 消息里可能既有工具结果又有用户新说的话(用户在工具跑的时候插了一句),转换时工具结果要**先出**。
 2. **`content` 不能是空字符串**。压缩清理过历史之后会真的出现空消息。
 3. **`tool_calls[].function.arguments` 是 JSON 字符串**,不是对象。
-4. **`reasoning_content` 不能回传**。DeepSeek 的文档明确要求,带上会 400。
+4. **`reasoning_content` 只回传给 DeepSeek,且只在带工具的请求里**。DeepSeek 要求工具调用轮次把思维链原样带回去,漏了不报错,只是模型看不到自己之前的推理、效果悄悄变差;别家不认这个字段。开关是 `OpenAiConfig::replay_reasoning`,宿主按端点模型名设,估算和发送读同一个开关。
 
 `[约束]` Chat Completions 请求里必须带 `stream_options.include_usage`。不带的话流式响应没有 usage,上下文管理层就没有数据决定何时压缩 —— 而那个缺失不会报错,只会表现为"压缩从来不触发,然后某天突然撞上溢出"。Responses 没有这个字段,usage 来自 `response.completed`。
 

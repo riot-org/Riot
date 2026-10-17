@@ -116,6 +116,8 @@ export default {
   "composer.thinking.low": "低",
   "composer.thinking.medium": "中",
   "composer.thinking.high": "高",
+  "composer.thinking.max": "最高",
+  "composer.thinking.max.hint": "最も深く考えるぶん最も遅い。DeepSeek には max、OpenAI には xhigh を送ります",
   "composer.thinking.disabled": "思考オフ",
   "composer.thinking.disabled.hint": "一部のエンドポイントは非対応",
 

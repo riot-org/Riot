@@ -38,7 +38,7 @@ import { basename } from "../pathDisplay";
  * 弹窗再打开，显示的还是启动时 listSessions 拉到的旧值。
  */
 
-/** 思考策略的下拉项。固定档位摊平成一级选项 —— 六个选项不值得两级菜单。
+/** 思考策略的下拉项。固定档位摊平成一级选项 —— 七个选项不值得两级菜单。
  *  说明走 hint（第二行灰字）：塞进主标签会挤成两行大字，见谁选谁难受。
  *  存的是词典键，渲染时再 `t()`。 */
 const THINKING_OPTIONS: { value: string; labelKey: MessageKey; hintKey?: MessageKey }[] = [
@@ -47,6 +47,7 @@ const THINKING_OPTIONS: { value: string; labelKey: MessageKey; hintKey?: Message
   { value: "low", labelKey: "composer.thinking.low" },
   { value: "medium", labelKey: "composer.thinking.medium" },
   { value: "high", labelKey: "composer.thinking.high" },
+  { value: "max", labelKey: "composer.thinking.max", hintKey: "composer.thinking.max.hint" },
   { value: "disabled", labelKey: "composer.thinking.disabled", hintKey: "composer.thinking.disabled.hint" },
 ];
 
@@ -58,7 +59,7 @@ function thinkingKey(p: ThinkingPolicy): string {
 }
 
 function thinkingFromKey(k: string): ThinkingPolicy {
-  if (k === "low" || k === "medium" || k === "high") return { mode: "fixed", level: k };
+  if (k === "low" || k === "medium" || k === "high" || k === "max") return { mode: "fixed", level: k };
   if (k === "adaptive" || k === "disabled") return { mode: k };
   return { mode: "default" };
 }

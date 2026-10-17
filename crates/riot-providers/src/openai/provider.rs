@@ -49,6 +49,12 @@ pub struct OpenAiConfig {
     pub sampling: crate::SamplingParams,
     /// 用户配置的额外请求头（模板已在宿主展开）。
     pub extra_headers: Vec<(String, String)>,
+    /// Chat Completions 下把历史思考作为 `reasoning_content` 回传。宿主按端点
+    /// 的模型设（DeepSeek 开，见 [`crate::is_deepseek_model`]）。
+    ///
+    /// 放在配置上而不是按请求的模型名现判：估算 token 时手里没有请求，而
+    /// 估算必须和发出去的那份一致（见 `Provider::count_tokens` 的约束）。
+    pub replay_reasoning: bool,
 }
 
 impl Default for OpenAiConfig {
@@ -65,6 +71,7 @@ impl Default for OpenAiConfig {
             retry: RetryPolicy::default(),
             sampling: crate::SamplingParams::default(),
             extra_headers: Vec::new(),
+            replay_reasoning: false,
         }
     }
 }
@@ -91,6 +98,7 @@ impl std::fmt::Debug for OpenAiConfig {
                 "extra_headers",
                 &crate::headers::header_names(&self.extra_headers),
             )
+            .field("replay_reasoning", &self.replay_reasoning)
             .finish()
     }
 }
@@ -100,6 +108,7 @@ impl OpenAiConfig {
         Self {
             base_url: "https://api.deepseek.com".into(),
             api_key: api_key.into(),
+            replay_reasoning: true,
             ..Default::default()
         }
     }
@@ -185,6 +194,7 @@ impl Provider for OpenAiProvider {
         let idle = self.config.idle_timeout;
         let fallback_model = self.config.fallback_model.clone();
         let sampling = self.config.sampling;
+        let replay_reasoning = self.config.replay_reasoning;
         let endpoint = Endpoint {
             base_url: self.config.base_url.clone(),
             api_path: self.config.api_path.clone(),
@@ -223,7 +233,7 @@ impl Provider for OpenAiProvider {
                         }
                     }
                 } else {
-                    let mut wire = build_request(&req, &system, &retry_ctx);
+                    let mut wire = build_request(&req, &system, &retry_ctx, replay_reasoning);
                     wire.temperature = sampling.temperature;
                     wire.top_p = sampling.top_p;
                     match serialize_body(&wire) {
@@ -316,7 +326,7 @@ impl Provider for OpenAiProvider {
         let bytes = if self.config.openai_api.is_responses() {
             super::responses::wire_bytes(messages)
         } else {
-            wire_bytes(messages)
+            wire_bytes(messages, self.config.replay_reasoning)
         };
         riot_protocol::provider::estimate_tokens(bytes.saturating_sub(b64))
             + riot_protocol::provider::estimate_image_tokens(images)

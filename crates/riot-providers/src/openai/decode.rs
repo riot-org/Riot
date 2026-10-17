@@ -256,9 +256,8 @@ impl StreamDecoder {
             out.push(ProviderEvent::Usage(self.usage));
         }
 
-        // `[约束]` 输出被 max_tokens 截断要报成可恢复错误，主循环会调低
-        // max_tokens 重试。当成正常结束的话，模型的回答会缺一截而没有
-        // 任何人知道。
+        // `[约束]` 输出被 max_tokens 截断要报成可恢复错误，主循环会重试。
+        // 当成正常结束的话，模型的回答会缺一截而没有任何人知道。
         if self.finish_reason.as_deref() == Some("length") {
             out.push(ProviderEvent::Error(ProviderError::OutputLimit));
         }

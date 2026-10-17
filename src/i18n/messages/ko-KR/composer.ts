@@ -118,6 +118,8 @@ export default {
   "composer.thinking.low": "낮음",
   "composer.thinking.medium": "중간",
   "composer.thinking.high": "높음",
+  "composer.thinking.max": "최고",
+  "composer.thinking.max.hint": "가장 깊이 생각하지만 가장 느립니다. DeepSeek에는 max, OpenAI에는 xhigh를 보냅니다",
   "composer.thinking.disabled": "사고 끄기",
   "composer.thinking.disabled.hint": "일부 엔드포인트는 지원하지 않습니다",
 

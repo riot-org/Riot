@@ -22,7 +22,7 @@ use super::wire::{
     ReasoningSig, WireInputItem, WirePart, WireReasoning, WireRequest, WireSummary, WireTool,
 };
 use crate::anthropic::request::SystemSection;
-use crate::openai::request::RetryContext;
+use crate::openai::request::{RetryContext, effort_literal};
 use crate::openai::text::{assemble_system, data_url, render_attachment, render_result};
 
 pub fn build_request(
@@ -30,6 +30,10 @@ pub fn build_request(
     system: &[SystemSection],
     ctx: &RetryContext,
 ) -> WireRequest {
+    let model = ctx
+        .model_override
+        .clone()
+        .unwrap_or_else(|| req.model.clone());
     let instructions = assemble_system(system, &req.system);
     let input = convert_input(&req.messages, ctx.strip_thinking_signatures);
 
@@ -60,14 +64,14 @@ pub fn build_request(
         ),
         ThinkingConfig::Effort { level } | ThinkingConfig::Adaptive { hint: level } => (
             Some(WireReasoning {
-                effort: level.as_openai_str(),
+                effort: effort_literal(level, &model),
                 summary: Some("auto"),
             }),
             vec!["reasoning.encrypted_content"],
         ),
         ThinkingConfig::Budget { tokens } => (
             Some(WireReasoning {
-                effort: ThinkingEffort::from_budget(tokens).as_openai_str(),
+                effort: effort_literal(ThinkingEffort::from_budget(tokens), &model),
                 summary: Some("auto"),
             }),
             vec!["reasoning.encrypted_content"],
@@ -75,10 +79,7 @@ pub fn build_request(
     };
 
     WireRequest {
-        model: ctx
-            .model_override
-            .clone()
-            .unwrap_or_else(|| req.model.clone()),
+        model,
         input,
         stream: true,
         instructions: (!instructions.is_empty()).then_some(instructions),

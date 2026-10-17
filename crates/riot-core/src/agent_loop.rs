@@ -244,7 +244,7 @@ pub fn run_agent(
             // ── 4. 恢复路径 ──────────────────────────────────────
             if let Some(err) = turn.withheld().cloned() {
                 let before = state.counters();
-                let outcome = attempt_recovery(&mut state, &err);
+                let outcome = attempt_recovery(&mut state, &err, turn.has_thinking());
                 invariants::check_recovery_monotonic(before, state.counters());
 
                 match outcome {
@@ -595,7 +595,13 @@ enum Recovery {
 ///
 /// 这个函数**不是** async，也不碰 IO —— 它是纯状态转移，可以直接单测。
 /// 真正的压缩动作由调用方在 `Retry` 之后执行。
-fn attempt_recovery(state: &mut AgentState, err: &ProviderError) -> Recovery {
+///
+/// `truncated_thinking`：被截断的那次输出里有没有思考内容。
+fn attempt_recovery(
+    state: &mut AgentState,
+    err: &ProviderError,
+    truncated_thinking: bool,
+) -> Recovery {
     match err {
         ProviderError::OutputLimit => {
             if state.output_limit_recovery_count >= MAX_OUTPUT_LIMIT_RECOVERY {
@@ -608,9 +614,15 @@ fn attempt_recovery(state: &mut AgentState, err: &ProviderError) -> Recovery {
                 });
             }
             state.output_limit_recovery_count += 1;
-            // 对半砍。不设下限的话第三次会砍到几乎不能输出任何东西。
-            let current = state.max_output_tokens_override.unwrap_or(8192);
-            state.max_output_tokens_override = Some((current / 2).max(1024));
+            // `[约束]` 带思考的输出不砍上限，原样重试：思考和回答共用这个
+            // 上限，截断多半是这一次想得太长，而思考长度每次差得很多。没配
+            // 上限时端点的默认往往很大（DeepSeek 思考模式 64K），按 8K 起砍
+            // 等于把它压到 4K —— 思考一满回答就又被截掉。
+            if !truncated_thinking {
+                // 对半砍。不设下限的话第三次会砍到几乎不能输出任何东西。
+                let current = state.max_output_tokens_override.unwrap_or(8192);
+                state.max_output_tokens_override = Some((current / 2).max(1024));
+            }
             Recovery::Retry(Transition::OutputLimitRecovery)
         }
 
@@ -724,23 +736,50 @@ mod tests {
         let mut s = state();
 
         assert!(matches!(
-            attempt_recovery(&mut s, &ProviderError::OutputLimit),
+            attempt_recovery(&mut s, &ProviderError::OutputLimit, false),
             Recovery::Retry(Transition::OutputLimitRecovery)
         ));
         assert_eq!(s.max_output_tokens_override, Some(4096));
 
         assert!(matches!(
-            attempt_recovery(&mut s, &ProviderError::OutputLimit),
+            attempt_recovery(&mut s, &ProviderError::OutputLimit, false),
             Recovery::Retry(_)
         ));
         assert_eq!(s.max_output_tokens_override, Some(2048));
 
         assert!(
             matches!(
-                attempt_recovery(&mut s, &ProviderError::OutputLimit),
+                attempt_recovery(&mut s, &ProviderError::OutputLimit, false),
                 Recovery::Surface(_)
             ),
             "无限对半砍只会让模型输出越来越短的半成品"
+        );
+    }
+
+    /// 思考和回答共用输出上限。按 8K 起砍会把 DeepSeek 默认的 64K 压到 4K，
+    /// 思考一满回答就又被截掉 —— 带思考的截断原样重试，次数照样封顶。
+    #[test]
+    fn 带思考的截断不砍上限() {
+        let mut s = state();
+        assert!(matches!(
+            attempt_recovery(&mut s, &ProviderError::OutputLimit, true),
+            Recovery::Retry(Transition::OutputLimitRecovery)
+        ));
+        assert_eq!(
+            s.max_output_tokens_override, None,
+            "没配上限就继续用端点默认"
+        );
+
+        s.max_output_tokens_override = Some(32_000);
+        attempt_recovery(&mut s, &ProviderError::OutputLimit, true);
+        assert_eq!(s.max_output_tokens_override, Some(32_000));
+
+        assert!(
+            matches!(
+                attempt_recovery(&mut s, &ProviderError::OutputLimit, true),
+                Recovery::Surface(_)
+            ),
+            "不砍也只重试两次"
         );
     }
 
@@ -748,7 +787,7 @@ mod tests {
     fn 输出上限有下限不会砍到不可用() {
         let mut s = state();
         s.max_output_tokens_override = Some(1024);
-        attempt_recovery(&mut s, &ProviderError::OutputLimit);
+        attempt_recovery(&mut s, &ProviderError::OutputLimit, false);
         assert_eq!(
             s.max_output_tokens_override,
             Some(1024),
@@ -765,14 +804,14 @@ mod tests {
         };
 
         assert!(matches!(
-            attempt_recovery(&mut s, &err),
+            attempt_recovery(&mut s, &err, false),
             Recovery::Retry(Transition::ReactiveCompactRetry)
         ));
         assert!(s.attempted_reactive_compact);
 
         assert!(
             matches!(
-                attempt_recovery(&mut s, &err),
+                attempt_recovery(&mut s, &err, false),
                 Recovery::Surface(AgentError::ContextExhausted { .. })
             ),
             "压过一次还溢出说明压不动了，再压只是重复烧钱"
@@ -787,7 +826,8 @@ mod tests {
         assert!(matches!(
             attempt_recovery(
                 &mut s,
-                &ProviderError::ContextOverflow { used: 1, limit: 1 }
+                &ProviderError::ContextOverflow { used: 1, limit: 1 },
+                false
             ),
             Recovery::Surface(AgentError::CompactCircuitOpen { .. })
         ));
@@ -798,10 +838,10 @@ mod tests {
         // 这条对应 INV-5。历史上这个 bug 表现为无限压缩循环：
         // 某条重试路径把 attempted_reactive_compact 重置了。
         let mut s = state();
-        attempt_recovery(&mut s, &ProviderError::OutputLimit);
+        attempt_recovery(&mut s, &ProviderError::OutputLimit, false);
         let after_first = s.counters();
 
-        attempt_recovery(&mut s, &ProviderError::OutputLimit);
+        attempt_recovery(&mut s, &ProviderError::OutputLimit, false);
         invariants::check_recovery_monotonic(after_first, s.counters());
         assert!(invariants::take_violations().is_empty());
     }

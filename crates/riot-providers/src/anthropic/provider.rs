@@ -226,7 +226,9 @@ impl Provider for AnthropicProvider {
                 // 高于用户调过的采样 —— 两者冲突时保思考、弃采样。
                 // Opus 4.7 起采样参数整个移除了（不开思考也 400），那些模型
                 // 一律不发。
-                if wire.thinking.is_none() && super::thinking::accepts_sampling(&wire.model) {
+                if !wire.thinking.is_some_and(|t| t.is_on())
+                    && super::thinking::accepts_sampling(&wire.model)
+                {
                     wire.temperature = sampling.temperature;
                     wire.top_p = sampling.top_p;
                     wire.top_k = sampling.top_k;

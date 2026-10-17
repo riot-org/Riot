@@ -11,7 +11,7 @@
 //!    并且每个 `tool_call_id` 都要有恰好一条对应的 tool 消息；
 //! 2. 消息的 `content` 不能是空字符串；
 //! 3. `tool_calls[].function.arguments` 是 JSON **字符串**，不是对象；
-//! 4. DeepSeek 的 `reasoning_content` 不能回传。
+//! 4. `reasoning_content` 只回传给 DeepSeek（别家不认这个字段）。
 
 use riot_protocol::message::{
     AssistantContent, Attachment, Message, ToolResultContent, UserContent,
@@ -50,11 +50,18 @@ impl RetryContext {
     }
 }
 
+/// `replay_reasoning`：历史里的思考要不要作为 `reasoning_content` 回传
+/// （见 [`super::OpenAiConfig::replay_reasoning`]）。
 pub fn build_request(
     req: &ProviderRequest,
     system: &[SystemSection],
     ctx: &RetryContext,
+    replay_reasoning: bool,
 ) -> WireRequest {
+    let model = ctx
+        .model_override
+        .clone()
+        .unwrap_or_else(|| req.model.clone());
     let mut messages = Vec::new();
 
     let full_system = assemble_system(system, &req.system);
@@ -64,7 +71,12 @@ pub fn build_request(
         });
     }
 
-    messages.extend(convert_messages(&req.messages));
+    // DeepSeek 只在带工具的请求里把历史思维链拼进上下文，不带工具时传了
+    // 也被忽略 —— 总结、分类这类无工具请求就别白传那几十 KB。
+    messages.extend(convert_messages(
+        &req.messages,
+        replay_reasoning && !req.tools.is_empty(),
+    ));
 
     // 工具按名字排序。顺序不稳的话，服务端的前缀缓存每轮都会失效。
     let mut tools: Vec<WireTool> = req
@@ -88,20 +100,17 @@ pub fn build_request(
         ThinkingConfig::Disabled => (None, Some(WireThinkingToggle::disabled())),
         // 自适应照 hint 逐请求切档，和以前一样（Anthropic 那边才需要整会话同档）。
         ThinkingConfig::Effort { level } | ThinkingConfig::Adaptive { hint: level } => {
-            (Some(level.as_openai_str()), None)
+            (Some(effort_literal(level, &model)), None)
         }
         // OpenAI 兼容协议没有预算参数，折算成最近的档位。
         ThinkingConfig::Budget { tokens } => (
-            Some(ThinkingEffort::from_budget(tokens).as_openai_str()),
+            Some(effort_literal(ThinkingEffort::from_budget(tokens), &model)),
             None,
         ),
     };
 
     WireRequest {
-        model: ctx
-            .model_override
-            .clone()
-            .unwrap_or_else(|| req.model.clone()),
+        model,
         messages,
         stream: true,
         max_tokens: ctx.max_tokens_override.or(req.max_output_tokens),
@@ -116,6 +125,18 @@ pub fn build_request(
     }
 }
 
+/// 力度档 → `reasoning_effort` 的字面值。Chat Completions 和 Responses 共用。
+///
+/// `[约束]` DeepSeek 的最高档要写 `max`：它把 OpenAI 的 `xhigh` 当成 high，
+/// 发 `xhigh` 等于没开最高档，而且不报错。
+pub(crate) fn effort_literal(level: ThinkingEffort, model: &str) -> &'static str {
+    if level == ThinkingEffort::Max && crate::is_deepseek_model(model) {
+        "max"
+    } else {
+        level.as_openai_str()
+    }
+}
+
 /// 这些消息发出去有多少字节。
 ///
 /// `[约束]` 走 [`convert_messages`] 而不是直接量 `Message` —— 那是
@@ -123,14 +144,14 @@ pub fn build_request(
 /// 复用转换（而不是另写一遍"哪些字段会发"）是刻意的:两套规则各自演化，
 /// 迟早有一天线协议改了而估算没跟上，而那种偏差没有任何报错，只会表现成
 /// 压缩时机变得莫名其妙。
-pub fn wire_bytes(messages: &[Message]) -> usize {
-    convert_messages(messages)
+pub fn wire_bytes(messages: &[Message], replay_reasoning: bool) -> usize {
+    convert_messages(messages, replay_reasoning)
         .iter()
         .map(|m| serde_json::to_string(m).map(|s| s.len()).unwrap_or(0))
         .sum()
 }
 
-pub fn convert_messages(messages: &[Message]) -> Vec<WireMessage> {
+pub fn convert_messages(messages: &[Message], replay_reasoning: bool) -> Vec<WireMessage> {
     let mut out = Vec::new();
 
     for m in messages {
@@ -212,6 +233,7 @@ pub fn convert_messages(messages: &[Message]) -> Vec<WireMessage> {
 
             Message::Assistant { content, .. } => {
                 let mut text = String::new();
+                let mut reasoning = String::new();
                 let mut calls = Vec::new();
 
                 for c in content {
@@ -231,10 +253,16 @@ pub fn convert_messages(messages: &[Message]) -> Vec<WireMessage> {
                                 },
                             });
                         }
-                        // `[约束]` 思考内容不回传。DeepSeek 的文档明确要求，
-                        // 带上 reasoning_content 会 400；OpenAI 格式里也没有
-                        // 对应字段可放。
-                        AssistantContent::Thinking { .. } => {}
+                        // `[约束]` DeepSeek 思考模式带工具时，历史上每一轮的
+                        // reasoning_content 都要回传：它被拼回上下文，模型靠它
+                        // 在工具调用之间接着上一步的思路想。不回传不报错（实测
+                        // 照样 200），模型每一步都从零想起，效果明显变差。别家
+                        // 没有这个字段，一律不发。
+                        AssistantContent::Thinking { text: t, .. } => {
+                            if replay_reasoning {
+                                reasoning.push_str(t);
+                            }
+                        }
                     }
                 }
 
@@ -245,6 +273,7 @@ pub fn convert_messages(messages: &[Message]) -> Vec<WireMessage> {
 
                 out.push(WireMessage::Assistant {
                     content: (!text.trim().is_empty()).then_some(text),
+                    reasoning_content: (!reasoning.is_empty()).then_some(reasoning),
                     tool_calls: calls,
                 });
             }

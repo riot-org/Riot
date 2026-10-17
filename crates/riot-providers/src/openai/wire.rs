@@ -26,7 +26,8 @@ pub struct WireRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream_options: Option<StreamOptions>,
     /// 思考力度。OpenAI 官方参数；DeepSeek / GLM 的兼容端点也认，
-    /// 取值交集是 low/medium/high（它们把 medium 映射到 high）。
+    /// 取值交集是 low/medium/high（它们把 medium 映射到 high）。最高档
+    /// OpenAI 写 `xhigh`、DeepSeek 写 `max`（它把 `xhigh` 映射到 high）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<&'static str>,
     /// 思考开关。**非** OpenAI 标准字段 —— DeepSeek / GLM 的约定
@@ -74,6 +75,10 @@ pub enum WireMessage {
     Assistant {
         #[serde(skip_serializing_if = "Option::is_none")]
         content: Option<String>,
+        /// 回传的思维链。**非** OpenAI 标准字段，只对 DeepSeek 发（见
+        /// `request::build_request`）。
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reasoning_content: Option<String>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         tool_calls: Vec<WireToolCall>,
     },
@@ -164,10 +169,8 @@ pub struct WireChoice {
 pub struct WireDelta {
     #[serde(default)]
     pub content: Option<String>,
-    /// DeepSeek-reasoner 的思考过程。
-    ///
-    /// `[约束]` 这段内容**不能回传**给下一轮请求 —— DeepSeek 的文档明确
-    /// 要求，带上它会直接 400。见 `request::convert_messages`。
+    /// 思考过程（DeepSeek、GLM 等）。回不回传因端点而异，见
+    /// `request::convert_messages`。
     #[serde(default)]
     pub reasoning_content: Option<String>,
     #[serde(default)]

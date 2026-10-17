@@ -61,6 +61,16 @@ impl TurnAccumulator {
         self.messages.iter().any(|m| !m.tool_use_ids().is_empty())
     }
 
+    /// 本轮有没有吐出思考内容。
+    pub fn has_thinking(&self) -> bool {
+        self.messages.iter().any(|m| match m {
+            Message::Assistant { content, .. } => content
+                .iter()
+                .any(|c| matches!(c, AssistantContent::Thinking { text, .. } if !text.is_empty())),
+            _ => false,
+        })
+    }
+
     /// 本轮的工具调用，按模型给出的顺序。
     pub fn tool_calls(&self) -> Vec<ToolCall> {
         self.messages

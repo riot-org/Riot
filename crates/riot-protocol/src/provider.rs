@@ -32,8 +32,8 @@ pub trait Provider: Send + Sync {
     /// 估算消息序列的 token 数。上下文管理层用它决定何时压缩。
     ///
     /// `[约束]` 算的必须是**发出去的那份**，不是历史本身。两者差得远:历史
-    /// 里有一大堆按设计不进请求的东西 —— `System` 消息、思考内容（DeepSeek
-    /// 带上会 400）、消息 id 和 usage、以及视觉兼容路径下那张只给界面看的
+    /// 里有一大堆按设计不进请求的东西 —— `System` 消息、多数 OpenAI 兼容端点
+    /// 上的思考内容、消息 id 和 usage、以及视觉兼容路径下那张只给界面看的
     /// 图（模型收到的是文字转述，见 [`crate::message::ToolResultContent`]）。
     /// 按历史算的话，几张截图就能凭空变出几万个 token —— 实测有会话报到
     /// 十万的时候，其中四成多是根本不会发出去的图片 base64。代价是用户在
@@ -287,12 +287,16 @@ pub enum ThinkingConfig {
 /// 思考力度档。取值刻意与 OpenAI 的 `reasoning_effort` 对齐 ——
 /// low/medium/high 是各家（OpenAI / DeepSeek / GLM）都接受的交集，
 /// DeepSeek 和 GLM 会把 medium 兼容映射到 high。
+///
+/// `Max` 在交集之外：各家最高档的写法不同（DeepSeek `max`、OpenAI
+/// `xhigh`、Anthropic `max`），由各协议自己翻译；不认的端点会 400。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ThinkingEffort {
     Low,
     Medium,
     High,
+    Max,
 }
 
 impl ThinkingEffort {
@@ -305,12 +309,14 @@ impl ThinkingEffort {
         }
     }
 
-    /// OpenAI 系 `reasoning_effort` 的字面值。
+    /// OpenAI 系 `reasoning_effort` 的字面值。DeepSeek 的最高档另有写法，
+    /// 见 `riot_providers::openai` 里的翻译。
     pub fn as_openai_str(self) -> &'static str {
         match self {
             ThinkingEffort::Low => "low",
             ThinkingEffort::Medium => "medium",
             ThinkingEffort::High => "high",
+            ThinkingEffort::Max => "xhigh",
         }
     }
 }

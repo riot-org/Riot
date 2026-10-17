@@ -117,6 +117,8 @@ export default {
   "composer.thinking.low": "低",
   "composer.thinking.medium": "中",
   "composer.thinking.high": "高",
+  "composer.thinking.max": "最高",
+  "composer.thinking.max.hint": "想得最深也最慢；DeepSeek 发 max，OpenAI 发 xhigh",
   "composer.thinking.disabled": "关闭思考",
   "composer.thinking.disabled.hint": "部分端点不支持",
 

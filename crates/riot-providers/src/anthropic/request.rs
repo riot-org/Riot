@@ -238,6 +238,15 @@ pub enum WireThinking {
     },
     /// Sonnet 5.5 的关思考写法（它收到 `disabled` 会 400）。
     BetweenTools,
+    /// 显式关思考。只发给不发就照样想的 DeepSeek。
+    Disabled,
+}
+
+impl WireThinking {
+    /// 这次请求会不会思考。Anthropic 对思考 + 采样参数的组合直接 400。
+    pub fn is_on(&self) -> bool {
+        !matches!(self, WireThinking::Disabled)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -247,6 +256,11 @@ pub struct WireOutputConfig {
 
 /// 没有指定时的输出上限。
 const DEFAULT_MAX_TOKENS: u32 = 8192;
+
+/// DeepSeek 没有指定时的输出上限。它默认开着思考，思考和回答共用这个
+/// 上限：8K 在 high 档下常常想到一半就截断。取它自己 Chat Completions
+/// 思考模式的默认值。
+const DEEPSEEK_DEFAULT_MAX_TOKENS: u32 = 65_536;
 
 // ────────────────────────────────────────────────────────────
 // 组装
@@ -258,14 +272,18 @@ pub fn build_request(
     system: &[SystemSection],
     retry: &RetryContext,
 ) -> WireRequest {
-    let max_tokens = retry
-        .max_output_tokens_override
-        .or(req.max_output_tokens)
-        .unwrap_or(DEFAULT_MAX_TOKENS);
     let model = retry
         .model_override
         .clone()
         .unwrap_or_else(|| req.model.clone());
+    let max_tokens = retry
+        .max_output_tokens_override
+        .or(req.max_output_tokens)
+        .unwrap_or(if crate::is_deepseek_model(&model) {
+            DEEPSEEK_DEFAULT_MAX_TOKENS
+        } else {
+            DEFAULT_MAX_TOKENS
+        });
     // 按**实际发出去的**模型选写法：降级换到别的代际时，参数也得跟着换。
     let (thinking, output_config) =
         super::thinking::wire_thinking(req.thinking, &model, max_tokens);

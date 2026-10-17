@@ -7,8 +7,9 @@
 //!   `budget_tokens` 直接 400，温度这类采样参数也一并移除（发了同样 400）。
 //!
 //! `[取舍]` 认不出的模型名照旧走 `budget_tokens`：走 Anthropic 协议的兼容
-//! 端点上跑的往往不是 Claude（DeepSeek、GLM），旧命名的 Claude 也在这条路上
-//! —— 那是这里改动之前的行为，不让它们跟着冒险。
+//! 端点上跑的往往不是 Claude（GLM 等），旧命名的 Claude 也在这条路上
+//! —— 那是这里改动之前的行为，不让它们跟着冒险。DeepSeek 单列一档：它的
+//! 兼容端点忽略 `budget_tokens`，只认 `output_config.effort`。
 
 use riot_protocol::provider::{ThinkingConfig, ThinkingEffort};
 
@@ -35,11 +36,18 @@ pub(crate) enum Generation {
     /// 同 [`Self::AlwaysOn`]，但有正式的关闭方式 `{type: "between_tools"}`：
     /// Sonnet 5.5。
     BetweenTools,
+    /// DeepSeek：不发 thinking 也照样想（默认 high），力度只认
+    /// `output_config.effort`（`budget_tokens` 被忽略），关思考要显式发
+    /// `{type: "disabled"}`。采样参数认（思考时不生效）。
+    DeepSeek,
 }
 
 /// 从模型 id 认代际。认得 Bedrock（`anthropic.claude-…-v1:0`）、Vertex
 /// （`claude-…@日期`）和带日期快照的写法。
 pub(crate) fn generation(model: &str) -> Generation {
+    if crate::is_deepseek_model(model) {
+        return Generation::DeepSeek;
+    }
     let m = model.to_ascii_lowercase();
     let Some(at) = m.find("claude-") else {
         return Generation::Budget;
@@ -75,7 +83,10 @@ pub(crate) fn generation(model: &str) -> Generation {
 /// Opus 4.7 起移除了（发了 400）；Sonnet 5.5、Haiku 5.5 只认默认值 —— 不发
 /// 就是默认值，统一不发。
 pub(crate) fn accepts_sampling(model: &str) -> bool {
-    matches!(generation(model), Generation::Budget | Generation::OptIn46)
+    matches!(
+        generation(model),
+        Generation::Budget | Generation::OptIn46 | Generation::DeepSeek
+    )
 }
 
 /// 本次请求的 `thinking` 和 `output_config`。
@@ -128,6 +139,17 @@ pub(crate) fn wire_thinking(
         (Generation::BetweenTools, Want::Off) => (Some(WireThinking::BetweenTools), None),
         (Generation::AlwaysOn, Want::Off) => (None, effort(ThinkingEffort::Low)),
 
+        // 预算照发：DeepSeek 自己忽略它，但中转（OpenRouter）可能按它分配
+        // 思考额度 —— 那是改动前的行为。力度要另走 output_config 才生效。
+        (Generation::DeepSeek, Want::Off) => (Some(WireThinking::Disabled), None),
+        (Generation::DeepSeek, Want::Level(level)) => {
+            (budget(effort_budget(level), max_tokens), effort(level))
+        }
+        (Generation::DeepSeek, Want::Tokens(tokens)) => (
+            budget(tokens, max_tokens),
+            effort(ThinkingEffort::from_budget(tokens)),
+        ),
+
         (_, Want::Level(level)) => (Some(adaptive), effort(level)),
         (_, Want::Tokens(tokens)) => (Some(adaptive), effort(ThinkingEffort::from_budget(tokens))),
     }
@@ -139,6 +161,7 @@ fn effort_str(level: ThinkingEffort) -> &'static str {
         ThinkingEffort::Low => "low",
         ThinkingEffort::Medium => "medium",
         ThinkingEffort::High => "high",
+        ThinkingEffort::Max => "max",
     }
 }
 
@@ -151,11 +174,13 @@ fn budget(tokens: u32, max_tokens: u32) -> Option<WireThinking> {
 ///
 /// 数值参照 Claude Code 的 think/megathink 量级；high 刻意没顶到 CC 的
 /// ultrathink（32k）—— 那是用户喊口令才给的量，当作常规档每轮都发太贵。
+/// max 就是 ultrathink 那一档，只在用户显式选最高档时发。
 fn effort_budget(level: ThinkingEffort) -> u32 {
     match level {
         ThinkingEffort::Low => 2_048,
         ThinkingEffort::Medium => 8_192,
         ThinkingEffort::High => 24_576,
+        ThinkingEffort::Max => 32_000,
     }
 }
 
@@ -204,8 +229,9 @@ mod tests {
             ("claude-haiku-4-5", Budget),
             ("claude-3-7-sonnet-20250219", Budget),
             ("claude-mythos-preview", Budget),
-            ("deepseek-v4-pro", Budget),
             ("glm-5", Budget),
+            ("deepseek-v4-pro", DeepSeek),
+            ("~deepseek/deepseek-v4-flash-latest", DeepSeek),
         ] {
             assert_eq!(generation(model), want, "{model}");
         }
@@ -300,6 +326,47 @@ mod tests {
             wire_thinking(ThinkingConfig::Off, "claude-opus-5-5", 8_192),
             (None, None),
             "Off 就是一个参数都不发"
+        );
+    }
+
+    /// DeepSeek 的 Anthropic 端点忽略 `budget_tokens`：力度必须走
+    /// `output_config.effort`，关思考必须显式发 disabled（不发就照默认想）。
+    #[test]
+    fn deepseek_力度走_effort_关思考显式发() {
+        let model = "deepseek-v4-pro";
+        let (thinking, output) = wire_thinking(
+            ThinkingConfig::Effort {
+                level: ThinkingEffort::Max,
+            },
+            model,
+            65_536,
+        );
+        assert_eq!(output, Some(WireOutputConfig { effort: "max" }));
+        assert!(
+            matches!(thinking, Some(WireThinking::Enabled { .. })),
+            "预算照发给中转看：{thinking:?}"
+        );
+
+        assert_eq!(
+            wire_thinking(ThinkingConfig::Disabled, model, 65_536),
+            (Some(WireThinking::Disabled), None)
+        );
+        assert_eq!(
+            wire_thinking(ThinkingConfig::Off, model, 65_536),
+            (None, None),
+            "默认档一个参数都不发，由端点按 high 想"
+        );
+        assert_eq!(
+            wire_thinking(
+                ThinkingConfig::Effort {
+                    level: ThinkingEffort::High
+                },
+                model,
+                1_500
+            )
+            .1,
+            Some(WireOutputConfig { effort: "high" }),
+            "上限小到塞不下预算时，力度照样要发"
         );
     }
 

@@ -29,6 +29,15 @@ pub use openai::{OpenAiConfig, OpenAiProvider};
 pub use retry::{RequestSource, RetryPolicy};
 pub use transport::{HttpError, HttpRequest, HttpTransport};
 
+/// 是不是 DeepSeek 的模型。按模型名认，不按地址：中转和 OpenRouter 上
+/// 的名字（`deepseek/deepseek-v4-pro`）也得认出来。
+///
+/// 用到它的都是 DeepSeek 偏离各家协议的地方：思考模式带工具时要回传
+/// `reasoning_content`、最高档写作 `max`、Anthropic 端点忽略 `budget_tokens`。
+pub fn is_deepseek_model(model: &str) -> bool {
+    model.to_ascii_lowercase().contains("deepseek")
+}
+
 /// 采样参数。`None` = 不发送该字段，用服务端默认值。
 ///
 /// `[约束]` 不要把 None 替换成"合理默认值"发出去 —— 各家模型的默认

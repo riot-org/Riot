@@ -126,6 +126,7 @@ pub fn provider_from_endpoint(
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
+            replay_reasoning: riot_providers::is_deepseek_model(&model.model),
             ..Default::default()
         },
     )))

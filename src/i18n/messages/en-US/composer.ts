@@ -125,6 +125,8 @@ export default {
   "composer.thinking.low": "Low",
   "composer.thinking.medium": "Medium",
   "composer.thinking.high": "High",
+  "composer.thinking.max": "Max",
+  "composer.thinking.max.hint": "Deepest and slowest; sends max to DeepSeek, xhigh to OpenAI",
   "composer.thinking.disabled": "Thinking off",
   "composer.thinking.disabled.hint": "Not supported by some endpoints",
 

@@ -46,7 +46,12 @@ fn sse(data: &str) -> SseEvent {
 
 #[test]
 fn 基本请求形状() {
-    let w = build_request(&req(vec![user("你好")]), &[], &RetryContext::initial());
+    let w = build_request(
+        &req(vec![user("你好")]),
+        &[],
+        &RetryContext::initial(),
+        false,
+    );
 
     assert_eq!(w.model, "deepseek-chat");
     assert!(w.stream);
@@ -69,19 +74,19 @@ fn 思考配置映射成_wire_参数() {
     use riot_protocol::provider::ThinkingEffort;
 
     let mut r = req(vec![user("你好")]);
-    let w = build_request(&r, &[], &RetryContext::initial());
+    let w = build_request(&r, &[], &RetryContext::initial(), false);
     assert_eq!(w.reasoning_effort, None, "Off 不发力度");
     assert_eq!(w.thinking, None, "Off 不发开关");
 
     r.thinking = ThinkingConfig::Effort {
         level: ThinkingEffort::Low,
     };
-    let w = build_request(&r, &[], &RetryContext::initial());
+    let w = build_request(&r, &[], &RetryContext::initial(), false);
     assert_eq!(w.reasoning_effort, Some("low"));
     assert_eq!(w.thinking, None, "力度档不捎非标准的开关字段");
 
     r.thinking = ThinkingConfig::Disabled;
-    let w = build_request(&r, &[], &RetryContext::initial());
+    let w = build_request(&r, &[], &RetryContext::initial(), false);
     assert_eq!(w.reasoning_effort, None);
     assert_eq!(
         serde_json::to_value(w.thinking).expect("序列化"),
@@ -96,7 +101,7 @@ fn 思考预算折算成档位() {
     let mut r = req(vec![user("你好")]);
     for (tokens, expect) in [(2_000, "low"), (10_000, "medium"), (30_000, "high")] {
         r.thinking = ThinkingConfig::Budget { tokens };
-        let w = build_request(&r, &[], &RetryContext::initial());
+        let w = build_request(&r, &[], &RetryContext::initial(), false);
         assert_eq!(w.reasoning_effort, Some(expect), "{tokens} tokens");
     }
 }
@@ -104,7 +109,7 @@ fn 思考预算折算成档位() {
 #[test]
 fn 请求里要开_usage_上报() {
     // 不开的话流式响应没有 usage，上下文管理层就没有数据决定何时压缩
-    let w = build_request(&req(vec![user("hi")]), &[], &RetryContext::initial());
+    let w = build_request(&req(vec![user("hi")]), &[], &RetryContext::initial(), false);
     assert_eq!(
         w.stream_options.map(|o| o.include_usage),
         Some(true),
@@ -137,7 +142,7 @@ fn 工具结果变成独立的_tool_消息() {
         },
     ];
 
-    let out = convert_messages(&msgs);
+    let out = convert_messages(&msgs, false);
     assert_eq!(out.len(), 2);
 
     match &out[0] {
@@ -183,7 +188,7 @@ fn 工具结果里的图片跟在后面的_user_消息里() {
         meta: MessageMeta::default(),
     }];
 
-    let out = convert_messages(&msgs);
+    let out = convert_messages(&msgs, false);
     assert_eq!(out.len(), 2, "一条 tool + 一条带图的 user：{out:?}");
 
     match &out[0] {
@@ -240,7 +245,7 @@ fn 用户附图和文字同一条消息且图在前() {
         meta: MessageMeta::default(),
     }];
 
-    let out = convert_messages(&msgs);
+    let out = convert_messages(&msgs, false);
     assert_eq!(out.len(), 1, "图和文字不该拆成两条消息：{out:?}");
 
     let WireMessage::UserParts { content } = &out[0] else {
@@ -280,7 +285,7 @@ fn 系统提醒附件渲染成文本不是_json() {
         meta: MessageMeta::default(),
     }];
 
-    let out = convert_messages(&msgs);
+    let out = convert_messages(&msgs, false);
     let WireMessage::User { content } = &out[0] else {
         panic!("没有图片时应该还是纯文本 user：{:?}", out[0]);
     };
@@ -313,7 +318,7 @@ fn 视觉兼容的图只发转述() {
         meta: MessageMeta::default(),
     }];
 
-    let out = convert_messages(&msgs);
+    let out = convert_messages(&msgs, false);
     let WireMessage::User { content } = &out[0] else {
         panic!("不发图片时应该是纯文本 user：{:?}", out[0]);
     };
@@ -343,7 +348,7 @@ fn 工具结果排在同批用户文本之前() {
         meta: MessageMeta::default(),
     }];
 
-    let out = convert_messages(&msgs);
+    let out = convert_messages(&msgs, false);
     assert!(
         matches!(out[0], WireMessage::Tool { .. }),
         "tool 必须排在前面：{out:?}"
@@ -351,15 +356,13 @@ fn 工具结果排在同批用户文本之前() {
     assert!(matches!(out[1], WireMessage::User { .. }));
 }
 
-#[test]
-fn 思考内容不回传() {
-    // `[约束]` DeepSeek 明确要求不要把 reasoning_content 传回去，会 400
-    let msgs = vec![Message::Assistant {
+fn thought_then_answer(thinking: &str) -> Vec<Message> {
+    vec![Message::Assistant {
         id: MessageId::from_raw("a1"),
         content: vec![
             AssistantContent::Thinking {
                 duration_ms: None,
-                text: "让我想想……".into(),
+                text: thinking.into(),
                 signature: None,
             },
             AssistantContent::Text {
@@ -368,20 +371,78 @@ fn 思考内容不回传() {
         ],
         usage: None,
         meta: MessageMeta::default(),
+    }]
+}
+
+/// 不回传思考的端点上，思考既不进 reasoning_content 也不漏进正文。
+#[test]
+fn 思考内容默认不回传() {
+    let out = convert_messages(&thought_then_answer("让我想想……"), false);
+    assert_eq!(
+        out,
+        vec![WireMessage::Assistant {
+            content: Some("答案是 42".into()),
+            reasoning_content: None,
+            tool_calls: vec![],
+        }]
+    );
+}
+
+/// DeepSeek 思考模式带工具时，历史思维链走 reasoning_content 回传，和正文
+/// 分开放。不回传不报错，模型只是每一步都从零想起 —— 所以只能靠这条盯着。
+#[test]
+fn deepseek_带工具时回传思维链() {
+    let mut r = req(thought_then_answer("让我想想……"));
+    r.tools = vec![ToolSpec {
+        name: "Bash".into(),
+        description: String::new(),
+        input_schema: serde_json::json!({}),
     }];
 
-    let out = convert_messages(&msgs);
-    assert_eq!(out.len(), 1);
-    match &out[0] {
-        WireMessage::Assistant { content, .. } => {
-            assert_eq!(content.as_deref(), Some("答案是 42"));
-            assert!(
-                !content.as_deref().unwrap_or_default().contains("让我想想"),
-                "思考内容漏进请求了"
-            );
-        }
-        other => panic!("{other:?}"),
-    }
+    let w = build_request(&r, &[], &RetryContext::initial(), true);
+    let WireMessage::Assistant {
+        content,
+        reasoning_content,
+        ..
+    } = &w.messages[0]
+    else {
+        panic!("{:?}", w.messages);
+    };
+    assert_eq!(reasoning_content.as_deref(), Some("让我想想……"));
+    assert_eq!(content.as_deref(), Some("答案是 42"), "思考不能混进正文");
+
+    r.tools.clear();
+    let w = build_request(&r, &[], &RetryContext::initial(), true);
+    assert!(
+        matches!(
+            &w.messages[0],
+            WireMessage::Assistant {
+                reasoning_content: None,
+                ..
+            }
+        ),
+        "不带工具时 DeepSeek 忽略回传的思维链，别白传：{:?}",
+        w.messages
+    );
+}
+
+/// 最高档在 DeepSeek 上要写 `max`：它把 OpenAI 的 `xhigh` 当成 high，
+/// 发错了不报错，只是悄悄降一档。
+#[test]
+fn 最高档按厂商翻译() {
+    use riot_protocol::provider::ThinkingEffort;
+
+    let mut r = req(vec![user("你好")]);
+    r.thinking = ThinkingConfig::Effort {
+        level: ThinkingEffort::Max,
+    };
+    r.model = "deepseek-v4-pro".into();
+    let w = build_request(&r, &[], &RetryContext::initial(), false);
+    assert_eq!(w.reasoning_effort, Some("max"));
+
+    r.model = "gpt-5.6".into();
+    let w = build_request(&r, &[], &RetryContext::initial(), false);
+    assert_eq!(w.reasoning_effort, Some("xhigh"));
 }
 
 // ── token 估算 ────────────────────────────────────────
@@ -416,8 +477,8 @@ fn 转述图的_base64_不计入估算() {
         }]
     };
 
-    let with_image = wire_bytes(&described(base64));
-    let without = wire_bytes(&described(String::new()));
+    let with_image = wire_bytes(&described(base64), false);
+    let without = wire_bytes(&described(String::new()), false);
     assert_eq!(with_image, without, "base64 不随请求发出去，就不能算进预算");
     assert!(with_image < 200, "只该剩下那句转述：{with_image} 字节");
 }
@@ -470,38 +531,27 @@ fn 视觉图的_base64_能从报文字节里精确扣掉() {
         let (n_large, b_large) = riot_protocol::provider::wire_images(&msgs_of(large.clone()));
         assert_eq!((n_small, n_large), (1, 1), "{name} 该数出一张图");
         assert_eq!(
-            wire_bytes(&msgs_of(small.clone())) - b_small,
-            wire_bytes(&msgs_of(large.clone())) - b_large,
+            wire_bytes(&msgs_of(small.clone()), false) - b_small,
+            wire_bytes(&msgs_of(large.clone()), false) - b_large,
             "{name} 扣掉 base64 后剩的只有固定结构，不该随图片大小变"
         );
     }
 }
 
-/// 思考内容不占预算 —— 它按协议要求根本不回传（见 `思考内容不回传`）。
+/// 思考内容占不占预算，跟着回不回传走（见 `思考内容默认不回传`）。
 #[test]
-fn 思考内容不计入估算() {
-    let thinking = |text: &str| {
-        vec![Message::Assistant {
-            id: MessageId::from_raw("a1"),
-            content: vec![
-                AssistantContent::Thinking {
-                    duration_ms: None,
-                    text: text.into(),
-                    signature: None,
-                },
-                AssistantContent::Text {
-                    text: "答案是 42".into(),
-                },
-            ],
-            usage: None,
-            meta: MessageMeta::default(),
-        }]
-    };
+fn 思考内容按回传与否计入估算() {
+    let long = thought_then_answer(&"想".repeat(10_000));
+    let empty = thought_then_answer("");
 
     assert_eq!(
-        wire_bytes(&thinking(&"想".repeat(10_000))),
-        wire_bytes(&thinking("")),
+        wire_bytes(&long, false),
+        wire_bytes(&empty, false),
         "推理过程不回传，就不能算进预算"
+    );
+    assert!(
+        wire_bytes(&long, true) > wire_bytes(&empty, true) + 20_000,
+        "回传的思维链会拼进上下文，估少了压缩就来得太晚"
     );
 }
 
@@ -514,7 +564,7 @@ fn system_消息不计入估算() {
         text: "上次请求失败了".repeat(100),
         ui: None,
     }];
-    assert_eq!(wire_bytes(&msgs), 0, "System 消息不进请求");
+    assert_eq!(wire_bytes(&msgs, false), 0, "System 消息不进请求");
 }
 
 /// 消息 id 和 usage 不占预算。
@@ -523,27 +573,33 @@ fn system_消息不计入估算() {
 /// 上万个凭空多出来的 token。
 #[test]
 fn 消息_id_和_usage_不计入估算() {
-    let plain = wire_bytes(&[Message::Assistant {
-        id: MessageId::from_raw("a1"),
-        content: vec![AssistantContent::Text {
-            text: "答案".into(),
+    let plain = wire_bytes(
+        &[Message::Assistant {
+            id: MessageId::from_raw("a1"),
+            content: vec![AssistantContent::Text {
+                text: "答案".into(),
+            }],
+            usage: None,
+            meta: MessageMeta::default(),
         }],
-        usage: None,
-        meta: MessageMeta::default(),
-    }]);
-    let bookkept = wire_bytes(&[Message::Assistant {
-        id: MessageId::from_raw("msg_01JQRSTUVWXYZ0123456789"),
-        content: vec![AssistantContent::Text {
-            text: "答案".into(),
+        false,
+    );
+    let bookkept = wire_bytes(
+        &[Message::Assistant {
+            id: MessageId::from_raw("msg_01JQRSTUVWXYZ0123456789"),
+            content: vec![AssistantContent::Text {
+                text: "答案".into(),
+            }],
+            usage: Some(riot_protocol::message::Usage {
+                input_tokens: 12345,
+                output_tokens: 6789,
+                cache_read_tokens: 4096,
+                cache_creation_tokens: 2048,
+            }),
+            meta: MessageMeta::default(),
         }],
-        usage: Some(riot_protocol::message::Usage {
-            input_tokens: 12345,
-            output_tokens: 6789,
-            cache_read_tokens: 4096,
-            cache_creation_tokens: 2048,
-        }),
-        meta: MessageMeta::default(),
-    }]);
+        false,
+    );
     assert_eq!(plain, bookkept, "本地簿记不该影响预算");
 }
 
@@ -560,7 +616,7 @@ fn 空消息被丢掉() {
         user("有内容"),
     ];
 
-    let out = convert_messages(&msgs);
+    let out = convert_messages(&msgs, false);
     assert_eq!(out.len(), 1);
     assert!(matches!(out[0], WireMessage::User { .. }));
 }
@@ -578,7 +634,7 @@ fn 空的工具结果被替换成占位文本() {
         meta: MessageMeta::default(),
     }];
 
-    match &convert_messages(&msgs)[0] {
+    match &convert_messages(&msgs, false)[0] {
         WireMessage::Tool { content, .. } => assert!(!content.trim().is_empty()),
         other => panic!("{other:?}"),
     }
@@ -596,7 +652,7 @@ fn 错误结果带上标记() {
         meta: MessageMeta::default(),
     }];
 
-    match &convert_messages(&msgs)[0] {
+    match &convert_messages(&msgs, false)[0] {
         WireMessage::Tool { content, .. } => assert!(content.contains("Error:")),
         other => panic!("{other:?}"),
     }
@@ -619,7 +675,7 @@ fn 工具按名字排序() {
         },
     ];
 
-    let w = build_request(&r, &[], &RetryContext::initial());
+    let w = build_request(&r, &[], &RetryContext::initial(), false);
     let names: Vec<_> = w.tools.iter().map(|t| t.function.name.clone()).collect();
     assert_eq!(names, vec!["Bash", "Write"]);
 }
@@ -630,6 +686,7 @@ fn 降级会换掉模型名() {
         &req(vec![user("hi")]),
         &[],
         &RetryContext::fallback_to("deepseek-reasoner"),
+        false,
     );
     assert_eq!(w.model, "deepseek-reasoner");
 }

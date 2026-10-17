@@ -954,8 +954,11 @@ export type ThinkingPolicy =
  * 思考力度档。取值刻意与 OpenAI 的 `reasoning_effort` 对齐 ——
  * low/medium/high 是各家（OpenAI / DeepSeek / GLM）都接受的交集，
  * DeepSeek 和 GLM 会把 medium 兼容映射到 high。
+ *
+ * `Max` 在交集之外：各家最高档的写法不同（DeepSeek `max`、OpenAI
+ * `xhigh`、Anthropic `max`），由各协议自己翻译；不认的端点会 400。
  */
-export type ThinkingEffort = "low" | "medium" | "high";
+export type ThinkingEffort = "low" | "medium" | "high" | "max";
 /**
  * 重复规则。
  *
