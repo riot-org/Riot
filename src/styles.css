@@ -5631,6 +5631,59 @@ body.file-dragging.file-drop-hot * {
   background: var(--border);
 }
 
+/* 模型菜单里的「Effort  High >」，展开成右侧的二级菜单（Claude 桌面端同款）。 */
+.picker-sub {
+  position: relative;
+}
+
+.menu-item.picker-sub-trigger {
+  gap: 8px;
+}
+
+.menu-item.picker-sub-trigger.open {
+  background: var(--bg-hover);
+}
+
+.picker-sub-value {
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.picker-sub-trigger .chevron {
+  color: var(--text-faint);
+}
+
+/* 外层透明的 padding 接住鼠标：从触发行横移到子菜单的那条缝不算"离开"。
+   底边对齐触发行，往上长 —— 输入框在窗口底部，往下没地方。 */
+.picker-sub-flyout {
+  position: absolute;
+  left: 100%;
+  bottom: -4px;
+  padding-left: 10px;
+  z-index: var(--z-menu);
+}
+
+.menu.picker-submenu {
+  position: static;
+  min-width: 260px;
+  max-width: 320px;
+}
+
+.pick-badge {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 5px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  background: var(--bg-hover);
+}
+
+.pick-badge.warn {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+
 /* 旧勾选项样式（设置页等若仍引用 menu-check 可保留）。 */
 .menu-check-row {
   display: inline-flex;
@@ -11182,11 +11235,22 @@ button.fold-head:hover,
 }
 
 .ctx-bar {
+  position: relative;
   height: 4px;
   margin-bottom: 9px;
   border-radius: 2px;
   background: var(--border);
-  overflow: hidden;
+}
+
+/* 自动压缩点：比条高出一截的竖线，条满到这儿就压。 */
+.ctx-bar-mark {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--text-faint);
 }
 
 .ctx-bar-fill {

@@ -57,7 +57,7 @@ pub struct PersistedSession {
     pub python_venv: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
-    /// 会话级思考策略。默认 = 不干预（不发任何思考参数）。
+    /// 会话级思考策略。默认 High；旧文件里的 default / adaptive 读进来也是 High。
     #[serde(
         default,
         skip_serializing_if = "riot_protocol::ThinkingPolicy::is_default"
@@ -464,7 +464,47 @@ mod tests {
         );
         assert!(
             idx.sessions[0].thinking.is_default(),
-            "缺 thinking 字段回默认 = 不发思考参数，老会话行为不变"
+            "缺 thinking 字段回默认 High"
         );
+    }
+
+    /// 下线的「默认」「自适应」两档读进来是 High；其它档原样保留。
+    #[test]
+    fn 旧思考档迁到_high() {
+        use riot_protocol::{ThinkingEffort, ThinkingPolicy};
+        let d = dir();
+        let transcripts = riot_store::Transcripts::new(d.path());
+        std::fs::write(
+            d.path().join("index.json"),
+            r#"{"sessions":[
+                {"id":"s1","root":"/w","seq":0,"createdAtMs":1,"thinking":{"mode":"adaptive"}},
+                {"id":"s2","root":"/w","seq":1,"createdAtMs":2,"thinking":{"mode":"default"}},
+                {"id":"s3","root":"/w","seq":2,"createdAtMs":3,"thinking":{"mode":"fixed","level":"low"}},
+                {"id":"s4","root":"/w","seq":3,"createdAtMs":4,"thinking":{"mode":"disabled"}}
+            ]}"#,
+        )
+        .expect("写老索引");
+
+        let idx = load(d.path(), &transcripts);
+        let high = ThinkingPolicy::Fixed {
+            level: ThinkingEffort::High,
+        };
+        let got: Vec<_> = idx.sessions.iter().map(|s| s.thinking).collect();
+        assert_eq!(
+            got,
+            [
+                high,
+                high,
+                ThinkingPolicy::Fixed {
+                    level: ThinkingEffort::Low
+                },
+                ThinkingPolicy::Disabled
+            ]
+        );
+
+        // 存回去：High 是默认值不落盘，旧写法从文件里消失。
+        save(d.path(), &idx).expect("保存");
+        let raw = std::fs::read_to_string(d.path().join("index.json")).expect("读");
+        assert!(!raw.contains("adaptive") && !raw.contains(r#"{"mode":"default"}"#), "{raw}");
     }
 }

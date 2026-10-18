@@ -90,11 +90,6 @@ pub(crate) fn accepts_sampling(model: &str) -> bool {
 }
 
 /// 本次请求的 `thinking` 和 `output_config`。
-///
-/// `[约束]` 自适应策略（[`ThinkingConfig::Adaptive`]）在这边**整个会话同一
-/// 档**，不照 `hint` 逐请求切。思考参数一变，消息缓存就整段作废：首请求中档、
-/// 续轮低档的话，每轮要在两处把整段历史重写一遍。新模型的 adaptive 本来就会
-/// 按请求自己调深浅，用不着我们替它切。
 pub(crate) fn wire_thinking(
     cfg: ThinkingConfig,
     model: &str,
@@ -113,7 +108,6 @@ pub(crate) fn wire_thinking(
         ThinkingConfig::Disabled => Want::Off,
         ThinkingConfig::Effort { level } => Want::Level(level),
         ThinkingConfig::Budget { tokens } => Want::Tokens(tokens),
-        ThinkingConfig::Adaptive { .. } => Want::Level(ThinkingEffort::Medium),
     };
 
     let generation = generation(model);
@@ -280,30 +274,6 @@ mod tests {
             Some(WireOutputConfig { effort: "high" }),
             "新模型没有预算参数，折算成档位"
         );
-    }
-
-    /// 自适应策略在 Anthropic 上整会话同一档：首请求和续轮发的思考参数逐字节
-    /// 相同，消息缓存才不会每轮作废两次。
-    #[test]
-    fn 自适应策略不逐请求切档() {
-        for model in ["claude-opus-5-5", "claude-sonnet-4-6", "claude-haiku-4-5"] {
-            let first = wire_thinking(
-                ThinkingConfig::Adaptive {
-                    hint: ThinkingEffort::Medium,
-                },
-                model,
-                8_192,
-            );
-            let follow_up = wire_thinking(
-                ThinkingConfig::Adaptive {
-                    hint: ThinkingEffort::Low,
-                },
-                model,
-                8_192,
-            );
-            assert_eq!(first, follow_up, "{model}");
-            assert!(first.0.is_some(), "{model}：自适应要真的开思考");
-        }
     }
 
     /// "关思考"按代际落到各自能接受的写法，没有一种会 400。

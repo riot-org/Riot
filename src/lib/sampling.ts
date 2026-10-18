@@ -62,7 +62,9 @@ export const SAMPLING_FIELDS: SamplingField[] = [
     label: "max tokens",
     hintKey: "composer.sampling.maxOutputTokens.hint",
     min: 256,
-    max: 128_000,
+    // 跟着主流模型的输出上限走：DeepSeek V4 是 384K，Claude / GPT 系是 128K。
+    // 再小的话，思考模式下想长一点就被截断（思考和回答共用这个上限）。
+    max: 384_000,
     step: 256,
     integer: true,
     scale: "log",

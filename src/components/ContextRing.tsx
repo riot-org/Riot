@@ -5,8 +5,11 @@
  * 累计。累计只增不减，聊到后面永远是满的，说明不了"现在还剩多少" —— 而那
  * 才是用户看这个东西的原因。累计花费移进点开的明细里，一键可达。
  *
- * 分母取**压缩阈值**而不是窗口大小：到线会发生一件具体的事（自动摘要，历史
- * 被替换），而窗口上限在那之前就已经被兜住了。环满 = 下一轮要压了。
+ * 分母取**模型窗口**（和 Claude / Codex 一样，300K 的窗口就显示 300K），
+ * 压缩点在进度条上单独标出来。没配窗口的模型不知道窗口多大，退回用压缩阈值。
+ *
+ * 变色仍按"离压缩点多近"算，不按窗口占比：内核给模型的用量提示是相对压缩
+ * 阈值的，两边要在同一刻变档（见 `WARN_PCT`）。
  */
 
 import { useState } from "react";
@@ -42,15 +45,19 @@ export function ContextRing({
   threshold: number;
   /** 本会话累计，明细里显示。 */
   totals: { input: number; output: number };
-  /** 这个模型配的窗口。没配就不显示那一行。 */
+  /** 这个模型配的窗口，百分比和进度条的分母。没配就用 `threshold`。 */
   window?: number;
 }) {
   const { t } = useT();
   const [open, setOpen] = useState(false);
   const { rootRef, onKeyDown } = useDropdown(open, setOpen);
 
-  const pct = threshold > 0 ? Math.min((used / threshold) * 100, 100) : 0;
-  const level = pct >= DANGER_PCT ? "danger" : pct >= WARN_PCT ? "warn" : "";
+  const cap = contextWindow && contextWindow > threshold ? contextWindow : threshold;
+  const pct = cap > 0 ? Math.min((used / cap) * 100, 100) : 0;
+  /** 压缩点在进度条上的位置。分母就是阈值时它在最右端，不画。 */
+  const markPct = cap > threshold ? (threshold / cap) * 100 : null;
+  const toCompact = threshold > 0 ? (used / threshold) * 100 : 0;
+  const level = toCompact >= DANGER_PCT ? "danger" : toCompact >= WARN_PCT ? "warn" : "";
   // 四舍五入到整数百分比，但别把"刚开始用"显示成 0% —— 有内容就至少 1%。
   const shown = used > 0 ? Math.max(Math.round(pct), 1) : 0;
 
@@ -64,7 +71,7 @@ export function ContextRing({
         aria-label={t("app.ctx.ariaLabel", { pct: shown })}
         title={t("app.ctx.title", {
           used: fmtTokens(used),
-          threshold: fmtTokens(threshold),
+          threshold: fmtTokens(cap),
           pct: shown,
         })}
         onClick={() => setOpen(!open)}
@@ -101,20 +108,21 @@ export function ContextRing({
           </div>
           <div className="ctx-bar">
             <span className={level ? `ctx-bar-fill ${level}` : "ctx-bar-fill"} style={{ width: `${pct}%` }} />
+            {markPct !== null ? (
+              <span
+                className="ctx-bar-mark"
+                style={{ left: `${markPct}%` }}
+                title={t("app.ctx.note", { threshold: fmtTokens(threshold) })}
+              />
+            ) : null}
           </div>
           <dl className="ctx-rows">
             <div className="ctx-row">
               <dt>{t("app.ctx.current")}</dt>
               <dd>
-                {fmtTokens(used)} / {fmtTokens(threshold)}
+                {fmtTokens(used)} / {fmtTokens(cap)}
               </dd>
             </div>
-            {contextWindow ? (
-              <div className="ctx-row">
-                <dt>{t("app.ctx.window")}</dt>
-                <dd>{fmtTokens(contextWindow)}</dd>
-              </div>
-            ) : null}
             <div className="ctx-row">
               <dt>{t("app.ctx.total")}</dt>
               <dd>

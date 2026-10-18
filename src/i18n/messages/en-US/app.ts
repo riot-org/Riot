@@ -154,7 +154,6 @@ export default {
   "app.ctx.title": "Context {used} / {threshold} ({pct}%)",
   "app.ctx.usage": "Context usage",
   "app.ctx.current": "In use",
-  "app.ctx.window": "Model window",
   "app.ctx.total": "Session total",
   "app.ctx.note": "Auto-compacts at {threshold}.",
 

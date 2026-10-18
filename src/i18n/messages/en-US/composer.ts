@@ -116,20 +116,6 @@ export default {
   "composer.sampling.topK.hint": "Sent only over the Anthropic protocol.",
   "composer.sampling.maxOutputTokens.hint": "Output cap for a single reply.",
 
-  "composer.thinking.title": "Thinking effort",
-  "composer.thinking.hint":
-    "How deeply a reasoning model thinks per request (reasoning_effort / thinking). Adaptive = medium for new instructions, low for tool follow-ups, saving time and cost. \"Default\" sends no parameter at all. Levels and Off require endpoint support (DeepSeek, GLM, OpenAI reasoning models); unsupported endpoints reject the request, in which case switch back to \"Default\". Takes effect next turn.",
-  "composer.thinking.default.hint": "No thinking parameter; endpoint default",
-  "composer.thinking.adaptive": "Adaptive",
-  "composer.thinking.adaptive.hint": "Thinks hard on the first turn, less on tool follow-ups",
-  "composer.thinking.low": "Low",
-  "composer.thinking.medium": "Medium",
-  "composer.thinking.high": "High",
-  "composer.thinking.max": "Max",
-  "composer.thinking.max.hint": "Deepest and slowest; sends max to DeepSeek, xhigh to OpenAI",
-  "composer.thinking.disabled": "Thinking off",
-  "composer.thinking.disabled.hint": "Not supported by some endpoints",
-
   "composer.sessionSettings.title": "Session settings",
   "composer.sessionSettings.newSession": "New session",
   "composer.sessionSettings.sampling.hint":

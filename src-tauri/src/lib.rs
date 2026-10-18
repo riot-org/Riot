@@ -582,7 +582,7 @@ async fn set_session_system_prompt(
     state.set_system_prompt(&session_id, &prompt).await
 }
 
-/// 会话级思考策略。默认不干预（不发思考参数）；下一轮生效。
+/// 会话级思考策略（默认 High）；下一轮生效。
 #[cfg_attr(feature = "desktop", tauri::command)]
 async fn set_session_thinking(
     state: State<'_, AppState>,

@@ -148,7 +148,6 @@ export default {
   "app.ctx.title": "コンテキスト {used} / {threshold}（{pct}%）",
   "app.ctx.usage": "コンテキスト使用量",
   "app.ctx.current": "現在の使用量",
-  "app.ctx.window": "モデルのウィンドウ",
   "app.ctx.total": "このセッションの累計",
   "app.ctx.note": "{threshold} に達すると自動で要約・圧縮されます。",
 

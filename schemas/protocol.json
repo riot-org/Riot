@@ -5036,34 +5036,8 @@
       "type": "string"
     },
     "ThinkingPolicy": {
-      "description": "会话级的思考策略。宿主存这个，主循环每次请求时解析成 [`ThinkingConfig`]。\n\n策略和配置分开是因为 `Adaptive` 需要**每请求**决策（首请求 vs 工具续轮），\n而会话设置只在轮子开始前读一次 —— 合成一个类型的话，自适应就只能整轮同档。",
+      "description": "会话级的思考策略。宿主存这个，主循环每次请求时解析成 [`ThinkingConfig`]。\n\n默认 High：界面上只给 Low / Medium / High / Max / Off 五档，不再有\n\"不发参数\"和\"自适应\"。旧配置里存的 `default` / `adaptive` 读进来按 High\n处理（见 [`ThinkingPolicy`] 的 `Deserialize`），存回去时就是新写法。",
       "oneOf": [
-        {
-          "description": "不干预，端点默认行为。这是默认值 —— 升级后老会话行为不变。",
-          "properties": {
-            "mode": {
-              "const": "default",
-              "type": "string"
-            }
-          },
-          "required": [
-            "mode"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "自适应：首请求中档（那一次要理解任务、定计划），工具续轮低档\n（多数续轮只是\"读结果、发起下一步\"，全力思考纯属烧钱烧时间）。\nAnthropic 上例外：整会话同一档，见 [`ThinkingConfig::Adaptive`]。",
-          "properties": {
-            "mode": {
-              "const": "adaptive",
-              "type": "string"
-            }
-          },
-          "required": [
-            "mode"
-          ],
-          "type": "object"
-        },
         {
           "description": "每次请求都显式关闭思考。",
           "properties": {
@@ -5408,7 +5382,8 @@
             }
           ],
           "default": {
-            "mode": "default"
+            "level": "high",
+            "mode": "fixed"
           },
           "description": "会话级思考策略。"
         },

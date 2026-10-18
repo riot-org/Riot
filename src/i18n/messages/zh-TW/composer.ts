@@ -107,20 +107,6 @@ export default {
   "composer.sampling.topK.hint": "僅 Anthropic 協定會送出。",
   "composer.sampling.maxOutputTokens.hint": "單次回覆的輸出上限。",
 
-  "composer.thinking.title": "思考力度",
-  "composer.thinking.hint":
-    "控制推理模型每次請求想多深（reasoning_effort / thinking）。自適應 = 新指令用中檔、工具續輪用低檔，省時省錢。「預設」不送任何參數；檔位和關閉需要端點支援（DeepSeek、GLM、OpenAI 推理模型），不支援的端點會拒絕請求，屆時改回「預設」。下一輪生效。",
-  "composer.thinking.default.hint": "不送思考參數，隨端點預設",
-  "composer.thinking.adaptive": "自適應",
-  "composer.thinking.adaptive.hint": "首輪認真想，工具續輪少想",
-  "composer.thinking.low": "低",
-  "composer.thinking.medium": "中",
-  "composer.thinking.high": "高",
-  "composer.thinking.max": "最高",
-  "composer.thinking.max.hint": "想得最深也最慢；DeepSeek 送 max，OpenAI 送 xhigh",
-  "composer.thinking.disabled": "關閉思考",
-  "composer.thinking.disabled.hint": "部分端點不支援",
-
   "composer.sessionSettings.title": "會話設定",
   "composer.sessionSettings.newSession": "新會話",
   "composer.sessionSettings.sampling.hint":

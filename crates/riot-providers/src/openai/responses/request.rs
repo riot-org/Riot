@@ -62,7 +62,7 @@ pub fn build_request(
             }),
             Vec::new(),
         ),
-        ThinkingConfig::Effort { level } | ThinkingConfig::Adaptive { hint: level } => (
+        ThinkingConfig::Effort { level } => (
             Some(WireReasoning {
                 effort: effort_literal(level, &model),
                 summary: Some("auto"),

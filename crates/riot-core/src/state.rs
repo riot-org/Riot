@@ -63,7 +63,7 @@ impl AgentState {
             compact_failure_streak: 0,
             max_output_tokens_override: None,
             stop_hook_blocks: 0,
-            thinking: ThinkingPolicy::Default,
+            thinking: ThinkingPolicy::default(),
             tool_calls_since_todo: 0,
             handed_off: false,
             todo_close_reminded: false,

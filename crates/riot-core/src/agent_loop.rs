@@ -120,7 +120,7 @@ pub fn run_agent(
                 tools: deps.tools.specs(),
                 max_output_tokens: state.max_output_tokens_override,
                 // 按请求序号解析：Adaptive 在首请求和工具续轮给不同档。
-                thinking: state.thinking.config_for(state.turn),
+                thinking: state.thinking.config(),
                 cache_ttl: Default::default(),
             };
 

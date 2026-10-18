@@ -107,20 +107,6 @@ export default {
   "composer.sampling.topK.hint": "Anthropic プロトコルでのみ送信されます。",
   "composer.sampling.maxOutputTokens.hint": "1 回の返答の出力上限。",
 
-  "composer.thinking.title": "思考の深さ",
-  "composer.thinking.hint":
-    "推論モデルがリクエストごとにどれだけ深く考えるかを制御します（reasoning_effort / thinking）。適応 = 新しい指示には中、ツール続行ターンには低を使い、時間とコストを節約します。「デフォルト」はパラメータを一切送りません。各段階とオフはエンドポイントの対応が必要です（DeepSeek、GLM、OpenAI の推論モデル）。非対応のエンドポイントはリクエストを拒否するので、その場合は「デフォルト」に戻してください。次のターンから有効になります。",
-  "composer.thinking.default.hint": "思考パラメータを送らず、エンドポイントのデフォルトに従う",
-  "composer.thinking.adaptive": "適応",
-  "composer.thinking.adaptive.hint": "最初のターンはじっくり、ツール続行ターンは軽く考える",
-  "composer.thinking.low": "低",
-  "composer.thinking.medium": "中",
-  "composer.thinking.high": "高",
-  "composer.thinking.max": "最高",
-  "composer.thinking.max.hint": "最も深く考えるぶん最も遅い。DeepSeek には max、OpenAI には xhigh を送ります",
-  "composer.thinking.disabled": "思考オフ",
-  "composer.thinking.disabled.hint": "一部のエンドポイントは非対応",
-
   "composer.sessionSettings.title": "セッション設定",
   "composer.sessionSettings.newSession": "新しいセッション",
   "composer.sessionSettings.sampling.hint":

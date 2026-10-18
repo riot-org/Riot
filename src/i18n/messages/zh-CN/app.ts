@@ -149,7 +149,6 @@ export default {
   "app.ctx.title": "上下文 {used} / {threshold}（{pct}%）",
   "app.ctx.usage": "上下文用量",
   "app.ctx.current": "当前占用",
-  "app.ctx.window": "模型窗口",
   "app.ctx.total": "本会话累计",
   "app.ctx.note": "到 {threshold} 会自动摘要压缩。",
 

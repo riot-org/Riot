@@ -22,7 +22,9 @@ import {
   setPermissionMode,
   setSessionModel,
   setSessionMultitask,
+  setSessionThinking,
   type SlashCommand,
+  type ThinkingPolicy,
   slashCommands,
   renderUiText,
   slashExpand,
@@ -83,11 +85,20 @@ import { ENTER_TRANSCRIPT_EVENT } from "../../lib/transcriptNav";
 import { FileIcon } from "../FileIcon";
 import { openFilePreview } from "../FilePreview";
 import { ContextRing } from "../ContextRing";
+import {
+  EFFORT_OPTIONS,
+  EFFORT_TITLE,
+  type EffortKey,
+  effortKey,
+  effortLabel,
+  effortPolicy,
+} from "../../lib/effort";
 import { ArrowUpIcon, ForkIcon, PlusIcon, StopIcon } from "../icons";
 import {
   ModeMenu,
   Picker,
   type PickerSection,
+  type PickerSubmenu,
   type WorkMode,
   isExecPermissionMode,
   modelLabel,
@@ -129,6 +140,8 @@ export function ComposerDock({
   sessionProvider,
   sessionModel,
   onSessionEndpoint,
+  sessionThinking,
+  onSessionThinking,
   initialMode,
   hostMode,
   initialMultitask = false,
@@ -164,6 +177,9 @@ export function ComposerDock({
   sessionProvider: string;
   sessionModel: string;
   onSessionEndpoint: (provider: string, model: string) => void;
+  /** 这个会话的思考力度（模型菜单里的 Effort）。 */
+  sessionThinking: ThinkingPolicy;
+  onSessionThinking: (thinking: ThinkingPolicy) => void;
   /** 宿主侧这个会话的当前模式，不是全局默认值。 */
   initialMode: PermissionMode;
   /** 宿主主动切的模式（批准计划）。null = 没发生过。 */
@@ -378,6 +394,29 @@ export function ComposerDock({
     void setSessionModel(sessionId, provider, m)
       .then(() => onSessionEndpoint(provider, m))
       .catch(() => {});
+  };
+
+  // 思考力度跟着会话走，下一轮生效。放在模型菜单里（Claude 桌面端同款）：
+  // 它和模型一起决定"这一轮想多深、花多少"。
+  const currentEffort = effortKey(sessionThinking);
+  const effortSubmenu: PickerSubmenu = {
+    label: EFFORT_TITLE,
+    value: effortLabel(sessionThinking),
+    items: EFFORT_OPTIONS.map((o) => ({
+      id: o.key,
+      label: o.label,
+      active: o.key === currentEffort,
+      ...(o.badge ? { badge: o.badge } : {}),
+      ...(o.key === "max" ? { warn: true } : {}),
+      ...(o.tip ? { tip: o.tip } : {}),
+    })),
+    onPick: (id) => {
+      if (id === currentEffort) return;
+      const policy = effortPolicy(id as EffortKey);
+      void setSessionThinking(sessionId, policy)
+        .then(() => onSessionThinking(policy))
+        .catch(() => {});
+    },
   };
 
   // 当前模型的上下文窗口。改它改的是这个模型的压缩时机，写回 ModelConfig
@@ -1609,6 +1648,7 @@ export function ComposerDock({
                   ...(m.vision ? { vision: true } : {}),
                   ...(m.contextWindow ? { note: fmtTokens(m.contextWindow) } : {}),
                 }))}
+                submenu={effortSubmenu}
                 {...(windowSection ? { section: windowSection } : {})}
                 emptyHint={t("composer.model.empty")}
                 onEmpty={onOpenSettings}

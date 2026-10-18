@@ -148,7 +148,6 @@ export default {
   "app.ctx.title": "컨텍스트 {used} / {threshold} ({pct}%)",
   "app.ctx.usage": "컨텍스트 사용량",
   "app.ctx.current": "현재 사용 중",
-  "app.ctx.window": "모델 윈도우",
   "app.ctx.total": "이 세션 누계",
   "app.ctx.note": "{threshold}에 도달하면 자동으로 요약 압축됩니다.",
 

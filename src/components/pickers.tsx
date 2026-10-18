@@ -104,7 +104,14 @@ export function useDropdown(open: boolean, setOpen: (v: boolean) => void) {
     }
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
-      const items = [...(rootRef.current?.querySelectorAll<HTMLButtonElement>(".menu-item") ?? [])];
+      // 只在焦点所在的那一层菜单里走：二级菜单（模型菜单的 Effort）嵌在
+      // 主菜单里，不分层的话上下键会从主菜单一路走进子菜单。
+      const scope =
+        (document.activeElement as HTMLElement | null)?.closest<HTMLElement>("[role=menu]") ??
+        rootRef.current?.querySelector<HTMLElement>("[role=menu]");
+      const items = [...(scope?.querySelectorAll<HTMLButtonElement>(".menu-item") ?? [])].filter(
+        (el) => el.closest("[role=menu]") === scope,
+      );
       if (!items.length) return;
       const cur = items.indexOf(document.activeElement as HTMLButtonElement);
       const n = items.length;
@@ -340,6 +347,10 @@ export interface PickerItem {
   warn?: boolean;
   /** 能收图片。图标跟在名字后面，不单独占一列。 */
   vision?: boolean;
+  /** 跟在名字后面的小标签（Claude 菜单里的 Recommended 那种）。`warn` 时用黄底。 */
+  badge?: string;
+  /** 悬停说明。 */
+  tip?: string;
 }
 
 /**
@@ -356,7 +367,27 @@ export interface PickerSection {
   onPick: (id: string) => void;
 }
 
-function PickerRow({ item, onPick }: { item: PickerItem; onPick: () => void }) {
+/**
+ * 主列表下方的一行「名字  当前值 >」，展开成右侧的二级菜单（Claude 桌面端
+ * 模型菜单里的 Effort）。触发行和子菜单是兄弟节点，不嵌套 `button`。
+ */
+export interface PickerSubmenu {
+  label: string;
+  /** 当前值，灰字跟在触发行右侧。 */
+  value: string;
+  items: PickerItem[];
+  onPick: (id: string) => void;
+}
+
+function PickerRow({
+  item,
+  onPick,
+  onMouseEnter,
+}: {
+  item: PickerItem;
+  onPick: () => void;
+  onMouseEnter?: () => void;
+}) {
   const { t } = useT();
   return (
     <button
@@ -364,7 +395,9 @@ function PickerRow({ item, onPick }: { item: PickerItem; onPick: () => void }) {
       role="menuitemradio"
       aria-checked={Boolean(item.active)}
       className={item.active ? "menu-item menu-pick picker-item active" : "menu-item menu-pick picker-item"}
+      title={item.tip}
       onClick={onPick}
+      onMouseEnter={onMouseEnter}
     >
       <span className="menu-pick-body">
         <span className="pick-main">
@@ -379,8 +412,11 @@ function PickerRow({ item, onPick }: { item: PickerItem; onPick: () => void }) {
               <EyeIcon />
             </span>
           ) : null}
+          {item.badge ? (
+            <span className={item.warn ? "pick-badge warn" : "pick-badge"}>{item.badge}</span>
+          ) : null}
         </span>
-        {item.note ? (
+        {item.note && !item.badge ? (
           <span className={item.warn ? "menu-warn" : "menu-hint"}>{item.note}</span>
         ) : null}
       </span>
@@ -397,6 +433,7 @@ export function Picker({
   emptyHint,
   onEmpty,
   section,
+  submenu,
 }: {
   label: string;
   title?: string;
@@ -406,10 +443,43 @@ export function Picker({
   emptyHint?: string;
   onEmpty?: () => void;
   section?: PickerSection;
+  submenu?: PickerSubmenu;
 }) {
   const [open, setOpen] = useState(false);
+  const [subOpen, setSubOpen] = useState(false);
   const isEmpty = items.length === 0;
   const { rootRef, onKeyDown } = useDropdown(open, setOpen);
+  const subRef = useRef<HTMLDivElement>(null);
+  const subTimer = useRef(0);
+
+  useEffect(() => {
+    if (!open) setSubOpen(false);
+  }, [open]);
+  useEffect(() => () => window.clearTimeout(subTimer.current), []);
+
+  /** 悬停开合。关要晚一点：鼠标斜着往子菜单走时会擦过主菜单的别的行。 */
+  const hoverSub = (v: boolean) => {
+    window.clearTimeout(subTimer.current);
+    if (v) setSubOpen(true);
+    else subTimer.current = window.setTimeout(() => setSubOpen(false), 250);
+  };
+
+  /** 键盘打开子菜单：焦点放到当前档上。 */
+  const enterSub = () => {
+    setSubOpen(true);
+    requestAnimationFrame(() => {
+      const root = subRef.current;
+      (
+        root?.querySelector<HTMLButtonElement>(".picker-submenu .menu-item.active") ??
+        root?.querySelector<HTMLButtonElement>(".picker-submenu .menu-item")
+      )?.focus();
+    });
+  };
+
+  const leaveSub = () => {
+    setSubOpen(false);
+    subRef.current?.querySelector<HTMLButtonElement>(".picker-sub-trigger")?.focus();
+  };
 
   return (
     <div className="mode-menu" ref={rootRef} onKeyDown={onKeyDown}>
@@ -436,8 +506,66 @@ export function Picker({
                 onPick(it.id);
                 setOpen(false);
               }}
+              {...(submenu ? { onMouseEnter: () => hoverSub(false) } : {})}
             />
           ))}
+          {submenu ? (
+            <>
+              <div className="menu-sep" role="separator" />
+              <div
+                className="picker-sub"
+                ref={subRef}
+                onMouseEnter={() => hoverSub(true)}
+                onMouseLeave={() => hoverSub(false)}
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  aria-haspopup="menu"
+                  aria-expanded={subOpen}
+                  className={subOpen ? "menu-item menu-pick picker-sub-trigger open" : "menu-item menu-pick picker-sub-trigger"}
+                  onClick={() => (subOpen ? setSubOpen(false) : enterSub())}
+                  onKeyDown={(e) => {
+                    if (e.key === "ArrowRight") {
+                      e.preventDefault();
+                      enterSub();
+                    }
+                  }}
+                >
+                  <span className="menu-pick-body">
+                    <span className="pick-label">{submenu.label}</span>
+                  </span>
+                  <span className="picker-sub-value">{submenu.value}</span>
+                  <Chevron />
+                </button>
+                {subOpen ? (
+                  <div
+                    className="picker-sub-flyout"
+                    onKeyDown={(e) => {
+                      if (e.key === "ArrowLeft" || e.key === "Escape") {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        leaveSub();
+                      }
+                    }}
+                  >
+                    <div className="menu picker-submenu" role="menu" aria-label={submenu.label}>
+                      {submenu.items.map((it) => (
+                        <PickerRow
+                          key={it.id}
+                          item={it}
+                          onPick={() => {
+                            submenu.onPick(it.id);
+                            setOpen(false);
+                          }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            </>
+          ) : null}
           {section && section.items.length ? (
             <>
               <div className="menu-sep" role="separator" />
@@ -450,6 +578,7 @@ export function Picker({
                     section.onPick(it.id);
                     setOpen(false);
                   }}
+                  {...(submenu ? { onMouseEnter: () => hoverSub(false) } : {})}
                 />
               ))}
             </>

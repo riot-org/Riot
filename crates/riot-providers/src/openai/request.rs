@@ -98,10 +98,7 @@ pub fn build_request(
     let (reasoning_effort, thinking) = match req.thinking {
         ThinkingConfig::Off => (None, None),
         ThinkingConfig::Disabled => (None, Some(WireThinkingToggle::disabled())),
-        // 自适应照 hint 逐请求切档，和以前一样（Anthropic 那边才需要整会话同档）。
-        ThinkingConfig::Effort { level } | ThinkingConfig::Adaptive { hint: level } => {
-            (Some(effort_literal(level, &model)), None)
-        }
+        ThinkingConfig::Effort { level } => (Some(effort_literal(level, &model)), None),
         // OpenAI 兼容协议没有预算参数，折算成最近的档位。
         ThinkingConfig::Budget { tokens } => (
             Some(effort_literal(ThinkingEffort::from_budget(tokens), &model)),

@@ -7,6 +7,7 @@ import {
   type Nudge,
   type PermissionMode,
   type PermissionResponse,
+  type ThinkingPolicy,
 } from "../bridge";
 import { SessionChangesBar } from "./SessionChangesBar";
 import { PermissionDialog } from "./PermissionDialog";
@@ -50,6 +51,8 @@ export function Chat({
   sessionProvider,
   sessionModel,
   onSessionEndpoint,
+  sessionThinking,
+  onSessionThinking,
   onConfig,
   onOpenSettings,
   permissionPick,
@@ -83,6 +86,8 @@ export function Chat({
   sessionProvider: string;
   sessionModel: string;
   onSessionEndpoint: (provider: string, model: string) => void;
+  sessionThinking: ThinkingPolicy;
+  onSessionThinking: (thinking: ThinkingPolicy) => void;
   onConfig: (s: ConfigStatus) => void;
   onOpenSettings: () => void;
   /** 会话设置弹窗选的权限档，透传给 Composer。 */
@@ -310,6 +315,8 @@ export function Chat({
       sessionProvider={sessionProvider}
       sessionModel={sessionModel}
       onSessionEndpoint={onSessionEndpoint}
+      sessionThinking={sessionThinking}
+      onSessionThinking={onSessionThinking}
       initialMode={initialMode}
       initialMultitask={initialMultitask}
       hostMode={session.hostMode}

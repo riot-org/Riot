@@ -933,16 +933,11 @@ export type SandboxKind = "workspace_write" | "workspace_write_no_net" | "off";
 /**
  * 会话级的思考策略。宿主存这个，主循环每次请求时解析成 [`ThinkingConfig`]。
  *
- * 策略和配置分开是因为 `Adaptive` 需要**每请求**决策（首请求 vs 工具续轮），
- * 而会话设置只在轮子开始前读一次 —— 合成一个类型的话，自适应就只能整轮同档。
+ * 默认 High：界面上只给 Low / Medium / High / Max / Off 五档，不再有
+ * "不发参数"和"自适应"。旧配置里存的 `default` / `adaptive` 读进来按 High
+ * 处理（见 [`ThinkingPolicy`] 的 `Deserialize`），存回去时就是新写法。
  */
 export type ThinkingPolicy =
-  | {
-      mode: "default";
-    }
-  | {
-      mode: "adaptive";
-    }
   | {
       mode: "disabled";
     }

@@ -1631,6 +1631,8 @@ export function App() {
                       onSessionEndpoint={(provider, model) =>
                         patchSession(s.id, { provider, model })
                       }
+                      sessionThinking={s.thinking}
+                      onSessionThinking={(thinking) => patchSession(s.id, { thinking })}
                       onConfig={setConfig}
                       onOpenSettings={() => setShowSettings(true)}
                       permissionPick={permPick?.id === s.id ? permPick.pick : null}

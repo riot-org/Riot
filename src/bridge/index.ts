@@ -221,10 +221,8 @@ export type ThinkingLevel = ThinkingEffort;
 
 /**
  * 会话级思考策略。生成类型的别名（同 Protocol 的理由）：
- * - default：不发任何思考参数，端点默认行为；
- * - adaptive：首请求中档、工具续轮低档；
  * - disabled：显式关闭思考（部分端点不支持，如 GLM-5.3 / OpenAI 官方）；
- * - fixed：每次请求固定档位。
+ * - fixed：每次请求固定档位（默认 high）。
  */
 export type ThinkingPolicy = GeneratedThinkingPolicy;
 

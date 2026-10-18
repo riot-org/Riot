@@ -109,20 +109,6 @@ export default {
   "composer.sampling.topK.hint": "Anthropic 프로토콜에서만 전송됩니다.",
   "composer.sampling.maxOutputTokens.hint": "한 번의 응답에 대한 출력 상한.",
 
-  "composer.thinking.title": "사고 강도",
-  "composer.thinking.hint":
-    "추론 모델이 요청마다 얼마나 깊이 생각할지 제어합니다(reasoning_effort / thinking). 적응형 = 새 지시에는 중간, 도구 후속 턴에는 낮음으로 시간과 비용을 절약합니다. 「기본」은 매개변수를 전혀 보내지 않습니다. 단계와 끄기는 엔드포인트 지원이 필요하며(DeepSeek, GLM, OpenAI 추론 모델), 지원하지 않는 엔드포인트는 요청을 거부하므로 그때는 「기본」으로 되돌리세요. 다음 턴부터 적용됩니다.",
-  "composer.thinking.default.hint": "사고 매개변수를 보내지 않고 엔드포인트 기본값을 따릅니다",
-  "composer.thinking.adaptive": "적응형",
-  "composer.thinking.adaptive.hint": "첫 턴은 깊이 생각하고, 도구 후속 턴은 적게 생각합니다",
-  "composer.thinking.low": "낮음",
-  "composer.thinking.medium": "중간",
-  "composer.thinking.high": "높음",
-  "composer.thinking.max": "최고",
-  "composer.thinking.max.hint": "가장 깊이 생각하지만 가장 느립니다. DeepSeek에는 max, OpenAI에는 xhigh를 보냅니다",
-  "composer.thinking.disabled": "사고 끄기",
-  "composer.thinking.disabled.hint": "일부 엔드포인트는 지원하지 않습니다",
-
   "composer.sessionSettings.title": "세션 설정",
   "composer.sessionSettings.newSession": "새 세션",
   "composer.sessionSettings.sampling.hint":

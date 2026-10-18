@@ -4,14 +4,12 @@ import {
   type PromptPreset,
   type Sampling,
   type SessionInfo,
-  type ThinkingPolicy,
   detectVenvs,
   setSessionPythonVenv,
   setSessionSampling,
   setSessionSystemPrompt,
-  setSessionThinking,
 } from "../bridge";
-import { type MessageKey, useT } from "../i18n";
+import { useT } from "../i18n";
 import { findPreset, presetLabel, presetSummary } from "../lib/prompts";
 import { useDirectoryPicker } from "./DirPicker";
 import {
@@ -31,38 +29,16 @@ import { basename } from "../pathDisplay";
 /**
  * 会话设置弹窗：只管**这个会话**的东西 —— 采样覆盖、Python 虚拟环境、
  * 追加的系统提示词。全局的新会话默认权限 / 联网在侧栏的「设置」里；
- * 当前会话的权限档在顶栏标题旁的下拉里切，模型在输入框上切。
+ * 当前会话的权限档在顶栏标题旁的下拉里切，模型和思考力度（Effort）在
+ * 输入框的模型菜单里切。
  *
  * `[约束]` 所有字段都是"改完下一轮生效"，真值在宿主的 Session 上。
  * 提交成功后通过 `onPatch` 回写 App 的会话列表 —— 不回写的话，关掉
  * 弹窗再打开，显示的还是启动时 listSessions 拉到的旧值。
  */
 
-/** 思考策略的下拉项。固定档位摊平成一级选项 —— 七个选项不值得两级菜单。
- *  说明走 hint（第二行灰字）：塞进主标签会挤成两行大字，见谁选谁难受。
- *  存的是词典键，渲染时再 `t()`。 */
-const THINKING_OPTIONS: { value: string; labelKey: MessageKey; hintKey?: MessageKey }[] = [
-  { value: "default", labelKey: "common.default", hintKey: "composer.thinking.default.hint" },
-  { value: "adaptive", labelKey: "composer.thinking.adaptive", hintKey: "composer.thinking.adaptive.hint" },
-  { value: "low", labelKey: "composer.thinking.low" },
-  { value: "medium", labelKey: "composer.thinking.medium" },
-  { value: "high", labelKey: "composer.thinking.high" },
-  { value: "max", labelKey: "composer.thinking.max", hintKey: "composer.thinking.max.hint" },
-  { value: "disabled", labelKey: "composer.thinking.disabled", hintKey: "composer.thinking.disabled.hint" },
-];
-
 /** 下拉里表示「正文是手写的，不对应库里任何一条」。不会是真的 id。 */
 const CUSTOM_PROMPT = "\u0000custom";
-
-function thinkingKey(p: ThinkingPolicy): string {
-  return p.mode === "fixed" ? p.level : p.mode;
-}
-
-function thinkingFromKey(k: string): ThinkingPolicy {
-  if (k === "low" || k === "medium" || k === "high" || k === "max") return { mode: "fixed", level: k };
-  if (k === "adaptive" || k === "disabled") return { mode: k };
-  return { mode: "default" };
-}
 
 export function SessionSettings({
   session,
@@ -88,7 +64,6 @@ export function SessionSettings({
   const [samp, setSamp] = useState<SamplingDraft>(() => samplingDraft(session.sampling));
   const [venv, setVenv] = useState(session.pythonVenv ?? "");
   const [prompt, setPrompt] = useState(session.systemPrompt ?? "");
-  const [thinking, setThinking] = useState(() => thinkingKey(session.thinking));
   /** 项目根下探测到的 venv（.venv / venv）。系统选择框藏起点开头的目录，
    *  多数人的 .venv 在选择框里根本看不到 —— 探测到就给一键填入。 */
   const [venvFound, setVenvFound] = useState<string[]>([]);
@@ -137,16 +112,6 @@ export function SessionSettings({
     setResetDone(true);
     window.clearTimeout(resetTimer.current);
     resetTimer.current = window.setTimeout(() => setResetDone(false), 1500);
-  };
-
-  const commitThinking = (key: string) => {
-    if (key === thinking) return;
-    setThinking(key);
-    setError("");
-    const policy = thinkingFromKey(key);
-    setSessionThinking(session.id, policy)
-      .then(() => onPatch({ thinking: policy }))
-      .catch((e: unknown) => setError(String(e)));
   };
 
   const commitVenv = async (value: string) => {
@@ -203,12 +168,6 @@ export function SessionSettings({
       hint: t("composer.sessionSettings.prompt.custom.hint"),
     });
   }
-
-  const thinkingOptions: FieldOption[] = THINKING_OPTIONS.map((o) => ({
-    value: o.value,
-    label: t(o.labelKey),
-    ...(o.hintKey ? { hint: t(o.hintKey) } : {}),
-  }));
 
   const choosePreset = (id: string) => {
     if (id === promptChoice || id === CUSTOM_PROMPT) return;
@@ -280,20 +239,6 @@ export function SessionSettings({
             onChange={(key, value) => setSamp((s) => ({ ...s, [key]: value }))}
             onCommit={(next) => commitSampling(parseSampling(next))}
           />
-
-          <h3 className="dialog-section">
-            {t("composer.thinking.title")}
-            <HintTip>{t("composer.thinking.hint")}</HintTip>
-          </h3>
-          {/* 包一层 field-row 撑满：菜单宽度跟着触发框走，触发框太窄
-              说明文字就会折行。 */}
-          <div className="field-row">
-            <FieldSelect
-              value={thinking}
-              onChange={commitThinking}
-              options={thinkingOptions}
-            />
-          </div>
 
           <h3 className="dialog-section">
             {t("composer.sessionSettings.venv")}

@@ -273,15 +273,6 @@ pub enum ThinkingConfig {
     Effort { level: ThinkingEffort },
     /// 固定预算。Anthropic 老模型原生；其它地方折算成最近的档位。
     Budget { tokens: u32 },
-    /// 自适应策略（[`ThinkingPolicy::Adaptive`]）。`hint` 是按请求序号给的档：
-    /// 首请求中档、工具续轮低档。
-    ///
-    /// `[取舍]` 不直接解析成 `Effort`，是因为"该不该逐请求切档"各协议答案
-    /// 不同。Anthropic 上思考参数一变，消息缓存就整段作废 —— 每轮在首请求
-    /// 和续轮之间切两次，等于每轮把整段历史重写两遍；那边忽略 `hint`，整个
-    /// 会话用同一档（新模型的 adaptive 本来就会按请求自己调深浅）。OpenAI
-    /// 兼容侧照 `hint` 走，行为和以前一样。
-    Adaptive { hint: ThinkingEffort },
 }
 
 /// 思考力度档。取值刻意与 OpenAI 的 `reasoning_effort` 对齐 ——
@@ -323,37 +314,50 @@ impl ThinkingEffort {
 
 /// 会话级的思考策略。宿主存这个，主循环每次请求时解析成 [`ThinkingConfig`]。
 ///
-/// 策略和配置分开是因为 `Adaptive` 需要**每请求**决策（首请求 vs 工具续轮），
-/// 而会话设置只在轮子开始前读一次 —— 合成一个类型的话，自适应就只能整轮同档。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+/// 默认 High：界面上只给 Low / Medium / High / Max / Off 五档，不再有
+/// "不发参数"和"自适应"。旧配置里存的 `default` / `adaptive` 读进来按 High
+/// 处理（见 [`ThinkingPolicy`] 的 `Deserialize`），存回去时就是新写法。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum ThinkingPolicy {
-    /// 不干预，端点默认行为。这是默认值 —— 升级后老会话行为不变。
-    #[default]
-    Default,
-    /// 自适应：首请求中档（那一次要理解任务、定计划），工具续轮低档
-    /// （多数续轮只是"读结果、发起下一步"，全力思考纯属烧钱烧时间）。
-    /// Anthropic 上例外：整会话同一档，见 [`ThinkingConfig::Adaptive`]。
-    Adaptive,
     /// 每次请求都显式关闭思考。
     Disabled,
     /// 每次请求都用固定档位。
     Fixed { level: ThinkingEffort },
 }
 
+impl Default for ThinkingPolicy {
+    fn default() -> Self {
+        ThinkingPolicy::Fixed {
+            level: ThinkingEffort::High,
+        }
+    }
+}
+
+/// 读旧配置用：比 [`ThinkingPolicy`] 多出已下线的两档。
+#[derive(Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+enum ThinkingPolicyWire {
+    Default,
+    Adaptive,
+    Disabled,
+    Fixed { level: ThinkingEffort },
+}
+
+impl<'de> Deserialize<'de> for ThinkingPolicy {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(match ThinkingPolicyWire::deserialize(d)? {
+            ThinkingPolicyWire::Default | ThinkingPolicyWire::Adaptive => ThinkingPolicy::default(),
+            ThinkingPolicyWire::Disabled => ThinkingPolicy::Disabled,
+            ThinkingPolicyWire::Fixed { level } => ThinkingPolicy::Fixed { level },
+        })
+    }
+}
+
 impl ThinkingPolicy {
-    /// 解析本次请求的思考配置。`turn` 是主循环的请求序号（每个用户输入
-    /// 从 0 开始，工具续轮递增）。
-    pub fn config_for(self, turn: u32) -> ThinkingConfig {
+    /// 解析本次请求的思考配置。
+    pub fn config(self) -> ThinkingConfig {
         match self {
-            ThinkingPolicy::Default => ThinkingConfig::Off,
-            ThinkingPolicy::Adaptive => ThinkingConfig::Adaptive {
-                hint: if turn == 0 {
-                    ThinkingEffort::Medium
-                } else {
-                    ThinkingEffort::Low
-                },
-            },
             ThinkingPolicy::Disabled => ThinkingConfig::Disabled,
             ThinkingPolicy::Fixed { level } => ThinkingConfig::Effort { level },
         }
@@ -361,7 +365,7 @@ impl ThinkingPolicy {
 
     /// 持久化时跳过默认值用。
     pub fn is_default(&self) -> bool {
-        *self == ThinkingPolicy::Default
+        *self == ThinkingPolicy::default()
     }
 }
 
@@ -467,41 +471,33 @@ impl ProviderError {
 mod tests {
     use super::*;
 
-    /// 自适应策略的核心：首请求和工具续轮的力度必须不同。
-    ///
-    /// 一样的话它就退化成 Fixed，而这个策略存在的唯一理由就是
-    /// "工具循环里的续轮不值得全力思考"。
+    /// 默认 High；旧配置里的 default / adaptive 读进来也是 High。
     #[test]
-    fn 自适应首请求中档续轮低档() {
+    fn 默认高档且旧档迁到高档() {
+        let high = ThinkingPolicy::Fixed {
+            level: ThinkingEffort::High,
+        };
+        assert_eq!(ThinkingPolicy::default(), high);
+        assert!(high.is_default());
+        for old in [r#"{"mode":"default"}"#, r#"{"mode":"adaptive"}"#] {
+            assert_eq!(serde_json::from_str::<ThinkingPolicy>(old).unwrap(), high, "{old}");
+        }
         assert_eq!(
-            ThinkingPolicy::Adaptive.config_for(0),
-            ThinkingConfig::Adaptive {
-                hint: ThinkingEffort::Medium
+            serde_json::from_str::<ThinkingPolicy>(r#"{"mode":"fixed","level":"max"}"#).unwrap(),
+            ThinkingPolicy::Fixed {
+                level: ThinkingEffort::Max
             }
         );
         assert_eq!(
-            ThinkingPolicy::Adaptive.config_for(1),
-            ThinkingConfig::Adaptive {
-                hint: ThinkingEffort::Low
-            }
+            serde_json::from_str::<ThinkingPolicy>(r#"{"mode":"disabled"}"#).unwrap(),
+            ThinkingPolicy::Disabled
         );
         assert_eq!(
-            ThinkingPolicy::Adaptive.config_for(7),
-            ThinkingConfig::Adaptive {
-                hint: ThinkingEffort::Low
+            high.config(),
+            ThinkingConfig::Effort {
+                level: ThinkingEffort::High
             }
         );
-    }
-
-    /// Default 必须解析成 Off（一个参数都不发）。
-    ///
-    /// 发任何参数都可能被不支持的端点 400 —— 默认值的底线是升级后
-    /// 老用户的请求和之前逐字节相同。
-    #[test]
-    fn 默认策略不发任何思考参数() {
-        assert_eq!(ThinkingPolicy::Default.config_for(0), ThinkingConfig::Off);
-        assert!(ThinkingPolicy::Default.is_default());
-        assert!(!ThinkingPolicy::Adaptive.is_default());
     }
 
     #[test]
