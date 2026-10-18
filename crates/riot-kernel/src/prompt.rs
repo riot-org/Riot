@@ -44,8 +44,7 @@ use riot_protocol::message::{Attachment, UserContent};
 use riot_protocol::permission::PermissionMode;
 use riot_providers::anthropic::SYSTEM_SECTION_BOUNDARY;
 
-/// 分节的渲染风格。厂商差异化的挂载点之一（另一个是 `models::vendor_sections`
-/// 那边的 provider 级段落）。
+/// 分节的渲染风格。哪个模型用哪种由 [`crate::adapt`] 决定。
 ///
 /// `[取舍]` 只有分节的**外壳**跟着厂商变，正文一个字都不变。两套正文
 /// 意味着两套要维护、要测、会漂移的提示词，而目前没有任何证据表明正文

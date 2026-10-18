@@ -3592,6 +3592,7 @@ impl Session {
         // `[约束]` 撞名的外部工具**跳过并告警**，不能 panic —— 内置工具重名
         // 是代码错误（下面的 expect 管它），外部工具重名是**用户配置**引起
         // 的（两个 MCP 服务器的 id 消毒后相同），配置错误不能把应用带崩。
+        let profile = crate::adapt::profile_for(&model);
         let mut tools = riot_tools::tools::builtin();
         let subagent_deps = crate::subagent::SubagentDeps {
             provider: Arc::clone(&provider),
@@ -3607,7 +3608,7 @@ impl Session {
             ids: Arc::clone(&self.ids) as Arc<dyn IdGenerator>,
             cwd: self.cwd.clone(),
             artifacts_dir: self.artifacts_dir(),
-            flavor: crate::models::flavor_for(&model),
+            flavor: profile.flavor,
             max_turns: limits.max_turns,
             transcripts: self.subagent_transcripts(),
             tasks: Arc::clone(&self.tasks),
@@ -3771,7 +3772,7 @@ impl Session {
                 || hook_engine.has_post_tool_use()
                 || hook_engine.has_stop(),
             digests_dir: digests_dir.as_deref(),
-            flavor: crate::models::flavor_for(&model),
+            flavor: profile.flavor,
         });
         // specs 取轮首快照。轮中 ToolSearch 发现新工具时主循环的 tools 会变
         //（那本来就会断缓存），总结形状不跟 —— 只影响命中率，不影响正确性。
@@ -3804,13 +3805,14 @@ impl Session {
         let reactive_compacted: Arc<std::sync::Mutex<Option<Vec<Message>>>> =
             Arc::new(std::sync::Mutex::new(None));
         let deps = AgentDeps {
-            // 主循环这一份按"是不是在等后台任务"挑缓存时长；压缩、分叉、
-            // 子 agent 用的是没包过的那份（见 models::WaitAwareCache）。
-            provider: Arc::new(crate::models::WaitAwareCache {
+            // 主循环这一份按"是不是在等后台任务"挑缓存时长、按模型适配决定
+            // 规则放在哪；压缩、分叉、子 agent 用的是没包过的那份（见
+            // models::WaitAwareCache、adapt::RulesPlacement）。
+            provider: profile.rules.wrap(Arc::new(crate::models::WaitAwareCache {
                 inner: Arc::clone(&provider),
                 multitask: self.multitask(),
                 tasks: Arc::clone(&self.tasks),
-            }),
+            })),
             // 反应式（413）路径的完整阶梯：清旧工具结果 → LLM 总结。
             // 只挂 ClearOldResults 的话，"对话本身超长"的会话一溢出就死。
             compactor: Arc::new(RecordingCompactor {
@@ -6431,8 +6433,16 @@ mod tests {
                 .expect("这一轮要跑完");
         }
 
+        // 测试模型是 DeepSeek：规则从 system 搬到首条用户消息（见
+        // adapt::RulesPlacement），这里比的是搬完之后真正发出去的那份。
         let reqs = scripted.requests();
         assert_eq!(reqs.len(), 2, "一轮一次请求");
+        let crate::adapt::RulesPlacement::FirstUserMessage { persona } =
+            crate::adapt::profile_for(&test_model()).rules
+        else {
+            panic!("测试模型该走 DeepSeek 的专门适配");
+        };
+        assert_eq!(reqs[0].system, persona);
         let (a, b) = (wire(&reqs[0]), wire(&reqs[1]));
         assert!(
             a["tools"].as_array().is_some_and(|t| t.len() > 3)
@@ -6444,6 +6454,11 @@ mod tests {
         let (ma, mb) = (
             a["messages"].as_array().expect("messages"),
             b["messages"].as_array().expect("messages"),
+        );
+        assert!(
+            ma[0].to_string().contains("You are Riot"),
+            "规则该贴在首条用户消息上：{}",
+            ma[0]
         );
         assert!(mb.len() > ma.len(), "第二轮多出了回答和新问题");
         assert_eq!(ma[..], mb[..ma.len()], "上一轮的消息要原样出现在下一轮开头");
