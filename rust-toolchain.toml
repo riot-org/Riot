@@ -1,0 +1,8 @@
+# 本地和 CI 用同一个 rustc。CI 用 clippy -D warnings，新版 stable 带来的
+# 新 lint 会让 CI 红、本地却查不出来；反过来本地 rustup 不自动更新，会越落越远。
+#
+# [约束] 升级时连同 .github/workflows/ 里的 dtolnay/rust-toolchain@<版本> 一起改。
+# 那边装的正是这个版本，rustup 才不会在每个 job 里再下一遍。
+[toolchain]
+channel = "1.99"
+components = ["clippy", "rustfmt"]
