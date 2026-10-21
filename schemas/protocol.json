@@ -4508,6 +4508,17 @@
     "ScheduleDraft": {
       "description": "前端表单手动创建一个任务的完整说法。\n\n和模型用的 [`ScheduleSpec`] 差在目标：模型只能说\"在这个会话 / 新会话\"\n（发起会话就是上下文），表单没有发起会话，目标得显式给出。",
       "properties": {
+        "model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScheduleModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "新开会话用的模型。None = 没选，到点用模型列表第一个。"
+        },
         "name": {
           "type": "string"
         },
@@ -4529,9 +4540,35 @@
       ],
       "type": "object"
     },
+    "ScheduleModel": {
+      "description": "新开会话跑任务时用哪个模型。\n\n只管\"每次新开会话\"的任务 —— 续跑型任务用的就是那个会话自己钉的\n模型，这里改它等于替用户换了对话的模型。到点时这一对在配置里找不到\n（服务方删了、模型下架了）或者压根没选，宿主退回模型列表第一个。",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "model"
+      ],
+      "type": "object"
+    },
     "SchedulePatch": {
       "description": "编辑任务的补丁（前端详情面板保存时用）。None = 那一项不动。",
       "properties": {
+        "model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScheduleModel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "name": {
           "type": [
             "string",
@@ -4691,6 +4728,17 @@
             "string",
             "null"
           ]
+        },
+        "model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScheduleModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "新开会话用的模型。None = 没选（老任务），到点用模型列表第一个。"
         },
         "name": {
           "type": "string"

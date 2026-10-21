@@ -16,7 +16,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   type MissedRun,
+  type ProviderConfig,
   type RunTargetSpec,
+  type ScheduleModel,
   type SchedulePatch,
   type ScheduleRunRecord,
   renderUiError,
@@ -31,6 +33,7 @@ import { type MessageKey, dateTimeFormat, t, tn, useT } from "../i18n";
 import { basename } from "../pathDisplay";
 import { Chevron } from "./Chevron";
 import { FieldSelect } from "./FieldSelect";
+import { modelLabel } from "./pickers";
 import { SidebarReveal } from "./chrome";
 import { DateTimePicker, TimePicker } from "./TimePicker";
 import { ResizableTextarea } from "./ResizableTextarea";
@@ -413,6 +416,71 @@ function IntervalRow({ value, onChange }: { value: Interval; onChange: (v: Inter
   );
 }
 
+/** 模型下拉的取值：服务方和模型 id 拼一起。模型 id 里常带 "/"，用换行隔开。 */
+function modelKey(m: ScheduleModel): string {
+  return `${m.provider}\n${m.model}`;
+}
+
+function modelOfKey(key: string): ScheduleModel | null {
+  const i = key.indexOf("\n");
+  return i < 0 ? null : { provider: key.slice(0, i), model: key.slice(i + 1) };
+}
+
+/** 模型列表第一个 —— 任务没选模型、或选的已经不在配置里时，到点实际用它（和宿主同一条规则）。 */
+function firstModel(providers: ProviderConfig[]): ScheduleModel | null {
+  for (const p of providers) {
+    const m = p.models[0];
+    if (m) return { provider: p.id, model: m.id };
+  }
+  return null;
+}
+
+/** 到点实际会用的模型：选的还在就是它，否则模型列表第一个。 */
+function effectiveModel(providers: ProviderConfig[], want: ScheduleModel | null | undefined): ScheduleModel | null {
+  if (want && providers.some((p) => p.id === want.provider && p.models.some((m) => m.id === want.model))) {
+    return want;
+  }
+  return firstModel(providers);
+}
+
+/** "新会话"目标下的模型一行。一个模型都没配时不显示 —— 没得选。 */
+function ModelRow({
+  providers,
+  value,
+  onChange,
+}: {
+  providers: ProviderConfig[];
+  value: ScheduleModel | null;
+  onChange: (m: ScheduleModel) => void;
+}) {
+  const { t } = useT();
+  const many = providers.filter((p) => p.models.length > 0).length > 1;
+  const options = providers.flatMap((p) =>
+    p.models.map((m) => ({
+      value: modelKey({ provider: p.id, model: m.id }),
+      label: modelLabel(p, m.id),
+      // 多家服务方时同名模型分不清，补一行服务方名。
+      ...(many ? { hint: p.name } : {}),
+    })),
+  );
+  if (options.length === 0 || !value) return null;
+  return (
+    <div className="sp-d-row">
+      <span>{t("schedules.form.model")}</span>
+      <FieldSelect
+        className="sp-d-field"
+        value={modelKey(value)}
+        onChange={(k) => {
+          const m = modelOfKey(k);
+          if (m) onChange(m);
+        }}
+        menuMinWidth={220}
+        options={options}
+      />
+    </div>
+  );
+}
+
 /**
  * 任务详情。渲染在 **App 的系统右侧栏**（工作台抽屉的位置，全高、
  * 和主区平级），不是任务页内部的一列 —— 宽度与 Resizer 由 App 管。
@@ -422,6 +490,7 @@ export function ScheduleDetail({
   width,
   sessions,
   projects,
+  providers,
   onClose,
   onMenu,
   onError,
@@ -432,6 +501,8 @@ export function ScheduleDetail({
   width: number;
   sessions: SessionInfo[];
   projects: string[];
+  /** 配置里的服务方，模型下拉从这里列。 */
+  providers: ProviderConfig[];
   onClose: () => void;
   onMenu: (e: React.MouseEvent, t: ScheduledTask) => void;
   onError: (title: string, e: unknown) => void;
@@ -443,6 +514,11 @@ export function ScheduleDetail({
   const [runIn, setRunIn] = useState<"new" | "session">(task.sessionId ? "session" : "new");
   const [sessionId, setSessionId] = useState<string | null>(task.sessionId ?? null);
   const [root, setRoot] = useState(task.root);
+  // 显示到点实际会用的那个：没选（老任务）或选的已经删了，就是列表第一个。
+  const shownModel = effectiveModel(providers, task.model);
+  const [model, setModel] = useState<ScheduleModel | null>(shownModel);
+  const modelChanged =
+    model !== null && (shownModel === null || modelKey(model) !== modelKey(shownModel));
   const [choice, setChoice] = useState<RepeatChoice>(() => choiceOf(task));
   const [time, setTime] = useState(() => timeOf(task));
   const [every, setEvery] = useState<Interval>(() => intervalOf(task));
@@ -473,8 +549,9 @@ export function ScheduleDetail({
     if (runIn !== wasRunIn) return true;
     if (runIn === "session" && sessionId !== (task.sessionId ?? null)) return true;
     if (runIn === "new" && root !== task.root) return true;
+    if (runIn === "new" && modelChanged) return true;
     return whenChanged;
-  }, [task, name, prompt, runIn, sessionId, root, whenChanged]);
+  }, [task, name, prompt, runIn, sessionId, root, modelChanged, whenChanged]);
 
   const save = async () => {
     const patch: SchedulePatch = {};
@@ -493,6 +570,7 @@ export function ScheduleDetail({
         patch.target = { kind: "new_session", root };
       }
     }
+    if (runIn === "new" && modelChanged && model) patch.model = model;
 
     if (whenChanged) {
       const when = buildWhen(choice, time, onceAt, every);
@@ -613,6 +691,7 @@ export function ScheduleDetail({
             />
           </div>
         )}
+        {runIn === "new" ? <ModelRow providers={providers} value={model} onChange={setModel} /> : null}
       </div>
 
       <div className="sp-d-caption">{t("schedules.section.frequency")}</div>
@@ -745,6 +824,7 @@ export function ScheduleCreatePanel({
   width,
   sessions,
   projects,
+  providers,
   defaultRoot,
   onClose,
   onCreated,
@@ -753,6 +833,8 @@ export function ScheduleCreatePanel({
   width: number;
   sessions: SessionInfo[];
   projects: string[];
+  /** 配置里的服务方，模型下拉从这里列。 */
+  providers: ProviderConfig[];
   /** 「新会话」默认绑定的项目：活跃会话的根，没有就项目列表第一个。 */
   defaultRoot: string | null;
   onClose: () => void;
@@ -764,6 +846,8 @@ export function ScheduleCreatePanel({
   const [runIn, setRunIn] = useState<"new" | "session">("new");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [root, setRoot] = useState(defaultRoot ?? projects[0] ?? "");
+  // 默认模型列表第一个；不选也是它（宿主到点同样退回第一个）。
+  const [model, setModel] = useState<ScheduleModel | null>(() => firstModel(providers));
   const [choice, setChoice] = useState<RepeatChoice>("daily");
   const [time, setTime] = useState("09:00");
   const [every, setEvery] = useState<Interval>({ n: "30", unit: "min" });
@@ -794,6 +878,8 @@ export function ScheduleCreatePanel({
         prompt: prompt.trim(),
         when,
         target,
+        // 续跑型用的是那个会话自己的模型，这里不带。
+        ...(runIn === "new" && model ? { model } : {}),
       });
       onCreated(created);
     } catch (e) {
@@ -871,6 +957,7 @@ export function ScheduleCreatePanel({
             />
           </div>
         )}
+        {runIn === "new" ? <ModelRow providers={providers} value={model} onChange={setModel} /> : null}
       </div>
 
       <div className="sp-d-caption">{t("schedules.section.frequency")}</div>

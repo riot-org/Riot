@@ -80,6 +80,7 @@ export default {
   "schedules.form.session": "세션",
   "schedules.openSession": "이 세션 열기",
   "schedules.form.project": "프로젝트",
+  "schedules.form.model": "모델",
   "schedules.form.repeat": "반복",
   "schedules.form.datetime": "날짜 및 시간",
   "schedules.form.time": "시간",

@@ -325,6 +325,7 @@ mod tests {
             },
             session_id: None,
             root: "/w".into(),
+            model: None,
             enabled: true,
             next_run_ms: Some(1_000),
             next_run_local: Some("2026-09-01 08:00".into()),

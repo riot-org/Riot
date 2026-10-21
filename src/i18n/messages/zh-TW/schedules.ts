@@ -80,6 +80,7 @@ export default {
   "schedules.form.session": "會話",
   "schedules.openSession": "開啟這個會話",
   "schedules.form.project": "專案",
+  "schedules.form.model": "模型",
   "schedules.form.repeat": "重複",
   "schedules.form.datetime": "時刻",
   "schedules.form.time": "時間",

@@ -80,6 +80,7 @@ export default {
   "schedules.form.session": "セッション",
   "schedules.openSession": "このセッションを開く",
   "schedules.form.project": "プロジェクト",
+  "schedules.form.model": "モデル",
   "schedules.form.repeat": "繰り返し",
   "schedules.form.datetime": "日時",
   "schedules.form.time": "時間",

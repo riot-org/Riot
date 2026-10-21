@@ -92,6 +92,18 @@ pub enum RunTargetSpec {
     Session { id: String },
 }
 
+/// 新开会话跑任务时用哪个模型。
+///
+/// 只管"每次新开会话"的任务 —— 续跑型任务用的就是那个会话自己钉的
+/// 模型，这里改它等于替用户换了对话的模型。到点时这一对在配置里找不到
+/// （服务方删了、模型下架了）或者压根没选，宿主退回模型列表第一个。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduleModel {
+    pub provider: String,
+    pub model: String,
+}
+
 /// 前端表单手动创建一个任务的完整说法。
 ///
 /// 和模型用的 [`ScheduleSpec`] 差在目标：模型只能说"在这个会话 / 新会话"
@@ -103,6 +115,9 @@ pub struct ScheduleDraft {
     pub prompt: String,
     pub when: WhenSpec,
     pub target: RunTargetSpec,
+    /// 新开会话用的模型。None = 没选，到点用模型列表第一个。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<ScheduleModel>,
 }
 
 /// 编辑任务的补丁（前端详情面板保存时用）。None = 那一项不动。
@@ -118,6 +133,8 @@ pub struct SchedulePatch {
     pub when: Option<WhenSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<RunTargetSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<ScheduleModel>,
 }
 
 /// 一个定时任务的视图。宿主是唯一生产者。
@@ -133,6 +150,9 @@ pub struct ScheduledTask {
     pub session_id: Option<String>,
     /// 新开会话时绑定的项目根。
     pub root: String,
+    /// 新开会话用的模型。None = 没选（老任务），到点用模型列表第一个。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<ScheduleModel>,
     /// false = 暂停中（或一次性任务已跑完）。
     pub enabled: bool,
     /// 下次运行的 Unix 毫秒。None = 不会再跑。

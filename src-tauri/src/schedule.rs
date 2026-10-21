@@ -20,7 +20,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use riot_protocol::schedule::{MissedRun, Repeat, ScheduleRunRecord, ScheduledTask, WhenSpec};
+use riot_protocol::schedule::{
+    MissedRun, Repeat, ScheduleModel, ScheduleRunRecord, ScheduledTask, WhenSpec,
+};
 use riot_protocol::{UiError, ui_error};
 
 /// 每个任务保留的运行历史条数。"每五分钟"一天就是近三百次，全留着
@@ -76,6 +78,9 @@ pub struct PersistedTask {
     pub session_id: Option<String>,
     /// 新开会话时绑定的项目根。
     pub root: String,
+    /// 新开会话用的模型。老数据没有这个字段，到点用模型列表第一个。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<ScheduleModel>,
     pub enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_run_ms: Option<u64>,
@@ -155,6 +160,7 @@ impl PersistedTask {
             repeat: self.repeat.clone(),
             session_id: self.session_id.clone(),
             root: self.root.clone(),
+            model: self.model.clone(),
             enabled: self.enabled,
             next_run_ms: self.next_run_ms,
             next_run_local: self.next_run_ms.map(local_text),
@@ -502,6 +508,28 @@ pub fn local_text(ms: u64) -> String {
         .unwrap_or_else(|| format!("@{ms}"))
 }
 
+/// 到点新开会话时实际用的模型：任务选的那个还在配置里就用它，没选或者
+/// 已经找不到（服务方删了、模型下架了）就退回模型列表第一个。列表空着
+/// 返回 None —— 会话停在创建时的全局默认上，开跑时报"没配模型"。
+pub fn pick_model(
+    config: &crate::config::AppConfig,
+    want: Option<&ScheduleModel>,
+) -> Option<ScheduleModel> {
+    if let Some(w) = want
+        && config
+            .provider(&w.provider)
+            .is_some_and(|p| p.model(&w.model).is_some())
+    {
+        return Some(w.clone());
+    }
+    config.providers.iter().find_map(|p| {
+        p.models.first().map(|m| ScheduleModel {
+            provider: p.id.clone(),
+            model: m.id.clone(),
+        })
+    })
+}
+
 /// 起调度循环：周期检查到期任务并开跑。setup 时调一次。
 ///
 /// 20 秒一查：定时任务是分钟级语义，更密只是空转，更疏会让"90 分钟后"
@@ -766,6 +794,7 @@ mod tests {
                 },
                 session_id: None,
                 root: "/w".into(),
+                model: None,
                 enabled: true,
                 next_run_ms: Some(42),
                 last_run_ms: None,
@@ -778,6 +807,46 @@ mod tests {
         save(dir.path(), &book).expect("保存");
         let back = load(dir.path());
         assert_eq!(back.tasks, book.tasks);
+    }
+
+    #[test]
+    fn 任务模型找不到或没选时退回列表第一个() {
+        let config: crate::config::AppConfig = serde_json::from_str(
+            r#"{
+                "providers": [
+                    {"id": "empty", "name": "E", "protocol": "openai",
+                     "baseUrl": "https://e.test", "apiKeyEnv": "E_KEY", "models": []},
+                    {"id": "acme", "name": "Acme", "protocol": "openai",
+                     "baseUrl": "https://api.acme.test", "apiKeyEnv": "ACME_API_KEY",
+                     "models": ["m1", "m2"]}
+                ],
+                "activeProvider": "acme",
+                "activeModel": "m2"
+            }"#,
+        )
+        .expect("测试配置");
+        let m = |p: &str, id: &str| ScheduleModel {
+            provider: p.into(),
+            model: id.into(),
+        };
+        assert_eq!(
+            pick_model(&config, Some(&m("acme", "m2"))),
+            Some(m("acme", "m2"))
+        );
+        // 没选、模型下架、服务方删了：都退到第一个有模型的服务方的第一个模型，
+        // 不是全局默认（m2）。
+        assert_eq!(pick_model(&config, None), Some(m("acme", "m1")));
+        assert_eq!(
+            pick_model(&config, Some(&m("acme", "gone"))),
+            Some(m("acme", "m1"))
+        );
+        assert_eq!(
+            pick_model(&config, Some(&m("ghost", "m2"))),
+            Some(m("acme", "m1"))
+        );
+
+        let bare = crate::config::AppConfig::default();
+        assert_eq!(pick_model(&bare, None), None, "一个模型都没配就不换");
     }
 
     #[test]
@@ -799,6 +868,7 @@ mod tests {
             repeat,
             session_id: None,
             root: "/w".into(),
+            model: None,
             enabled: true,
             next_run_ms: next,
             last_run_ms: None,

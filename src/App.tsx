@@ -1782,6 +1782,7 @@ export function App() {
             sessions={sessions}
             projects={projects}
             onClose={() => setSelectedSchedule(null)}
+            providers={config?.config.providers ?? []}
             onMenu={scheduleMenu}
             onError={noteError}
             onOpenSession={(id) => {
@@ -1796,6 +1797,7 @@ export function App() {
             sessions={sessions}
             projects={projects}
             defaultRoot={activeSession?.root ?? null}
+            providers={config?.config.providers ?? []}
             onClose={() => setSchedCreating(false)}
             onCreated={(t) => {
               // 宿主也会广播 schedule_changed，这里先把新任务放进列表并

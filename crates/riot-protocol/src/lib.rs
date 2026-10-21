@@ -63,7 +63,8 @@ pub use provider::{
 pub use rpc::{RpcEnvelope, RpcError, RpcErrorCode, RpcNotification, RpcRequest, RpcResponse};
 pub use schedule::{
     MissedRun, NoSchedule, Repeat, RunTargetSpec, ScheduleAccess, ScheduleDraft, ScheduleError,
-    SchedulePatch, ScheduleRun, ScheduleRunPhase, ScheduleSpec, ScheduledTask, WhenSpec,
+    ScheduleModel, SchedulePatch, ScheduleRun, ScheduleRunPhase, ScheduleSpec, ScheduledTask,
+    WhenSpec,
 };
 pub use task::{BackgroundTaskStatus, BackgroundTaskView, TaskNotice};
 pub use text::{UiError, UiText};

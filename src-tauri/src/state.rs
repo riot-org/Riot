@@ -43,6 +43,17 @@ fn sid(id: &str) -> SessionId {
 /// 积出一个每分钟都在烧模型调用的任务堆。
 const MAX_SCHEDULES: usize = 50;
 
+/// 一个新任务里由创建方给定的部分。时间单独传（要先解析），其余的
+/// id、下次运行、历史由 [`AppState::insert_schedule`] 填。
+struct NewSchedule {
+    name: String,
+    prompt: String,
+    session_id: Option<String>,
+    root: String,
+    model: Option<riot_protocol::ScheduleModel>,
+    by_agent: bool,
+}
+
 /// 切回一个会话时前端要的东西。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -2825,15 +2836,44 @@ impl AppState {
             .await
             .map_err(|_| ui_error!("host.schedule.originMissing"))?;
         let session_id = spec.in_this_session.then(|| origin_session.to_owned());
+        // 记下发起会话此刻在用的模型：模型说"每天早上给我出一份"时，用户
+        // 期待的是"用现在这个模型跑"，不是全局默认。之后在任务详情里能改。
+        let model = self.session_model(origin_session).await;
         self.insert_schedule(
-            spec.name,
-            spec.prompt,
             &spec.when,
-            session_id,
-            root.display().to_string(),
-            true,
+            NewSchedule {
+                name: spec.name,
+                prompt: spec.prompt,
+                session_id,
+                root: root.display().to_string(),
+                model,
+                by_agent: true,
+            },
         )
         .await
+    }
+
+    /// 会话这一轮会用的服务方 / 模型：会话自己钉的优先，空的回退全局
+    /// 默认（和 [`Self::session_endpoint`] 同一条规则）。两样都空返回 None。
+    async fn session_model(&self, session_id: &str) -> Option<riot_protocol::ScheduleModel> {
+        let (provider, model) = {
+            let g = self.0.sessions.lock().await;
+            let m = g.get(session_id)?;
+            (m.provider.clone(), m.model.clone())
+        };
+        let config = self.config().await;
+        let provider = if provider.is_empty() {
+            config.active_provider
+        } else {
+            provider
+        };
+        let model = if model.is_empty() {
+            config.active_model
+        } else {
+            model
+        };
+        (!provider.is_empty() && !model.is_empty())
+            .then_some(riot_protocol::ScheduleModel { provider, model })
     }
 
     /// 前端表单手动创建。目标显式给出（没有发起会话可以借用），校验规则
@@ -2865,20 +2905,34 @@ impl AppState {
         if prompt.is_empty() {
             return Err(ui_error!("host.schedule.promptEmpty"));
         }
-        self.insert_schedule(name, prompt, &draft.when, session_id, root, false)
-            .await
+        self.insert_schedule(
+            &draft.when,
+            NewSchedule {
+                name,
+                prompt,
+                session_id,
+                root,
+                model: draft.model,
+                by_agent: false,
+            },
+        )
+        .await
     }
 
     /// 两条创建路径共用的落表：解析时间、编 id、查上限、持久化、广播。
     async fn insert_schedule(
         &self,
-        name: String,
-        prompt: String,
         when: &WhenSpec,
-        session_id: Option<String>,
-        root: String,
-        by_agent: bool,
+        new: NewSchedule,
     ) -> Result<ScheduledTask, UiError> {
+        let NewSchedule {
+            name,
+            prompt,
+            session_id,
+            root,
+            model,
+            by_agent,
+        } = new;
         let now = crate::schedule::now_ms();
         let (repeat, first_run) = crate::schedule::resolve_spec(when, now)?;
 
@@ -2889,6 +2943,7 @@ impl AppState {
             repeat,
             session_id,
             root,
+            model,
             enabled: true,
             next_run_ms: Some(first_run),
             last_run_ms: None,
@@ -3014,6 +3069,9 @@ impl AppState {
             if let Some((sid, root)) = target {
                 t.session_id = sid;
                 t.root = root;
+            }
+            if let Some(model) = patch.model {
+                t.model = Some(model);
             }
             let view = t.to_view();
             self.persist_schedules(&g);
@@ -3178,6 +3236,12 @@ impl AppState {
                 let _ = self
                     .rename_session(&info.id, &format!("{} · {date}", task.name))
                     .await;
+                // 换成任务选的模型；没选或已经不在配置里就用模型列表第一个。
+                // 不在这儿报错 —— 换不成，会话停在创建时的全局默认上照跑。
+                let config = self.config().await;
+                if let Some(m) = crate::schedule::pick_model(&config, task.model.as_ref()) {
+                    let _ = self.set_session_model(&info.id, m.provider, m.model).await;
+                }
                 info.id
             }
         };
@@ -4419,6 +4483,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn 定时任务_对话里建的记下发起会话的模型_详情里能改() {
+        let state = state().await;
+        state.set_config(cfg_two_models()).await;
+        let s = state
+            .create_session(&temp_ws("sched-m"))
+            .await
+            .expect("会话");
+        state
+            .set_session_model(&s.id, "acme".into(), "m2".into())
+            .await
+            .expect("换模型");
+
+        let t = state
+            .schedule_create(&s.id, after_60min("晨报", false))
+            .await
+            .expect("创建");
+        let m = t.model.expect("对话里建的要带上模型");
+        assert_eq!(
+            (m.provider.as_str(), m.model.as_str()),
+            ("acme", "m2"),
+            "跟发起会话走，不是全局默认 m1"
+        );
+
+        let updated = state
+            .schedule_update(
+                &t.id,
+                riot_protocol::SchedulePatch {
+                    model: Some(riot_protocol::ScheduleModel {
+                        provider: "acme".into(),
+                        model: "m1".into(),
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("改模型");
+        assert_eq!(updated.model.expect("还在").model, "m1");
+    }
+
+    #[tokio::test]
     async fn 定时任务_续跑绑定发起会话() {
         let state = state().await;
         let s = state
@@ -4569,6 +4673,7 @@ mod tests {
                 prompt: prompt.into(),
                 when: riot_protocol::WhenSpec::After { minutes: 60 },
                 target,
+                model: None,
             }
         };
         let new_in = |root: &str| riot_protocol::RunTargetSpec::NewSession { root: root.into() };

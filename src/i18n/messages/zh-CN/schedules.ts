@@ -78,6 +78,7 @@ export default {
   "schedules.form.session": "会话",
   "schedules.openSession": "打开这个会话",
   "schedules.form.project": "项目",
+  "schedules.form.model": "模型",
   "schedules.form.repeat": "重复",
   "schedules.form.datetime": "时刻",
   "schedules.form.time": "时间",

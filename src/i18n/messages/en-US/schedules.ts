@@ -90,6 +90,7 @@ export default {
   "schedules.form.session": "Session",
   "schedules.openSession": "Open this session",
   "schedules.form.project": "Project",
+  "schedules.form.model": "Model",
   "schedules.form.repeat": "Repeat",
   "schedules.form.datetime": "Date & time",
   "schedules.form.time": "Time",
