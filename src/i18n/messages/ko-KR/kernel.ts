@@ -45,6 +45,7 @@ export default {
   "kernel.provider.timeout": "요청 시간이 초과되었습니다. 네트워크나 제공자가 제때 응답하지 않았습니다. 잠시 후 다시 시도하면 보통 해결됩니다.",
   "kernel.provider.streamBroken": "제공자 응답을 읽는 도중 연결이 끊어졌습니다.",
   "kernel.provider.idle": "제공자가 {secs}초 동안 아무 데이터도 보내지 않아 이 요청을 종료했습니다. 보통 중간 프록시나 게이트웨이의 문제입니다.",
+  "kernel.provider.keepaliveOnly": "제공자가 {mins}분 동안 연결 유지 신호만 보내고 내용이 없어 이 요청을 종료했습니다.",
   "kernel.provider.contextOverflow": "컨텍스트 초과: {used} 사용, 한도 {limit}.",
   "kernel.provider.outputLimit": "출력 token이 소진되었습니다.",
   "kernel.provider.outputLimitExhausted": "출력 token이 {count}회 연속 소진되었습니다. 작업에 필요한 출력이 모델의 한계를 넘습니다.",

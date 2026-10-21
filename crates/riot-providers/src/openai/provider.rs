@@ -27,7 +27,7 @@ use crate::anthropic::request::SystemSection;
 use crate::retry::{GiveUpReason, RequestSource, RetryDecision, RetryPolicy, decide};
 use crate::sse::SseParser;
 use crate::transport::{ByteStream, HttpError, HttpRequest, HttpTransport};
-use crate::watchdog::{DEFAULT_IDLE, with_idle_watchdog};
+use crate::watchdog::{DEFAULT_IDLE, track_bytes, with_idle_watchdog_live};
 
 #[derive(Clone)]
 pub struct OpenAiConfig {
@@ -286,8 +286,10 @@ impl Provider for OpenAiProvider {
                 // 理由见 anthropic/provider.rs 的模块文档 —— UI 已经渲染了
                 // 吐出去的内容，重试会让同一段文字出现两次。
                 if endpoint.openai_api.is_responses() {
+                    // 看门狗按字节认活性：保活注释 / ping 解不出事件，但连接是活的。
+                    let (byte_stream, live) = track_bytes(byte_stream);
                     let decoded = super::responses::decode_stream(byte_stream);
-                    let guarded = with_idle_watchdog(decoded, idle, Arc::clone(&clock));
+                    let guarded = with_idle_watchdog_live(decoded, idle, Arc::clone(&clock), Some(live));
                     futures::pin_mut!(guarded);
                     while let Some(ev) = guarded.next().await {
                         if cancel.is_cancelled() {
@@ -296,8 +298,10 @@ impl Provider for OpenAiProvider {
                         yield crate::origin::stamp_model_origin(ev, &sent_model);
                     }
                 } else {
+                    // 看门狗按字节认活性：保活注释 / ping 解不出事件，但连接是活的。
+                    let (byte_stream, live) = track_bytes(byte_stream);
                     let decoded = decode_stream(byte_stream);
-                    let guarded = with_idle_watchdog(decoded, idle, Arc::clone(&clock));
+                    let guarded = with_idle_watchdog_live(decoded, idle, Arc::clone(&clock), Some(live));
                     futures::pin_mut!(guarded);
                     while let Some(ev) = guarded.next().await {
                         if cancel.is_cancelled() {

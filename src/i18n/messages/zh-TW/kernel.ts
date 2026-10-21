@@ -45,6 +45,7 @@ export default {
   "kernel.provider.timeout": "請求逾時了，網路或服務商沒有按時回應。稍等重試一般就好。",
   "kernel.provider.streamBroken": "讀取服務商回應時中斷了。",
   "kernel.provider.idle": "服務商 {secs} 秒沒有送任何資料，已結束本次請求。通常是中間代理或閘道的問題。",
+  "kernel.provider.keepaliveOnly": "服務商 {mins} 分鐘只送保活訊號、沒有任何內容，已結束本次請求。",
   "kernel.provider.contextOverflow": "上下文溢位：用了 {used}，上限 {limit}。",
   "kernel.provider.outputLimit": "輸出 token 耗盡。",
   "kernel.provider.outputLimitExhausted": "輸出 token 連續 {count} 次耗盡，任務需要的輸出超出模型能力。",

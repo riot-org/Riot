@@ -47,6 +47,7 @@ export default {
   "kernel.provider.timeout": "请求超时了，网络或服务方没有按时响应。稍等重试一般就好。",
   "kernel.provider.streamBroken": "读取服务方响应时中断了。",
   "kernel.provider.idle": "服务方 {secs} 秒没有发任何数据，已结束本次请求。通常是中间代理或网关的问题。",
+  "kernel.provider.keepaliveOnly": "服务方 {mins} 分钟只发保活信号、没有任何内容，已结束本次请求。",
   "kernel.provider.contextOverflow": "上下文溢出：用了 {used}，上限 {limit}。",
   "kernel.provider.outputLimit": "输出 token 耗尽。",
   "kernel.provider.outputLimitExhausted": "输出 token 连续 {count} 次耗尽，任务需要的输出超出模型能力。",

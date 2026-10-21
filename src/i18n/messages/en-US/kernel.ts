@@ -46,6 +46,7 @@ export default {
   "kernel.provider.timeout": "The request timed out; the network or provider did not respond in time. Retrying usually helps.",
   "kernel.provider.streamBroken": "The provider's response was cut off.",
   "kernel.provider.idle": "The provider sent nothing for {secs}s, so the request was ended. This is usually a proxy or gateway issue.",
+  "kernel.provider.keepaliveOnly": "The provider only sent keep-alive pings with no content for {mins} min, so the request was ended.",
   "kernel.provider.contextOverflow": "Context overflow: {used} tokens used, limit {limit}.",
   "kernel.provider.outputLimit": "Output token limit reached.",
   "kernel.provider.outputLimitExhausted": "Output tokens ran out {count} times in a row; the task needs more output than the model can produce.",

@@ -45,6 +45,7 @@ export default {
   "kernel.provider.timeout": "リクエストがタイムアウトしました。ネットワークまたはプロバイダーが時間内に応答しませんでした。少し待って再試行すれば通常は解決します。",
   "kernel.provider.streamBroken": "プロバイダーの応答の読み取りが途中で中断されました。",
   "kernel.provider.idle": "プロバイダーから {secs} 秒間データが届かなかったため、このリクエストを終了しました。通常は中間のプロキシやゲートウェイの問題です。",
+  "kernel.provider.keepaliveOnly": "プロバイダーから {mins} 分間キープアライブだけが届き、内容がなかったため、このリクエストを終了しました。",
   "kernel.provider.contextOverflow": "コンテキストが上限を超えました：使用 {used}、上限 {limit}。",
   "kernel.provider.outputLimit": "出力 token を使い切りました。",
   "kernel.provider.outputLimitExhausted": "出力 token を {count} 回連続で使い切りました。タスクに必要な出力量がモデルの能力を超えています。",

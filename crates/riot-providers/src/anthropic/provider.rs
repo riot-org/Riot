@@ -34,7 +34,7 @@ use super::request::{RetryContext, SystemSection, build_request, wire_bytes};
 use crate::retry::{GiveUpReason, RequestSource, RetryDecision, RetryPolicy, decide};
 use crate::sse::SseParser;
 use crate::transport::{HttpError, HttpRequest, HttpTransport};
-use crate::watchdog::{DEFAULT_IDLE, with_idle_watchdog};
+use crate::watchdog::{DEFAULT_IDLE, track_bytes, with_idle_watchdog_live};
 
 pub struct AnthropicConfig {
     pub base_url: String,
@@ -283,8 +283,10 @@ impl Provider for AnthropicProvider {
 
                 // ── 流阶段 ────────────────────────────────────
                 // 从这里开始不再重试。见模块文档。
+                // 看门狗按字节认活性：保活注释 / ping 解不出事件，但连接是活的。
+                let (byte_stream, live) = track_bytes(byte_stream);
                 let decoded = decode_stream(byte_stream);
-                let guarded = with_idle_watchdog(decoded, idle, Arc::clone(&clock));
+                let guarded = with_idle_watchdog_live(decoded, idle, Arc::clone(&clock), Some(live));
                 futures::pin_mut!(guarded);
 
                 while let Some(ev) = guarded.next().await {

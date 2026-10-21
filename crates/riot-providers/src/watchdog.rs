@@ -17,6 +17,7 @@
 //! 把重试策略塞进看门狗会让它同时管两件事，而这两件事的正确性条件完全不同。
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_stream::stream;
@@ -25,11 +26,49 @@ use futures_core::Stream;
 use riot_protocol::provider::{ProviderError, ProviderEvent};
 use riot_protocol::tool::Clock;
 
+use crate::transport::ByteStream;
+
 /// 默认静默阈值。
 ///
 /// 90 秒是权衡的结果：思考模式下模型确实可能几十秒不吐字，
 /// 定得太短会误杀正常的长思考；定得太长则用户已经放弃等待了。
 pub const DEFAULT_IDLE: Duration = Duration::from_secs(90);
+
+/// 只收到保活字节、一个事件都解不出来，最多忍多久。
+///
+/// 网关在上游憋着一个大工具调用（整段文件内容攒齐了才下发参数）时，
+/// 会每隔几十秒发一行 `: keep-alive` 注释撑着连接 —— 连接是活的，模型
+/// 也在写，只是我们解不出任何东西。这种时候不能按 [`DEFAULT_IDLE`] 杀。
+/// 但上游真挂了、网关照样一直保活的话也不能等一辈子：10 分钟够写一个
+/// 很大的文件，再长用户早就手动停了。
+pub const KEEPALIVE_ONLY_MAX: Duration = Duration::from_secs(600);
+
+/// 字节流的活性：每收到一块字节加一（见 [`track_bytes`]）。
+///
+/// `[约束]` 看门狗不能只看解出来的事件。SSE 注释（`: keep-alive`）、
+/// Anthropic 的 `ping`、只带 role 的空 delta 都解不出事件，按事件计时
+/// 的话，网关正在保活的连接到 90 秒照样被判成静默 —— 用户看到的就是
+/// 模型写大文件写到一半报「服务方 90 秒没有发任何数据」。
+#[derive(Clone, Default)]
+pub struct ByteLiveness(Arc<AtomicU64>);
+
+impl ByteLiveness {
+    fn chunks(&self) -> u64 {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
+/// 给字节流挂上活性计数。返回的流原样转发每一块。
+pub fn track_bytes(bytes: ByteStream) -> (ByteStream, ByteLiveness) {
+    let live = ByteLiveness::default();
+    let counter = live.clone();
+    let tracked = bytes.inspect(move |chunk| {
+        if chunk.is_ok() {
+            counter.0.fetch_add(1, Ordering::Relaxed);
+        }
+    });
+    (Box::pin(tracked), live)
+}
 
 /// 给事件流套一个静默看门狗。
 ///
@@ -43,10 +82,28 @@ pub fn with_idle_watchdog<S>(
 where
     S: Stream<Item = ProviderEvent> + Send + 'static,
 {
+    with_idle_watchdog_live(inner, idle, clock, None)
+}
+
+/// 同 [`with_idle_watchdog`]，另外认字节层的活性：一个周期里没有事件、
+/// 但收到过字节（保活），就再等一个周期，累计最多 [`KEEPALIVE_ONLY_MAX`]。
+pub fn with_idle_watchdog_live<S>(
+    inner: S,
+    idle: Duration,
+    clock: Arc<dyn Clock>,
+    live: Option<ByteLiveness>,
+) -> impl Stream<Item = ProviderEvent> + Send
+where
+    S: Stream<Item = ProviderEvent> + Send + 'static,
+{
     let idle_ms = idle.as_millis() as u64;
+    let keepalive_max_ms = KEEPALIVE_ONLY_MAX.as_millis() as u64;
 
     stream! {
         futures::pin_mut!(inner);
+        // 上个周期结束时见过的字节块数，和"只有保活"已经续了多久。
+        let mut seen = live.as_ref().map_or(0, ByteLiveness::chunks);
+        let mut keepalive_ms = 0u64;
 
         loop {
             let tick = clock.sleep_ms(idle_ms);
@@ -60,6 +117,8 @@ where
                 item = inner.next() => {
                     match item {
                         Some(ev) => {
+                            keepalive_ms = 0;
+                            seen = live.as_ref().map_or(0, ByteLiveness::chunks);
                             // 错误事件之后流就该结束了，别再等下一个
                             let is_terminal = matches!(ev, ProviderEvent::Error(_));
                             yield ev;
@@ -72,6 +131,25 @@ where
                 }
 
                 _ = tick => {
+                    if let Some(l) = &live {
+                        let now = l.chunks();
+                        if now != seen {
+                            seen = now;
+                            keepalive_ms += idle_ms;
+                            if keepalive_ms < keepalive_max_ms {
+                                tracing::debug!(keepalive_secs = keepalive_ms / 1000, "只有保活字节，继续等");
+                                continue;
+                            }
+                            tracing::warn!(keepalive_secs = keepalive_ms / 1000, "只有保活、没有内容太久，结束本条流");
+                            yield ProviderEvent::Error(ProviderError::Transport {
+                                error: riot_protocol::ui_error!(
+                                    "kernel.provider.keepaliveOnly", mins = keepalive_ms / 60_000;
+                                    "stream stalled: the server only sent keep-alive pings and no content for a long time"
+                                ),
+                            });
+                            break;
+                        }
+                    }
                     // 证据采集：是否值得实现"超时后降级非流式"（ARCHITECTURE
                     // §11.3 标注未实现）取决于这条真实触发的频率。日志攒一阵，
                     // 频率可观再排期，别为没证实的场景先付一套非流式解析。
@@ -236,6 +314,76 @@ mod tests {
             out[0],
             ProviderEvent::Error(ProviderError::Auth { .. })
         ));
+    }
+
+    /// 每 `every` 秒往活性计数上加一块（模拟网关的 `: keep-alive`）。
+    fn keepalive(live: &ByteLiveness, every: u64) -> tokio::task::JoinHandle<()> {
+        let live = live.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(every)).await;
+                live.0.fetch_add(1, Ordering::Relaxed);
+            }
+        })
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn 只有保活字节时不按静默杀() {
+        // 网关憋着一个大工具调用、每 30 秒发一行保活：200 秒后参数才到。
+        // 按事件计时的话 90 秒就被杀了 —— 用户看到的就是写大文件报错。
+        let live = ByteLiveness::default();
+        let pinger = keepalive(&live, 30);
+        let inner = stream! {
+            tokio::time::sleep(Duration::from_secs(200)).await;
+            yield delta("参数到了");
+        };
+        let s = with_idle_watchdog_live(inner, DEFAULT_IDLE, Arc::new(TokioClock), Some(live));
+        let out: Vec<_> = s.collect().await;
+        pinger.abort();
+
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert!(matches!(out[0], ProviderEvent::Delta(_)));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn 只有保活太久也会结束() {
+        // 上游挂了、网关照样保活：不能等一辈子。
+        let live = ByteLiveness::default();
+        let pinger = keepalive(&live, 30);
+        let inner = futures::stream::pending::<ProviderEvent>();
+        let start = tokio::time::Instant::now();
+        let s = with_idle_watchdog_live(inner, DEFAULT_IDLE, Arc::new(TokioClock), Some(live));
+        let out: Vec<_> = s.collect().await;
+        pinger.abort();
+
+        assert_eq!(out.len(), 1);
+        assert!(
+            matches!(&out[0], ProviderEvent::Error(ProviderError::Transport { error }) if error.key() == "kernel.provider.keepaliveOnly"),
+            "{:?}",
+            out[0]
+        );
+        let waited = start.elapsed();
+        assert!(waited >= KEEPALIVE_ONLY_MAX && waited < KEEPALIVE_ONLY_MAX + DEFAULT_IDLE, "{waited:?}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn 连字节都没有仍按静默杀() {
+        let live = ByteLiveness::default();
+        let inner = futures::stream::pending::<ProviderEvent>();
+        let s = with_idle_watchdog_live(inner, DEFAULT_IDLE, Arc::new(TokioClock), Some(live));
+        let out: Vec<_> = s.collect().await;
+        assert_eq!(out.len(), 1);
+        assert!(is_idle_error(&out[0]), "{:?}", out[0]);
+    }
+
+    #[tokio::test]
+    async fn track_bytes_按块计数且原样转发() {
+        let chunks: Vec<Result<Vec<u8>, crate::transport::HttpError>> =
+            vec![Ok(b": keep-alive\n\n".to_vec()), Ok(b"data: {}\n\n".to_vec())];
+        let (s, live) = track_bytes(Box::pin(futures::stream::iter(chunks)));
+        let out: Vec<_> = s.collect().await;
+        assert_eq!(out.len(), 2);
+        assert_eq!(live.chunks(), 2);
     }
 
     #[tokio::test(start_paused = true)]
