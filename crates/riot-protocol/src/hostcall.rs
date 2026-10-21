@@ -173,9 +173,11 @@ pub enum HostResponse {
     Marked { listing: String, screenshot: String },
     /// env.snapshot。
     Env { snapshot: crate::env::EnvSnapshot },
-    /// schedule.call 的 create / set_enabled:操作后的任务视图。
+    /// schedule.call 的 create / set_enabled:操作后的任务视图。装箱:任务视图
+    /// 比其它变体大一截,内联的话整个枚举都按它分配(clippy large_enum_variant)。
+    /// serde 对 Box 透明,线上格式不变。
     Schedule {
-        task: crate::schedule::ScheduledTask,
+        task: Box<crate::schedule::ScheduledTask>,
     },
     /// schedule.call 的 list。
     Schedules {

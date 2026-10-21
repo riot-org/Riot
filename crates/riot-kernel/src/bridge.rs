@@ -220,7 +220,7 @@ fn unexpected_schedule_reply(other: &HostResponse) -> ScheduleError {
 impl ScheduleAccess for RemoteSchedule {
     async fn create(&self, spec: ScheduleSpec) -> Result<ScheduledTask, ScheduleError> {
         match self.call(ScheduleCall::Create { spec }).await? {
-            HostResponse::Schedule { task } => Ok(task),
+            HostResponse::Schedule { task } => Ok(*task),
             HostResponse::Error { message, .. } => Err(host_schedule_error(message)),
             other => Err(unexpected_schedule_reply(&other)),
         }
@@ -242,7 +242,7 @@ impl ScheduleAccess for RemoteSchedule {
             })
             .await?
         {
-            HostResponse::Schedule { task } => Ok(task),
+            HostResponse::Schedule { task } => Ok(*task),
             HostResponse::Error { message, .. } => Err(host_schedule_error(message)),
             other => Err(unexpected_schedule_reply(&other)),
         }

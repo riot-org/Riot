@@ -3643,7 +3643,7 @@ impl crate::kernel::HostCallHandler for HostCalls {
                     // （schedule::for_model），只给键名它改不了参数。
                     SC::Create { spec } => {
                         match self.0.schedule_create(session_id.as_str(), spec).await {
-                            Ok(task) => R::Schedule { task },
+                            Ok(task) => R::Schedule { task: Box::new(task) },
                             Err(e) => host_unavailable(crate::schedule::for_model(&e)),
                         }
                     }
@@ -3652,7 +3652,7 @@ impl crate::kernel::HostCallHandler for HostCalls {
                     },
                     SC::SetEnabled { id, enabled } => {
                         match self.0.schedule_set_enabled(&id, enabled).await {
-                            Ok(task) => R::Schedule { task },
+                            Ok(task) => R::Schedule { task: Box::new(task) },
                             Err(e) => host_unavailable(crate::schedule::for_model(&e)),
                         }
                     }
