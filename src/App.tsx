@@ -69,6 +69,7 @@ import { useSchedules } from "./hooks/useSchedules";
 import { useSessionRecency } from "./hooks/useSessionRecency";
 import { useBrowserPanel } from "./hooks/useBrowserPanel";
 import { useT } from "./i18n";
+import { trackChatColWidth } from "./lib/chatColWidth";
 import { planPanelOpen, subscribePanelBrowser } from "./lib/linkIntent";
 import { type PlanState, samePlan, sameTodos, subscribePlanOpen } from "./lib/plan";
 import { newPresetId } from "./lib/prompts";
@@ -1567,7 +1568,7 @@ export function App() {
         ) : null}
 
         <div className="workarea">
-          <div className="chat-col">
+          <div className="chat-col" ref={trackChatColWidth}>
             {schedulePage ? (
               <SchedulesPage
                 schedules={schedules}
@@ -1781,8 +1782,8 @@ export function App() {
             width={schedDetailW}
             sessions={sessions}
             projects={projects}
-            onClose={() => setSelectedSchedule(null)}
             providers={config?.config.providers ?? []}
+            onClose={() => setSelectedSchedule(null)}
             onMenu={scheduleMenu}
             onError={noteError}
             onOpenSession={(id) => {
@@ -1796,8 +1797,8 @@ export function App() {
             width={schedDetailW}
             sessions={sessions}
             projects={projects}
-            defaultRoot={activeSession?.root ?? null}
             providers={config?.config.providers ?? []}
+            defaultRoot={activeSession?.root ?? null}
             onClose={() => setSchedCreating(false)}
             onCreated={(t) => {
               // 宿主也会广播 schedule_changed，这里先把新任务放进列表并

@@ -1987,7 +1987,10 @@ html[data-host='web'] body {
 
 /* 对话（或欢迎页）所在的一列。min-width:0 —— 少了它 flex 子项会被
    内容（composer 那排 pill）撑开，页面出横向滚动条。
-   窄列用容器查询收边距：开着浏览器抽屉时窗口仍很宽，媒体查询对不上。 */
+   窄列按这一列自己的宽度收边距：开着浏览器抽屉时窗口仍很宽，媒体查询
+   对不上。宽度档是 lib/chatColWidth 挂的 data-narrow / data-tight ——
+   `[约束]` 不能换成容器查询（container-type），理由见那个文件：
+   WKWebView 会在生成结束时把对话流的 scrollTop 夹到 0。 */
 .chat-col {
   flex: 1;
   min-width: 0;
@@ -1995,8 +1998,6 @@ html[data-host='web'] body {
   position: relative;
   display: flex;
   flex-direction: column;
-  container-type: inline-size;
-  container-name: chat;
 }
 
 /* 保活的会话树。一律绝对定位叠在 chat-col 里：切走只改可见性，
@@ -3385,6 +3386,22 @@ html[data-host='web'] body {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* 紧跟在直播正文后面的状态行，占的正好是生成结束后操作栏落下的位置：
+   .msg-actions 的 margin-top 4px + 高 20px = 24px。列间距 14px 已经算
+   在里面，所以往上收 10px、定高 20px。
+
+   `[约束]` 结束那一下是"状态行撤掉、操作栏挂上"同一次提交。两者占位
+   不一样大，列高就跟着变 —— 贴底时浏览器把 scrollTop 夹回去，整屏
+   正文下移（状态行 19.8px + 间距 14px 换成操作栏 24px，实测缩 10px）。
+   改操作栏的高度或边距时，这里要一起改。 */
+.thread-col > .msg.assistant + .wait-note,
+.thread-col > .msg.assistant + .dots {
+  box-sizing: border-box;
+  height: 20px;
+  margin-top: -10px;
+  align-items: center;
 }
 
 .wait-note-text {
@@ -11306,17 +11323,17 @@ button.fold-head:hover,
 }
 
 /* 窄列（开抽屉或窗口本身窄）按对话列宽度收，不看窗口 ——
-   容器挂在 .chat-col 上，避免挂在输入框上裁掉向上弹出的菜单。
-   服务方和模型藏掉：剩下 + / 权限 / 发送，一行放得下。
+   量的是 .chat-col（lib/chatColWidth 挂的 data-narrow / data-tight），
+   不是输入框。服务方和模型藏掉：剩下 + / 权限 / 发送，一行放得下。
 
-   `[约束]` 这一组只准收**横向**。查询问的是"这一列有多宽"，纵向间距
+   `[约束]` 这一组只准收**横向**。宽度档问的是"这一列有多宽"，纵向间距
    跟它没有关系。早先这里连着把 .composer-dock 的下内边距（18→12）和
    .composer 的上下内边距（共 4px）一起收了，后果有两个：
    - 同一个输入框在宽列上离底边 18px、窄列上 12px，换台显示器就变样；
    - 列宽跨过 560 的那一帧，输入框上边缘硬跳 10px。而侧栏开合正好会
      跨过这个阈值 —— 500ms 的平滑滑动中间插一帧硬跳，就是"侧栏一开
      输入框弹一下"。
-   横向的变化（内边距收窄、两个 pill 收起）留着：那是这条查询的本职，
+   横向的变化（内边距收窄、两个 pill 收起）留着：那是宽度档的本职，
    而且发生在一次横向动画里，不会把输入框在纵向上挪位置。 */
 /* 横向留白收窄。阈值 768 = 内容上限 720 + 两侧各 24。
  *
@@ -11330,14 +11347,12 @@ button.fold-head:hover,
  * 在约束内容的区间里，跨过去那一帧内容宽度一次变 24px、整屏文字重新
  * 折行 —— 而侧栏 / 抽屉开合正好会扫过这个宽度，500ms 的平滑滑动中间
  * 插一帧重排。 */
-@container chat (max-width: 768px) {
-  .chat {
-    --chat-gutter: 16px;
-  }
+.chat-col[data-narrow] .chat {
+  --chat-gutter: 16px;
 }
 
 /* 真正的窄列：工具栏一行塞不下服务方和模型，藏掉，剩下 + / 工作方式 / 发送。
-   容器挂在 .chat-col 上，避免挂在输入框上裁掉向上弹出的菜单。
+   宽度按 .chat-col 量（data-tight，见 lib/chatColWidth），不按输入框量。
 
    display 是离散的，插值不了 —— 但这一条不改盒子尺寸：两个 pill 在 flex
    里让出横向空间，其余项左对齐不动、发送键 margin-left:auto 仍贴右，行高
@@ -11347,10 +11362,8 @@ button.fold-head:hover,
    `.composer { padding-inline: 8px }`，省下的 8px 对工具栏能不能塞下
    毫无影响（塞得下是靠藏 pill），代价却是跨阈值时输入框里的文字重新
    折行 —— 又一处白给的跳动。 */
-@container chat (max-width: 560px) {
-  .composer-picks {
-    display: none;
-  }
+.chat-col[data-tight] .composer-picks {
+  display: none;
 }
 
 /* ── 权限弹窗：总是允许 ─────────────────────── */
