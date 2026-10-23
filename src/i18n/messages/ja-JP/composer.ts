@@ -10,6 +10,7 @@ export default {
   "composer.build.parallel": "並列でビルド",
   "composer.build.parallelHint": "マルチタスクモード。バックグラウンドのサブエージェントで分担",
   "composer.build.message": "計画のビルドを開始",
+  "composer.placeholder.awaiting": "未回答のカードがあります…このまま送信すると未回答のカードはスキップされます",
   "composer.placeholder.busy": "作業中です…今送信するとキューに入り、現在のタスク完了後に自動で送信されます",
   "composer.drop.hint": "離すと入力欄に追加",
   "composer.closeEsc": "閉じる (Esc)",

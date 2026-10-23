@@ -29,6 +29,7 @@ use riot_protocol::provider::ToolSpec;
 use riot_protocol::runner::{
     BatchContext, BatchEvent, BatchOutcome, BatchStream, ToolCall, ToolRunner,
 };
+use riot_protocol::suspend::{SuspendSlot, Suspension};
 use riot_protocol::tool::{
     FileStateCache, FileSystem, ProcessRunner, ProgressSink, PromptContext, Tool, ToolContext,
     ToolOutcome,
@@ -229,8 +230,26 @@ impl ToolRunner for Scheduler {
             let mut results: Vec<UserContent> = Vec::with_capacity(total);
             let mut side_messages: Vec<Message> = Vec::new();
             let mut cancelled = 0usize;
+            // 挂起的槽位，按调用顺序；一旦非空，`results` 里的东西都要搬进来
+            // （见批次结束处）。
+            let mut slots: Vec<SuspendSlot> = Vec::new();
+            let mut suspending = false;
 
             'batches: for batch in batches {
+                // 前面的批次有调用在等用户决定：后面的批次一个都不跑，原样推迟。
+                // 批次之间有先后依赖（先读再写），中间那个没定下来就跑后面的，
+                // 会打乱模型预期的执行顺序。
+                if suspending {
+                    for call in batch.calls() {
+                        slots.push(SuspendSlot::Deferred {
+                            tool_use_id: call.id.clone(),
+                            name: call.name.clone(),
+                            input: call.input.clone(),
+                        });
+                    }
+                    continue 'batches;
+                }
+
                 // 上一批级联取消或用户中断之后，剩下的批次直接补结果。
                 // 不能 break —— 那样后面的 tool_use 就没有结果了。
                 if ctx.cancel.is_cancelled() {
@@ -296,12 +315,29 @@ impl ToolRunner for Scheduler {
                                 sibling.cancel();
                             }
 
+                            // 等用户决定：没执行，不出结果。同批的兄弟照常跑完
+                            // —— 同批本来就是并发安全的只读调用，结果模型用得上。
+                            if let Some(slot) = done.suspended {
+                                if !suspending {
+                                    suspending = true;
+                                    // 之前的结果按顺序搬进槽位，和挂起的排在一起。
+                                    slots.extend(results.drain(..).map(|result| SuspendSlot::Done { result }));
+                                }
+                                slots.push(slot);
+                                continue;
+                            }
+
                             let (content, sides) = split_outcome(done.outcome);
-                            results.push(UserContent::ToolResult {
+                            let result = UserContent::ToolResult {
                                 tool_use_id: done.id,
                                 content,
                                 is_error: done.is_error,
-                            });
+                            };
+                            if suspending {
+                                slots.push(SuspendSlot::Done { result });
+                            } else {
+                                results.push(result);
+                            }
                             side_messages.extend(sides);
                             // hook 反馈以带外提示进对话：它是自动化检查说的话，
                             // 不是用户说的 —— synthetic + system-reminder 双标记。
@@ -324,11 +360,22 @@ impl ToolRunner for Scheduler {
                 }
             }
 
-            debug_assert_eq!(
-                results.len(),
-                total,
-                "每个 tool_use 必须恰好一个 tool_result，缺一个下次请求就是 400"
-            );
+            // 挂起：全部结果在槽位里，tool_result 消息留空 —— 同一条 assistant
+            // 消息的结果要在续跑时一次给全（见 riot_protocol::suspend）。
+            let suspended = if suspending {
+                debug_assert_eq!(slots.len(), total, "每个调用恰好一个槽位");
+                Some(Box::new(Suspension {
+                    slots,
+                    side_messages: std::mem::take(&mut side_messages),
+                }))
+            } else {
+                debug_assert_eq!(
+                    results.len(),
+                    total,
+                    "每个 tool_use 必须恰好一个 tool_result，缺一个下次请求就是 400"
+                );
+                None
+            };
 
             yield BatchEvent::Done(BatchOutcome {
                 results: Message::User {
@@ -338,6 +385,7 @@ impl ToolRunner for Scheduler {
                 },
                 side_messages,
                 cancelled,
+                suspended,
             });
         })
     }
@@ -371,6 +419,8 @@ struct Done {
     cascaded: bool,
     /// PostToolUse hooks 的反馈段落。收集侧包成 system-reminder。
     hook_feedback: Vec<String>,
+    /// 权限闸要人做决定、回合要挂起：这个调用没执行，槽位交给收集侧。
+    suspended: Option<SuspendSlot>,
 }
 
 async fn run_one(
@@ -404,6 +454,7 @@ async fn run_one(
             cascades: false,
             cascaded: false,
             hook_feedback: Vec::new(),
+            suspended: None,
         };
     };
 
@@ -425,6 +476,7 @@ async fn run_one(
             cascades: false,
             cascaded: false,
             hook_feedback: Vec::new(),
+            suspended: None,
         };
     }
 
@@ -442,6 +494,7 @@ async fn run_one(
             cascades: false,
             cascaded: true,
             hook_feedback: Vec::new(),
+            suspended: None,
         };
     }
 
@@ -489,6 +542,7 @@ async fn run_one(
             cascades: false,
             cascaded: false,
             hook_feedback: Vec::new(),
+            suspended: None,
         };
     }
 
@@ -501,6 +555,22 @@ async fn run_one(
                     input = v;
                 }
             }
+            riot_protocol::permission::GateOutcome::Suspend { ask } => {
+                return Done {
+                    id: call.id.clone(),
+                    name: call.name.clone(),
+                    outcome: ToolOutcome::Cancelled,
+                    is_error: false,
+                    cascades: false,
+                    cascaded: false,
+                    hook_feedback: Vec::new(),
+                    suspended: Some(SuspendSlot::Asked {
+                        tool_use_id: call.id,
+                        name: call.name,
+                        ask,
+                    }),
+                };
+            }
             riot_protocol::permission::GateOutcome::Deny { message } => {
                 return Done {
                     id: call.id,
@@ -512,6 +582,7 @@ async fn run_one(
                     cascades: false,
                     cascaded: false,
                     hook_feedback: Vec::new(),
+                    suspended: None,
                 };
             }
         }
@@ -528,6 +599,7 @@ async fn run_one(
             cascades: false,
             cascaded: true,
             hook_feedback: Vec::new(),
+            suspended: None,
         };
     }
 
@@ -562,6 +634,7 @@ async fn run_one(
         cascades,
         cascaded: false,
         hook_feedback,
+        suspended: None,
     }
 }
 
@@ -1174,6 +1247,108 @@ mod tests {
             .collect();
 
         assert_eq!(ids, vec!["a", "b"], "慢的先入队就要先出结果");
+    }
+
+    /// 指定名字的工具一律"要问人"，其余放行。
+    struct SuspendFor(&'static str);
+
+    #[async_trait::async_trait]
+    impl PermissionGate for SuspendFor {
+        async fn check(
+            &self,
+            tool: &dyn Tool,
+            input: &serde_json::Value,
+            id: &ToolUseId,
+            _cancel: &CancellationToken,
+        ) -> riot_protocol::permission::GateOutcome {
+            if tool.name() != self.0 {
+                return riot_protocol::permission::GateOutcome::Allow {
+                    updated_input: None,
+                };
+            }
+            riot_protocol::permission::GateOutcome::Suspend {
+                ask: Box::new(riot_protocol::suspend::SuspendedAsk {
+                    request_id: riot_protocol::id::RequestId::from_raw(format!(
+                        "r-{}",
+                        id.as_str()
+                    )),
+                    detail: riot_protocol::permission::PermissionAsk {
+                        tool_use_id: id.clone(),
+                        tool_name: tool.name().to_owned(),
+                        summary: riot_protocol::text::UiText::new("x"),
+                        agent_label: None,
+                        preview: riot_protocol::permission::AskPreview::Plain {
+                            text: riot_protocol::text::UiText::new("x"),
+                        },
+                        suggestions: vec![],
+                        reason: riot_protocol::permission::DecisionReason::UserChoice {
+                            remembered: false,
+                        },
+                    },
+                    input: input.clone(),
+                }),
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn 要问人时同批照跑_后续批次推迟_不出结果() {
+        let write = FakeTool::writer("Write");
+        let writes = write.counter();
+        let s = scheduler(vec![
+            Arc::new(FakeTool::read_only("Read")) as Arc<dyn Tool>,
+            Arc::new(FakeTool::read_only("Ask")),
+            Arc::new(write),
+        ])
+        .with_gate(Arc::new(SuspendFor("Ask")));
+
+        // [Read, Ask] 一批（都只读），Write 一批，再一个 Read 一批。
+        let events = run(
+            &s,
+            vec![
+                call("a", "Read"),
+                call("b", "Ask"),
+                call("c", "Write"),
+                call("d", "Read"),
+            ],
+        )
+        .await;
+        let o = outcome(&events);
+
+        assert_eq!(result_pairs(o), vec![], "挂起时不出 tool_result");
+        let sus = o.suspended.as_ref().expect("应该挂起");
+        let kinds: Vec<(String, &str)> = sus
+            .slots
+            .iter()
+            .map(|s| {
+                let kind = match s {
+                    SuspendSlot::Done { .. } => "done",
+                    SuspendSlot::Asked { .. } => "asked",
+                    SuspendSlot::Deferred { .. } => "deferred",
+                };
+                (s.tool_use_id().as_str().to_owned(), kind)
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                ("a".to_owned(), "done"),
+                ("b".to_owned(), "asked"),
+                ("c".to_owned(), "deferred"),
+                ("d".to_owned(), "deferred"),
+            ]
+        );
+        assert_eq!(writes.load(Ordering::SeqCst), 0, "推迟的写操作不能先跑");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn 没人要问时不挂起() {
+        let s = scheduler(vec![Arc::new(FakeTool::read_only("Read")) as Arc<dyn Tool>])
+            .with_gate(Arc::new(SuspendFor("Ask")));
+        let events = run(&s, vec![call("a", "Read")]).await;
+        let o = outcome(&events);
+        assert!(o.suspended.is_none());
+        assert_eq!(result_pairs(o).len(), 1);
     }
 
     #[tokio::test(start_paused = true)]

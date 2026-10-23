@@ -359,6 +359,13 @@ function ProjectGroup(
                       title={t("common.running")}
                       aria-label={t("common.running")}
                     />
+                  ) : s.awaitingUser ? (
+                    // 停在等用户决定：不在跑，但得回来点卡片。
+                    <span
+                      className="thread-awaiting"
+                      title={t("app.session.awaiting")}
+                      aria-label={t("app.session.awaiting")}
+                    />
                   ) : null}
                   {s.title ?? t("app.newSession")}
                 </button>

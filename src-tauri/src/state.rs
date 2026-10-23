@@ -132,6 +132,8 @@ pub struct SessionInfo {
     /// 此刻有没有轮子在跑。侧栏靠它给后台忙碌的会话画指示点 ——
     /// 没订阅事件的会话，前端只有这一条途径知道它在干活。
     pub busy: bool,
+    /// 回合停在等用户决定（权限确认、提问、表单）。侧栏画"等你处理"。
+    pub awaiting_user: bool,
 }
 
 /// 一个会话的事件出口，带上它是"第几次订阅"。
@@ -231,6 +233,9 @@ struct Meta {
     multitask: bool,
     /// 有没有轮子在跑(send_turn 置真,Done 事件清掉)。侧栏指示点用。
     busy: bool,
+    /// 回合停在等用户决定(Done 带 AwaitingUser 置真,下一轮开始清掉)。
+    /// 只在内存里:重启后由水合快照里还挂着的卡片补回来。
+    awaiting_user: bool,
     /// 内核那边已经水合过这个会话。resume 是幂等的,这个标记只是省掉
     /// 每次操作前的一轮 RPC + 全量历史传输。
     hydrated: bool,
@@ -260,6 +265,7 @@ impl Meta {
             provider: self.provider.clone(),
             model: self.model.clone(),
             busy: self.busy,
+            awaiting_user: self.awaiting_user,
         }
     }
 
@@ -473,6 +479,7 @@ impl AppState {
                     model,
                     multitask: p.multitask,
                     busy: false,
+                    awaiting_user: false,
                     hydrated: false,
                     last_error: None,
                 },
@@ -541,15 +548,21 @@ impl AppState {
                     HostNotice::Started { session_id } => {
                         if let Some(m) = state.0.sessions.lock().await.get_mut(&session_id) {
                             m.busy = true;
+                            m.awaiting_user = false;
                             // 新一轮开始,上一轮的失败就过时了(不论这轮是谁发起的)。
                             m.last_error = None;
                         }
                         // busy 不进索引，但侧栏指示点要跨观看者跟上。
                         state.emit_sessions_changed();
                     }
-                    HostNotice::Done { session_id, error } => {
+                    HostNotice::Done {
+                        session_id,
+                        error,
+                        awaiting,
+                    } => {
                         if let Some(m) = state.0.sessions.lock().await.get_mut(&session_id) {
                             m.busy = false;
+                            m.awaiting_user = awaiting;
                             m.last_error = error;
                         }
                         state.emit_sessions_changed();
@@ -560,7 +573,12 @@ impl AppState {
                             crate::ipc::spawn(async move { b.close_scratch().await });
                         }
                         // 这轮结束可能是某个定时任务跑完了：认领、通知、广播。
-                        state.finish_schedule_run(&session_id).await;
+                        // 停在等用户决定的不算跑完：认领留着，续跑结束再收尾。
+                        if awaiting {
+                            state.wait_schedule_run(&session_id).await;
+                        } else {
+                            state.finish_schedule_run(&session_id).await;
+                        }
                     }
                     HostNotice::ModeChanged { session_id, mode } => {
                         if let Some(m) = state.0.sessions.lock().await.get_mut(&session_id) {
@@ -1130,6 +1148,7 @@ impl AppState {
             model,
             multitask: false,
             busy: false,
+            awaiting_user: false,
             hydrated: false,
             last_error: None,
         };
@@ -1200,6 +1219,8 @@ impl AppState {
             if let Some(m) = g.get_mut(session_id) {
                 m.hydrated = true;
                 m.busy = busy;
+                // 没在跑却还有卡片：停在等用户决定（重启后靠这里补回来）。
+                m.awaiting_user = !busy && !pending_asks.is_empty();
                 // 轮子在跑的话失败一定已经过时(新一轮开了),别把旧红卡画在
                 // 流式正文下面。
                 if busy {
@@ -1715,6 +1736,7 @@ impl AppState {
     async fn mark_turn_started(&self, session_id: &str) {
         if let Some(m) = self.0.sessions.lock().await.get_mut(session_id) {
             m.busy = true;
+            m.awaiting_user = false;
             m.last_error = None;
         }
     }
@@ -2707,13 +2729,32 @@ impl AppState {
         response: PermissionResponse,
     ) -> HostResult<()> {
         self.require_session(session_id).await?;
+        // 这一下可能是停在等用户决定的最后一张卡片：答完内核就续跑，要用
+        // 此刻的配置（和发消息同一套装配）。配不出来（缺密钥等）不挡回答，
+        // 内核会沿用上一轮的。
+        let config = match self.session_endpoint(session_id).await {
+            Ok((config, provider, model)) => self
+                .build_turn_config(&config, &provider, model, session_id)
+                .await
+                .inspect_err(|e| tracing::warn!(error = %e, "续跑配置装配失败，沿用上一轮"))
+                .ok(),
+            Err(e) => {
+                tracing::warn!(error = %e, "续跑配置装配失败，沿用上一轮");
+                None
+            }
+        };
         // 内核按 request_id 在各会话的待答表里找。回应一个已经不存在的
         // 请求不是错误 —— 用户在超时之后才点按钮是正常的人类行为。
-        self.kernel_call(RpcRequest::PermissionRespond {
-            request_id: riot_protocol::id::RequestId::from_raw(ask_id.to_owned()),
-            response,
-        })
-        .await?;
+        let resp = self
+            .kernel_call(RpcRequest::PermissionRespond {
+                request_id: riot_protocol::id::RequestId::from_raw(ask_id.to_owned()),
+                response,
+                config: config.map(Box::new),
+            })
+            .await?;
+        if matches!(resp, RpcResponse::PermissionResponded { resumed: true }) {
+            self.mark_turn_started(session_id).await;
+        }
         Ok(())
     }
 
@@ -3249,6 +3290,15 @@ impl AppState {
         // 先认领再提交：Done 事件从提交那一刻起就可能到来。
         {
             let mut g = self.0.schedules.lock().await;
+            // 上一次运行还停在等用户决定：这次的消息一发，内核就把那些卡片
+            // 按"没回答"收掉（见内核 Session::close_suspension），那次运行
+            // 到此为止 —— 不收尾的话它永远挂着"还在跑"。
+            if let Some(prev) = g.running.remove(&session_id) {
+                let now = crate::schedule::now_ms();
+                if let Some(t) = g.tasks.iter_mut().find(|t| t.id == prev) {
+                    t.finish_run(&session_id, now);
+                }
+            }
             g.running.insert(session_id.clone(), task.id.clone());
             if let Some(t) = g.tasks.iter_mut().find(|t| t.id == task.id) {
                 t.push_run(crate::schedule::now_ms(), Some(session_id.clone()), None);
@@ -3285,6 +3335,33 @@ impl AppState {
             return Err(err);
         }
         Ok(session_id)
+    }
+
+    /// 定时任务的这次运行停在等用户决定：认领留着（续跑结束的那个 Done 再
+    /// 收尾），告诉前端去提醒用户。
+    async fn wait_schedule_run(&self, session_id: &str) {
+        let claimed = {
+            let g = self.0.schedules.lock().await;
+            g.running.get(session_id).map(|task_id| {
+                let name = g
+                    .tasks
+                    .iter()
+                    .find(|t| &t.id == task_id)
+                    .map_or_else(|| task_id.clone(), |t| t.name.clone());
+                (task_id.clone(), name)
+            })
+        };
+        let Some((task_id, name)) = claimed else {
+            return;
+        };
+        tracing::info!(task = %task_id, session = %session_id, "scheduled task is waiting for the user");
+        self.emit_schedule(ScheduleRun {
+            task_id,
+            name,
+            session_id: session_id.to_owned(),
+            phase: ScheduleRunPhase::Waiting,
+            error: None,
+        });
     }
 
     /// [`HostNotice::Done`] 的调度侧：这轮结束是不是定时任务跑完了。

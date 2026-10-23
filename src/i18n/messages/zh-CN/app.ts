@@ -31,6 +31,10 @@ export default {
   "app.notify.scheduleDone.title": "定时任务完成",
 
   "app.notify.scheduleDone.body": "「{name}」跑完了，回来看看结果。",
+  "app.notify.awaiting.title": "需要你处理",
+  "app.notify.awaiting.body": "任务停下来等你确认，回来看看吧。",
+  "app.notify.scheduleWaiting.title": "定时任务等你处理",
+  "app.notify.scheduleWaiting.body": "「{name}」停下来等你确认。",
 
   "app.notify.scheduleFailed.title": "定时任务没跑成",
 
@@ -92,6 +96,7 @@ export default {
   "app.project.actions": "项目操作",
   "app.project.removeFromList": "从列表移除",
   "app.session.actions": "会话操作",
+  "app.session.awaiting": "等你处理",
 
   "app.topbar.sessionSettings": "会话设置",
   "app.topbar.needSession": "先打开一个会话",

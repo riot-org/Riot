@@ -38,6 +38,11 @@ function notifyTurnDone() {
   void notify(t("app.notify.turnDone.title"), t("app.notify.turnDone.body"));
 }
 
+/** 回合停在等用户决定：和"跑完了"分开说，用户要回来点的是卡片。 */
+function notifyAwaiting() {
+  void notify(t("app.notify.awaiting.title"), t("app.notify.awaiting.body"));
+}
+
 export function Chat({
   sessionId,
   visible,
@@ -147,6 +152,10 @@ export function Chat({
   // 保活四个 Chat，切一次会话就连发几次 setChangesRev，Git 改动面板
   // 跟着做几次无谓的全量比对。
   const sawBusy = useRef(false);
+  // 回合停在等用户决定：不在跑，卡片还在（见 applyDone 对 awaiting_user 的处理）。
+  const awaiting = !busy && session.asks.length > 0;
+  const awaitingRef = useRef(awaiting);
+  awaitingRef.current = awaiting;
   useEffect(() => {
     busyRef.current?.(busy);
     if (busy) {
@@ -157,7 +166,10 @@ export function Chat({
     turnEndRef.current?.();
     // 长任务跑完而窗口在后台：发一条系统通知，不然就错过了。
     // 窗口在前台时不发 —— 用户正看着呢。
-    if (!document.hasFocus()) notifyTurnDone();
+    if (!document.hasFocus()) {
+      if (awaitingRef.current) notifyAwaiting();
+      else notifyTurnDone();
+    }
   }, [busy]);
   // 回退不占 busy，上面那个 effect 看不到。filesRev 变了就通知外层重读
   // 预览 / 改动面板。跳过挂载：缓存里带回来的数字不是一次新的写盘。
@@ -310,6 +322,7 @@ export function Chat({
       workspace={workspace}
       {...(workspaceMissing ? { workspaceMissing: true, onMissingWorkspace } : {})}
       busy={session.busy}
+      awaiting={awaiting}
       config={config}
       onConfig={onConfig}
       sessionProvider={sessionProvider}

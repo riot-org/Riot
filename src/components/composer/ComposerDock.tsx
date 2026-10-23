@@ -135,6 +135,7 @@ export function ComposerDock({
   workspaceMissing,
   onMissingWorkspace,
   busy,
+  awaiting = false,
   config,
   onConfig,
   sessionProvider,
@@ -171,6 +172,8 @@ export function ComposerDock({
   workspaceMissing?: boolean;
   onMissingWorkspace?: () => void;
   busy: boolean;
+  /** 回合停在等用户决定（卡片还没答完）。这时发消息会把没答的卡片跳过。 */
+  awaiting?: boolean;
   config: ConfigStatus;
   onConfig: (s: ConfigStatus) => void;
   /** 这个会话正在用的服务方 / 模型。空 = 还没钉过，显示时回退全局默认。 */
@@ -712,9 +715,11 @@ export function ComposerDock({
   /** 输入框的可及名。`data-placeholder` 只是 CSS 伪元素，读屏取不到。 */
   const placeholder = busy
     ? t("composer.placeholder.busy")
-    : planReady && mode === "plan"
-      ? t("composer.placeholder.plan")
-      : t("composer.placeholder");
+    : awaiting
+      ? t("composer.placeholder.awaiting")
+      : planReady && mode === "plan"
+        ? t("composer.placeholder.plan")
+        : t("composer.placeholder");
 
   /** 选中一个文件：把光标处的 `@查询` 换成一个块，就地插在句子里。 */
   const chooseFile = (p: string) => {

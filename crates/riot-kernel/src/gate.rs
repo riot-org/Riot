@@ -1,6 +1,6 @@
 //! 宿主侧的权限闸：决策链算出 allow/ask/deny 之后，ask 那一支在这里
-//! 落地 —— 弹窗、挂起等待、超时、Auto 模式的判危竞速，以及"总是允许"
-//! 的落实。
+//! 落地 —— 弹窗、挂起回合（主 agent）或原地等待加超时（子 agent）、
+//! Auto 模式的判危竞速，以及"总是允许"的落实。
 //!
 //! 从 session.rs 拆出来的独立职责。会话只负责在每轮开工时装配
 //! [`HostGate`]（共享 rules/mode 的活引用），其余都发生在这里。
@@ -38,7 +38,10 @@ const CLASSIFY_GRACE: Duration = Duration::from_millis(200);
 
 /// 一条挂着的询问：应答通道，加上给界面重建弹窗用的详情。
 struct PendingEntry {
-    tx: oneshot::Sender<PermissionResponse>,
+    /// `None` = 这条询问已经转成挂起（见 [`HostGate::ask`]），没人在原地等。
+    /// 它留在表里只为接住"挂起记录交给会话之前"那一小段里的点击：同批
+    /// 兄弟可能还要跑几分钟，卡片早就显示出来了。
+    tx: Option<oneshot::Sender<PermissionResponse>>,
     detail: PermissionAsk,
     /// 到达序号。HashMap 不保序，快照按它排 —— 乱序重建会让弹窗
     /// 顺序和产生顺序对不上。
@@ -49,6 +52,8 @@ struct PendingEntry {
 pub struct PendingAsks {
     map: Mutex<HashMap<String, PendingEntry>>,
     seq: AtomicU64,
+    /// 转成挂起之后、交给会话之前收到的答案。会话接手挂起记录时取走。
+    early: Mutex<HashMap<String, PermissionResponse>>,
 }
 
 impl PendingAsks {
@@ -59,19 +64,71 @@ impl PendingAsks {
         detail: PermissionAsk,
     ) {
         let seq = self.seq.fetch_add(1, Ordering::Relaxed);
-        self.map
-            .lock()
-            .await
-            .insert(id, PendingEntry { tx, detail, seq });
+        self.map.lock().await.insert(
+            id,
+            PendingEntry {
+                tx: Some(tx),
+                detail,
+                seq,
+            },
+        );
     }
 
     pub async fn resolve(&self, id: &str, response: PermissionResponse) -> bool {
         match self.map.lock().await.remove(id) {
             // 接收端已经走了（超时或取消）。不是错误 —— 用户在超时之后
             // 才点了按钮，这时候什么都不该发生。
-            Some(e) => e.tx.send(response).is_ok(),
+            Some(PendingEntry { tx: Some(tx), .. }) => tx.send(response).is_ok(),
+            // 已经转成挂起：答案先存着，会话接手挂起记录时取走。
+            Some(PendingEntry { tx: None, .. }) => {
+                self.early.lock().await.insert(id.to_owned(), response);
+                true
+            }
             None => false,
         }
+    }
+
+    /// 把一条询问标成"已转挂起"：应答通道撤掉，详情留着给快照。
+    async fn mark_suspended(&self, id: &str) {
+        if let Some(e) = self.map.lock().await.get_mut(id) {
+            e.tx = None;
+        }
+    }
+
+    /// 会话接手挂起记录：摘掉这些询问，交出交接前就收到的答案。
+    pub(crate) async fn take_suspended(
+        &self,
+        ids: &[String],
+    ) -> HashMap<String, PermissionResponse> {
+        let mut map = self.map.lock().await;
+        let mut early = self.early.lock().await;
+        let mut out = HashMap::new();
+        for id in ids {
+            map.remove(id);
+            if let Some(r) = early.remove(id) {
+                out.insert(id.clone(), r);
+            }
+        }
+        out
+    }
+
+    /// 一轮收场时，转了挂起却没交到会话手里的询问（挂起之后这一轮被
+    /// 停止了）。摘掉并返回它们的 id，调用方告诉界面收起卡片。
+    pub(crate) async fn drop_suspended(&self) -> Vec<String> {
+        let mut map = self.map.lock().await;
+        let ids: Vec<String> = map
+            .iter()
+            .filter(|(_, e)| e.tx.is_none())
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in &ids {
+            map.remove(id);
+        }
+        let mut early = self.early.lock().await;
+        for id in &ids {
+            early.remove(id);
+        }
+        ids
     }
 
     async fn forget(&self, id: &str) {
@@ -83,8 +140,10 @@ impl PendingAsks {
     /// 重建出来，否则那次询问只能等到超时被拒。
     pub async fn snapshot(&self) -> Vec<PendingAsk> {
         let g = self.map.lock().await;
+        let early = self.early.lock().await;
         let mut v: Vec<(u64, PendingAsk)> = g
             .iter()
+            .filter(|(id, _)| !early.contains_key(*id))
             .map(|(id, e)| {
                 (
                     e.seq,
@@ -101,6 +160,7 @@ impl PendingAsks {
 
     pub(crate) async fn clear(&self) {
         self.map.lock().await.clear();
+        self.early.lock().await.clear();
     }
 }
 
@@ -144,7 +204,8 @@ impl RaceOutcome {
 
 /// 宿主侧的权限闸。
 ///
-/// 决策链算出 allow/ask/deny，这里负责 ask 那一支 —— 弹窗、等待、超时。
+/// 决策链算出 allow/ask/deny，这里负责 ask 那一支 —— 弹窗，然后挂起
+/// 回合或原地等待（见 [`HostGate::suspendable`]）。
 pub(crate) struct HostGate {
     pub(crate) sink: SessionSink,
     pub(crate) pending: Arc<PendingAsks>,
@@ -158,7 +219,15 @@ pub(crate) struct HostGate {
     pub(crate) mode_live: Arc<Mutex<PermissionMode>>,
     pub(crate) cwd: std::path::PathBuf,
     /// 等用户回应的上限，来自配置。见 `crate::session` 的 ASK_TIMEOUT_RANGE。
+    /// 只管不挂起的那几条闸（子 agent）。
     pub(crate) ask_timeout: Duration,
+    /// 要问人时挂起回合而不是原地等。主 agent 的闸为 true；子 agent 的
+    /// 循环状态只在内存里、挂不起来，它们拿一份 false 的（见
+    /// [`HostGate::for_subagents`]），照旧原地等、照旧吃超时。
+    pub(crate) suspendable: bool,
+    /// 续跑回合里已经有答案的调用：tool_use_id → 用户的答案。命中的
+    /// 调用不再过 hook 和决策链（挂起之前都过过了），直接按答案放行或拒绝。
+    pub(crate) preanswered: std::sync::Mutex<HashMap<String, PermissionResponse>>,
     /// PreToolUse hooks。deny 一票否决、ask 强制询问、allow 只把
     /// "要问"升级成"放行" —— 内置决策链的 Deny 不可被 hook 压过。
     pub(crate) hooks: Arc<crate::hooks::HookEngine>,
@@ -180,6 +249,17 @@ impl PermissionGate for HostGate {
         tool_use_id: &riot_protocol::id::ToolUseId,
         cancel: &CancellationToken,
     ) -> GateOutcome {
+        // 续跑：这次调用挂起时用户已经答了。hook 和决策链都在挂起之前跑过，
+        // 输入也是那时的最终输入 —— 再跑一遍可能问出第二张卡。
+        let answered = self
+            .preanswered
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(tool_use_id.as_str());
+        if let Some(answer) = answered {
+            return self.apply_answer(tool, input, answer).await;
+        }
+
         // ── PreToolUse hooks 先跑 ────────────────────────────────
         // 聚合规则照 CC：deny > ask > allow。deny 直接拒（不再走决策链，
         // 理由发回模型让它换个做法）；ask / allow 记下来和决策链的结果
@@ -373,6 +453,35 @@ pub(crate) fn apply_remember(
 }
 
 impl HostGate {
+    /// 给子 agent 用的那份：共享规则、模式、待答表，但不挂起 —— 子 agent
+    /// 的循环状态只在内存里，挂起了也续不回去。它们照旧原地等、照旧吃
+    /// `ask_timeout`。
+    pub(crate) fn for_subagents(&self) -> HostGate {
+        HostGate {
+            sink: self.sink.clone(),
+            pending: Arc::clone(&self.pending),
+            ids: Arc::clone(&self.ids),
+            ctx: self.ctx.clone(),
+            rules_live: Arc::clone(&self.rules_live),
+            mode_live: Arc::clone(&self.mode_live),
+            cwd: self.cwd.clone(),
+            ask_timeout: self.ask_timeout,
+            suspendable: false,
+            preanswered: Default::default(),
+            hooks: Arc::clone(&self.hooks),
+            classifier: Arc::clone(&self.classifier),
+            fs: Arc::clone(&self.fs),
+        }
+    }
+
+    /// 续跑回合开工前，把用户的答案按 tool_use_id 挂上。
+    pub(crate) fn preanswer(&self, answers: HashMap<String, PermissionResponse>) {
+        self.preanswered
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .extend(answers);
+    }
+
     async fn remember(&self, updates: Vec<riot_protocol::permission::PermissionUpdate>) {
         if updates.is_empty() {
             return;
@@ -430,6 +539,8 @@ impl HostGate {
         self.pending
             .insert(request_id.clone(), tx, ask.clone())
             .await;
+        // 挂起记录里也要一份（续跑前界面靠它重建卡片）。
+        let ask_detail = ask.clone();
 
         let sent = self.sink.send(AgentEvent::PermissionRequest {
             request_id: RequestId::from_raw(request_id.clone()),
@@ -496,6 +607,20 @@ impl HostGate {
                 };
             }
 
+            // 主 agent：不在原地等。卡片已经发出去了，回合停下，用户答完再
+            // 续跑（见 riot_protocol::suspend）。询问留在表里（撤掉应答通道），
+            // 接住挂起记录交给会话之前的那一小段里的点击。
+            RaceOutcome::Pending if self.suspendable => {
+                self.pending.mark_suspended(&request_id).await;
+                return GateOutcome::Suspend {
+                    ask: Box::new(riot_protocol::suspend::SuspendedAsk {
+                        request_id: RequestId::from_raw(request_id),
+                        detail: ask_detail,
+                        input: input.clone(),
+                    }),
+                };
+            }
+
             RaceOutcome::Pending => {
                 let waited = tokio::select! {
                     r = async {
@@ -546,6 +671,17 @@ impl HostGate {
             }
         };
 
+        self.apply_answer(tool, input, answer).await
+    }
+
+    /// 用户的答案 → 闸的结论。原地等到的答案和续跑时带来的答案共用这一份：
+    /// 落实"总是允许"、把选项写进输入、按工具定制拒绝措辞，两条路不会分叉。
+    pub(crate) async fn apply_answer(
+        &self,
+        tool: &dyn Tool,
+        input: &serde_json::Value,
+        answer: PermissionResponse,
+    ) -> GateOutcome {
         match answer {
             PermissionResponse::Allow { remember, choice } => {
                 self.remember(remember).await;

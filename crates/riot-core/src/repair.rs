@@ -43,9 +43,17 @@ const LOST_RESULT_TEXT: &str = "Result lost: this tool call was interrupted (the
 /// assistant 消息 id 派生 —— 确定性，重启后对同一份脏 transcript 重修
 /// 会得到完全相同的历史（黄金回放安全）。
 pub fn repair_tool_pairing(messages: &mut Vec<Message>) -> usize {
+    repair_tool_pairing_except(messages, &[])
+}
+
+/// 同 [`repair_tool_pairing`]，但跳过 `skip` 里的 tool_use：续跑回合里，
+/// 停在等用户决定的那批调用此刻正该没有结果，主循环马上就补上
+///（见 `riot_protocol::suspend`）。
+pub fn repair_tool_pairing_except(messages: &mut Vec<Message>, skip: &[ToolUseId]) -> usize {
     let results: BTreeSet<ToolUseId> = messages
         .iter()
         .flat_map(|m| m.tool_result_ids())
+        .chain(skip.iter())
         .cloned()
         .collect();
 

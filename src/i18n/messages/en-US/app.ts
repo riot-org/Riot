@@ -30,6 +30,10 @@ export default {
   "app.notify.scheduleDone.title": "Scheduled task finished",
 
   "app.notify.scheduleDone.body": "\"{name}\" has finished. Come back and check the result.",
+  "app.notify.awaiting.title": "Needs your input",
+  "app.notify.awaiting.body": "The task paused to wait for your decision.",
+  "app.notify.scheduleWaiting.title": "Scheduled task needs your input",
+  "app.notify.scheduleWaiting.body": "\"{name}\" paused to wait for your decision.",
 
   "app.notify.scheduleFailed.title": "Scheduled task failed",
 
@@ -95,6 +99,7 @@ export default {
   "app.project.actions": "Project actions",
   "app.project.removeFromList": "Remove from list",
   "app.session.actions": "Session actions",
+  "app.session.awaiting": "Waiting for you",
 
   "app.topbar.sessionSettings": "Session settings",
   "app.topbar.needSession": "Open a session first",

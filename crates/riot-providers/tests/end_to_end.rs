@@ -150,6 +150,7 @@ fn initial_state(prompt: &str) -> AgentState {
         handed_off: false,
         todo_close_reminded: false,
         transition: None,
+        resume: None,
     }
 }
 

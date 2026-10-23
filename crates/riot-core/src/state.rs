@@ -47,6 +47,11 @@ pub struct AgentState {
 
     /// 上一轮为何继续。仅用于测试与观测，不参与决策。
     pub transition: Option<Transition>,
+
+    /// 续跑：上次回合停在等用户决定，现在答案到了。主循环开头先把这批
+    /// 调用跑完（不发请求），结果和已完成的那些拼成一条再往下走。
+    /// 历史末尾必须正是这些调用所在的 assistant 消息。见 riot_protocol::suspend。
+    pub resume: Option<riot_protocol::suspend::Suspension>,
 }
 
 impl AgentState {
@@ -67,6 +72,7 @@ impl AgentState {
             tool_calls_since_todo: 0,
             handed_off: false,
             todo_close_reminded: false,
+            resume: None,
             transition: None,
         }
     }

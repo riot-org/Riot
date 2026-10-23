@@ -54,6 +54,10 @@ export type AgentEvent =
       type: "background_task";
     }
   | {
+      suspension: Suspension;
+      type: "suspended";
+    }
+  | {
       reason: TerminalReason;
       type: "done";
     };
@@ -487,6 +491,26 @@ export type RuleDecision = "allow" | "ask" | "deny";
 export type UpdateScope = "session" | "local" | "project" | "user";
 export type CompactStrategy = "spill" | "aggregate_budget" | "micro_compact" | "full_summary";
 /**
+ * 一批调用里的一个位置。顺序和模型发出的调用顺序一致。
+ */
+export type SuspendSlot =
+  | {
+      kind: "done";
+      result: UserContent;
+    }
+  | {
+      ask: SuspendedAsk;
+      kind: "asked";
+      name: string;
+      tool_use_id: string;
+    }
+  | {
+      input: unknown;
+      kind: "deferred";
+      name: string;
+      tool_use_id: string;
+    };
+/**
  * 终止原因。
  *
  * 在 TS 版本里这是 AsyncGenerator 的 return 值，控制流与数据流分离。
@@ -513,6 +537,10 @@ export type TerminalReason =
   | {
       message: string;
       reason: "stop_hook_prevented";
+    }
+  | {
+      asks: number;
+      reason: "awaiting_user";
     }
   | {
       error: AgentError;
@@ -888,6 +916,11 @@ export type RpcRequest =
   | {
       method: "permission.respond";
       params: {
+        /**
+         * 这轮的配置。回答的是停在等用户决定的卡片、而且答案收齐了，内核
+         * 就用它开续跑轮（见 `crate::suspend`）；没给就沿用上一轮的。
+         */
+        config?: TurnConfig | null;
         request_id: string;
         response: PermissionResponse;
       };
@@ -1166,6 +1199,12 @@ export type RpcResponse =
       result: "pong";
     }
   | {
+      data: {
+        resumed: boolean;
+      };
+      result: "permission_responded";
+    }
+  | {
       result: "ok";
     }
   | {
@@ -1221,7 +1260,7 @@ export type WhenSpec =
       time: string;
       weekday: number;
     };
-export type ScheduleRunPhase = "started" | "done";
+export type ScheduleRunPhase = ("started" | "done") | "waiting";
 
 /**
  * 把所有顶层类型收进一个 root，让生成的 schema 共享同一份 `$defs`。
@@ -1481,6 +1520,31 @@ export interface TodoProgress {
   current?: string | null;
   done: number;
   total: number;
+}
+/**
+ * 一次挂起的全部内容。
+ */
+export interface Suspension {
+  /**
+   * 已完成的调用产生的旁路消息（hook 反馈、图片 metadata），续跑时
+   * 跟在 tool_result 后面一起发。
+   */
+  side_messages?: Message[];
+  slots: SuspendSlot[];
+}
+/**
+ * 一条挂起中的询问：卡片详情，加上续跑时要执行的最终输入。
+ */
+export interface SuspendedAsk {
+  detail: PermissionAsk;
+  /**
+   * hook 改写之后的输入。续跑按它执行 —— 退回原输入等于按 A 授权、
+   * 去执行 B。
+   */
+  input: {
+    [k: string]: unknown;
+  };
+  request_id: string;
 }
 /**
  * 给人看的错误：一句 [`UiText`]，外加一段可选的技术细节。

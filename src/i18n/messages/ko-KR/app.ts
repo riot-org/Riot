@@ -30,6 +30,10 @@ export default {
   "app.notify.scheduleDone.title": "예약 작업 완료",
 
   "app.notify.scheduleDone.body": "\"{name}\" 작업이 끝났습니다. 결과를 확인해 보세요.",
+  "app.notify.awaiting.title": "확인이 필요합니다",
+  "app.notify.awaiting.body": "작업이 확인을 기다리며 멈춰 있습니다.",
+  "app.notify.scheduleWaiting.title": "예약 작업이 확인을 기다립니다",
+  "app.notify.scheduleWaiting.body": "\"{name}\" 작업이 확인을 기다리며 멈춰 있습니다.",
 
   "app.notify.scheduleFailed.title": "예약 작업 실패",
 
@@ -91,6 +95,7 @@ export default {
   "app.project.actions": "프로젝트 작업",
   "app.project.removeFromList": "목록에서 제거",
   "app.session.actions": "세션 작업",
+  "app.session.awaiting": "확인 대기",
 
   "app.topbar.sessionSettings": "세션 설정",
   "app.topbar.needSession": "먼저 세션을 열어 주세요",

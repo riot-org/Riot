@@ -10,6 +10,7 @@ export default {
   "composer.build.parallel": "平行建置",
   "composer.build.parallelHint": "多任務模式，背景子 agent 分工",
   "composer.build.message": "開始建置計畫",
+  "composer.placeholder.awaiting": "還有卡片等你處理…直接送出訊息會略過沒回答的卡片",
   "composer.placeholder.busy": "它正在做事…此刻送出會排隊，目前任務完成後自動送出",
   "composer.drop.hint": "放開，加進輸入框",
   "composer.closeEsc": "關閉 (Esc)",

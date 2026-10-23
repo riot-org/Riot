@@ -30,6 +30,10 @@ export default {
   "app.notify.scheduleDone.title": "排程任務完成",
 
   "app.notify.scheduleDone.body": "「{name}」已跑完，回來看看結果。",
+  "app.notify.awaiting.title": "需要你處理",
+  "app.notify.awaiting.body": "任務停下來等你確認，回來看看吧。",
+  "app.notify.scheduleWaiting.title": "排程任務等你處理",
+  "app.notify.scheduleWaiting.body": "「{name}」停下來等你確認。",
 
   "app.notify.scheduleFailed.title": "排程任務沒有執行成功",
 
@@ -91,6 +95,7 @@ export default {
   "app.project.actions": "專案操作",
   "app.project.removeFromList": "從列表移除",
   "app.session.actions": "會話操作",
+  "app.session.awaiting": "等你處理",
 
   "app.topbar.sessionSettings": "會話設定",
   "app.topbar.needSession": "請先開啟一個會話",

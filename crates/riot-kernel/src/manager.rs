@@ -205,8 +205,12 @@ impl SessionManager {
                 busy: s.is_running().await,
                 compacting: s.is_compacting(),
                 // 还挂着的权限询问。事件只发一次，切回来的界面靠快照
-                // 把弹窗重建出来。
-                pending_asks: s.pending_asks().snapshot().await,
+                // 把弹窗重建出来。停在等用户决定的那些也在里面。
+                pending_asks: {
+                    let mut asks = s.pending_asks().snapshot().await;
+                    asks.extend(s.suspended_asks().await);
+                    asks
+                },
                 live_text,
                 live_thinking,
                 tasks: s.tasks_snapshot(),
@@ -236,6 +240,8 @@ impl SessionManager {
         self.attach_host_proxies(&session, &id);
         let history = session.history().await;
         let archived = session.ui_archive().await;
+        // 上次停在等用户决定：卡片随水合一起回来。
+        let pending_asks = session.suspended_asks().await;
         // 子 agent 登记表随水合一起从盘上回来：Task 卡片要靖它认领自己的
         // 子 agent，重启后才点得开。
         let tasks = session.tasks_snapshot();
@@ -245,13 +251,14 @@ impl SessionManager {
             .lock()
             .await
             .insert(session_id.to_owned(), session);
-        // 刚水合的会话没有轮子在跑：没有挂着的询问，也没有半截流。
+        // 刚水合的会话没有轮子在跑：没有原地等的询问，也没有半截流；
+        // 只可能有停在等用户决定的。
         ResumeSnapshot {
             messages: history,
             archived,
             busy: false,
             compacting: false,
-            pending_asks: Vec::new(),
+            pending_asks,
             live_text: String::new(),
             live_thinking: String::new(),
             tasks,
@@ -341,7 +348,16 @@ impl SessionManager {
 
     /// 回应一个权限请求。request_id 属于哪个会话未知,逐个尝试 resolve ——
     /// 命中一个即返回(request_id 全局唯一,只可能落在一个会话的待答表里)。
-    pub async fn respond_permission(&self, request_id: &str, response: PermissionResponse) {
+    ///
+    /// 先找原地等的(子 agent、主 agent 挂起交接前的那一小段),再找停在
+    /// 等用户决定的挂起记录。挂起的答案收齐了就续跑:`config` 是宿主现给的
+    /// 这轮配置,没给就沿用上一轮。返回是否开了续跑轮(宿主据此置忙)。
+    pub async fn respond_permission(
+        &self,
+        request_id: &str,
+        response: PermissionResponse,
+        config: Option<TurnConfig>,
+    ) -> bool {
         let sessions: Vec<Arc<Session>> = self
             .sessions
             .lock()
@@ -349,11 +365,29 @@ impl SessionManager {
             .values()
             .map(Arc::clone)
             .collect();
-        for s in sessions {
+        for s in &sessions {
             if s.pending_asks().resolve(request_id, response.clone()).await {
-                return;
+                return false;
             }
         }
+        for s in sessions {
+            match s.answer_suspended(request_id, response.clone()).await {
+                None => continue,
+                Some(false) => return false,
+                Some(true) => {
+                    let cfg = match config {
+                        Some(c) => {
+                            let (caps, limits) = self.setup_turn(&s, &c).await;
+                            Some((c.model, caps, limits))
+                        }
+                        None => None,
+                    };
+                    let sink = s.sink();
+                    return s.resume(cfg, sink).await;
+                }
+            }
+        }
+        false
     }
 
     /// 会话设置 + 本轮能力。submit / regenerate 共用。

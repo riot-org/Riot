@@ -21,6 +21,7 @@ pub mod provider;
 pub mod rpc;
 pub mod runner;
 pub mod schedule;
+pub mod suspend;
 pub mod task;
 pub mod terminal;
 pub mod text;

@@ -209,6 +209,10 @@ pub enum RpcRequest {
     PermissionRespond {
         request_id: RequestId,
         response: PermissionResponse,
+        /// 这轮的配置。回答的是停在等用户决定的卡片、而且答案收齐了，内核
+        /// 就用它开续跑轮（见 `crate::suspend`）；没给就沿用上一轮的。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        config: Option<Box<crate::turn::TurnConfig>>,
     },
 
     #[serde(rename = "config.set_mode")]
@@ -322,6 +326,10 @@ pub enum RpcResponse {
     },
     Pong {
         version: String,
+    },
+    /// 回应了一个权限请求。`resumed` = 答案收齐、开了续跑轮。
+    PermissionResponded {
+        resumed: bool,
     },
     /// 无返回数据的成功。
     Ok,

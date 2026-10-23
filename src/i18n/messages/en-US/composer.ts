@@ -10,6 +10,7 @@ export default {
   "composer.build.parallel": "Build in parallel",
   "composer.build.parallelHint": "Multi-task mode; background subagents split the work",
   "composer.build.message": "Build the plan",
+  "composer.placeholder.awaiting": "Cards are waiting for you… sending a message skips the unanswered ones",
   "composer.placeholder.busy":
     "It's working… sending now queues the message; it goes out once the current task finishes",
   "composer.drop.hint": "Release to add to the composer",

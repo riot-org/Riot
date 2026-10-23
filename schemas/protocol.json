@@ -356,7 +356,23 @@
           "type": "object"
         },
         {
-          "description": "终止。\n\n**必须是流的最后一个事件，且必须出现。** 即使内核 panic 被捕获，\n也要合成一条 `Done { reason: Error }`。消费者依赖这一点做资源清理；\n缺失会导致 UI 永远转圈。由 INV-4 断言保证。",
+          "description": "终止。\n\n**必须是流的最后一个事件，且必须出现。** 即使内核 panic 被捕获，\n也要合成一条 `Done { reason: Error }`。消费者依赖这一点做资源清理；\n缺失会导致 UI 永远转圈。由 INV-4 断言保证。\n回合因为要人做决定而停下。紧挨在 `Done { AwaitingUser }` 之前，\n交给宿主落盘；界面不用它（卡片走 `PermissionRequest`）。",
+          "properties": {
+            "suspension": {
+              "$ref": "#/$defs/Suspension"
+            },
+            "type": {
+              "const": "suspended",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "suspension"
+          ],
+          "type": "object"
+        },
+        {
           "properties": {
             "reason": {
               "$ref": "#/$defs/TerminalReason"
@@ -3669,6 +3685,17 @@
             },
             "params": {
               "properties": {
+                "config": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/TurnConfig"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "这轮的配置。回答的是停在等用户决定的卡片、而且答案收齐了，内核\n就用它开续跑轮（见 `crate::suspend`）；没给就沿用上一轮的。"
+                },
                 "request_id": {
                   "type": "string"
                 },
@@ -4312,6 +4339,31 @@
           "type": "object"
         },
         {
+          "description": "回应了一个权限请求。`resumed` = 答案收齐、开了续跑轮。",
+          "properties": {
+            "data": {
+              "properties": {
+                "resumed": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "resumed"
+              ],
+              "type": "object"
+            },
+            "result": {
+              "const": "permission_responded",
+              "type": "string"
+            }
+          },
+          "required": [
+            "result",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
           "description": "无返回数据的成功。",
           "properties": {
             "result": {
@@ -4641,11 +4693,20 @@
       "type": "object"
     },
     "ScheduleRunPhase": {
-      "enum": [
-        "started",
-        "done"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "started",
+            "done"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "waiting",
+          "description": "这次运行停在等用户决定（权限确认、提问、表单）。还没跑完，用户答完\n续跑结束才会有 Done。",
+          "type": "string"
+        }
+      ]
     },
     "ScheduleRunRecord": {
       "description": "运行历史里的一条：这个任务的某一次执行。\n\n周期任务是**一个**任务反复跑，\"跑过哪几次、哪次失败了\"得有地方看 ——\n没有它，用户只能靠侧栏里一串同名会话回忆。",
@@ -4937,6 +4998,118 @@
         }
       ]
     },
+    "SuspendSlot": {
+      "description": "一批调用里的一个位置。顺序和模型发出的调用顺序一致。",
+      "oneOf": [
+        {
+          "description": "已经跑完。`result` 是一条 [`UserContent::ToolResult`]。",
+          "properties": {
+            "kind": {
+              "const": "done",
+              "type": "string"
+            },
+            "result": {
+              "$ref": "#/$defs/UserContent"
+            }
+          },
+          "required": [
+            "kind",
+            "result"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "等用户回答。",
+          "properties": {
+            "ask": {
+              "$ref": "#/$defs/SuspendedAsk"
+            },
+            "kind": {
+              "const": "asked",
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "tool_use_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "tool_use_id",
+            "name",
+            "ask"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "排在挂起的调用后面、还没跑的。批次之间有先后依赖（先读再写），\n中间那个没定下来就跑后面的，会打乱模型预期的执行顺序。",
+          "properties": {
+            "input": true,
+            "kind": {
+              "const": "deferred",
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "tool_use_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "tool_use_id",
+            "name",
+            "input"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SuspendedAsk": {
+      "description": "一条挂起中的询问：卡片详情，加上续跑时要执行的最终输入。",
+      "properties": {
+        "detail": {
+          "$ref": "#/$defs/PermissionAsk"
+        },
+        "input": {
+          "description": "hook 改写之后的输入。续跑按它执行 —— 退回原输入等于按 A 授权、\n去执行 B。"
+        },
+        "request_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id",
+        "detail",
+        "input"
+      ],
+      "type": "object"
+    },
+    "Suspension": {
+      "description": "一次挂起的全部内容。",
+      "properties": {
+        "side_messages": {
+          "description": "已完成的调用产生的旁路消息（hook 反馈、图片 metadata），续跑时\n跟在 tool_result 后面一起发。",
+          "items": {
+            "$ref": "#/$defs/Message"
+          },
+          "type": "array"
+        },
+        "slots": {
+          "items": {
+            "$ref": "#/$defs/SuspendSlot"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "slots"
+      ],
+      "type": "object"
+    },
     "SystemLevel": {
       "enum": [
         "info",
@@ -5051,6 +5224,25 @@
           "required": [
             "reason",
             "message"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "要人做决定（权限确认、提问、表单），回合先停下。`asks` 是等回答的\n卡片数。用户答完由宿主开一轮续跑，见 [`crate::suspend`]。",
+          "properties": {
+            "asks": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "reason": {
+              "const": "awaiting_user",
+              "type": "string"
+            }
+          },
+          "required": [
+            "reason",
+            "asks"
           ],
           "type": "object"
         },

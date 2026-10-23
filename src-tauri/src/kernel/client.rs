@@ -91,6 +91,8 @@ pub enum HostNotice {
     Done {
         session_id: String,
         error: Option<riot_protocol::event::AgentError>,
+        /// 这一轮停在等用户决定（`TerminalReason::AwaitingUser`），没跑完。
+        awaiting: bool,
     },
     /// 内核侧改了权限模式(用户在 SwitchMode 的卡片上同意)。宿主是设置权威,要记下来
     /// 并持久化 —— 否则下一轮 TurnConfig 又把旧模式传回去。
@@ -365,6 +367,7 @@ fn spawn_dispatch(
                                     let _ = host_tx.send(HostNotice::Done {
                                         session_id: sid.clone(),
                                         error,
+                                        awaiting: matches!(reason, TerminalReason::AwaitingUser { .. }),
                                     });
                                 }
                                 AgentEvent::ModeChanged { mode } => {
@@ -445,6 +448,7 @@ fn spawn_dispatch(
             let _ = host_tx.send(HostNotice::Done {
                 session_id: sid.clone(),
                 error: Some(gone),
+                awaiting: false,
             });
         }
         let _ = host_tx.send(HostNotice::KernelGone);

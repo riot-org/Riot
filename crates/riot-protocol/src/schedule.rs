@@ -231,6 +231,9 @@ pub struct ScheduleRun {
 #[serde(rename_all = "snake_case")]
 pub enum ScheduleRunPhase {
     Started,
+    /// 这次运行停在等用户决定（权限确认、提问、表单）。还没跑完，用户答完
+    /// 续跑结束才会有 Done。
+    Waiting,
     Done,
 }
 

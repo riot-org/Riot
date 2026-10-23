@@ -433,6 +433,9 @@ pub enum TurnStart {
     User(TurnInput),
     Regenerate,
     Notices(Vec<Message>),
+    /// 续跑：上一轮停在等用户决定，答案收齐了（见 riot_protocol::suspend）。
+    /// 历史什么都不追加，主循环先把挂起的那批调用跑完。
+    Resume,
 }
 
 /// 上一轮用的模型端点、能力、上限。
@@ -558,6 +561,10 @@ pub struct Session {
     /// 事件出口。前端每次订阅都会换掉里面的 channel，跑着的轮子跟着换。
     sink: SessionSink,
     pending_asks: Arc<PendingAsks>,
+    /// 回合停在等用户决定时的挂起记录和已收到的答案（见
+    /// riot_protocol::suspend）。落盘，重启后从 transcript 重建（见
+    /// [`Self::hydrate`]）。
+    suspended: Mutex<riot_protocol::suspend::SuspendState>,
     /// 进行中的半截流（见 [`LiveStream`]）。随 session.resume 快照回给界面。
     live_stream: Mutex<LiveStream>,
     /// 会话级采样覆盖。字段为 None 表示继承模型/provider 那两层。
@@ -893,6 +900,7 @@ impl Session {
             tasks,
             sink,
             pending_asks: Arc::new(PendingAsks::default()),
+            suspended: Mutex::new(Default::default()),
             live_stream: Mutex::new(LiveStream::default()),
             sampling_override: Mutex::new(Sampling::default()),
             python_venv: Mutex::new(None),
@@ -959,6 +967,7 @@ impl Session {
             tasks,
             sink,
             pending_asks: Arc::new(PendingAsks::default()),
+            suspended: Mutex::new(Default::default()),
             live_stream: Mutex::new(LiveStream::default()),
             sampling_override: Mutex::new(settings.sampling),
             python_venv: Mutex::new(settings.python_venv.clone()),
@@ -1102,6 +1111,8 @@ impl Session {
                 self.restore_baselines(&parts.archived, &parts.live);
                 self.restore_tasks(&parts.archived, &parts.live).await;
                 *self.ui_archive.lock().await = parts.archived;
+                // 上次停在等用户决定：卡片和已收到的答案原样还原，补答完照样续跑。
+                *self.suspended.lock().await = parts.suspended.unwrap_or_default();
                 if parts.live.is_empty() {
                     return;
                 }
@@ -1164,6 +1175,172 @@ impl Session {
 
     pub fn pending_asks(&self) -> Arc<PendingAsks> {
         Arc::clone(&self.pending_asks)
+    }
+
+    /// 挂起中还没回答的询问，并进快照给界面重建卡片。
+    pub async fn suspended_asks(&self) -> Vec<riot_protocol::permission::PendingAsk> {
+        self.suspended
+            .lock()
+            .await
+            .unanswered()
+            .into_iter()
+            .map(|a| riot_protocol::permission::PendingAsk {
+                request_id: a.request_id,
+                detail: a.detail,
+            })
+            .collect()
+    }
+
+    /// 接手主循环交来的挂起记录：落盘，取走交接前就收到的答案。
+    async fn adopt_suspension(&self, suspension: riot_protocol::suspend::Suspension) {
+        let ids: Vec<String> = suspension
+            .asks()
+            .map(|a| a.request_id.as_str().to_owned())
+            .collect();
+        if let Some(p) = &self.persist {
+            p.log.append_suspend(&suspension);
+        }
+        let early = self.pending_asks.take_suspended(&ids).await;
+        let mut st = riot_protocol::suspend::SuspendState::new(suspension);
+        for (id, response) in early {
+            if let Some(p) = &self.persist {
+                p.log.append_suspend_answer(&id, &response);
+            }
+            st.answers.insert(id, response);
+        }
+        tracing::info!(
+            session = %self.id.as_str(),
+            asks = ids.len(),
+            answered = st.answers.len(),
+            "回合停在等用户决定"
+        );
+        *self.suspended.lock().await = st;
+    }
+
+    /// 用户回答了一张挂起的卡片。`None` = 不是这个会话的；`Some(true)` =
+    /// 答案收齐了，调用方该续跑（见 [`Self::resume`]）。
+    pub async fn answer_suspended(
+        &self,
+        request_id: &str,
+        response: riot_protocol::permission::PermissionResponse,
+    ) -> Option<bool> {
+        let mut st = self.suspended.lock().await;
+        if !st.awaits(request_id) {
+            return None;
+        }
+        if let Some(p) = &self.persist {
+            p.log.append_suspend_answer(request_id, &response);
+        }
+        st.answers.insert(request_id.to_owned(), response);
+        Some(st.complete())
+    }
+
+    /// 答案收齐了就开一轮续跑。`cfg` 是宿主现给的这轮配置；没给（老宿主、
+    /// 挂起交接前就答完了）沿用上一轮的。返回是否真的开了轮。
+    pub async fn resume(
+        self: &Arc<Self>,
+        cfg: Option<(riot_protocol::ModelEndpoint, TurnCapabilities, TurnLimits)>,
+        sink: SessionSink,
+    ) -> bool {
+        if !self.suspended.lock().await.complete() {
+            return false;
+        }
+        let cfg = match cfg {
+            Some(c) => Some(c),
+            None => self
+                .last_turn
+                .lock()
+                .await
+                .clone()
+                .map(|l| (l.model, l.caps, l.limits)),
+        };
+        let Some((model, caps, limits)) = cfg else {
+            tracing::warn!(session = %self.id.as_str(), "答案收齐了，但没有可用的轮次配置，等下一次操作");
+            return false;
+        };
+        let cancel = CancellationToken::new();
+        {
+            let mut g = self.running.lock().await;
+            if g.is_some() {
+                return false;
+            }
+            *g = Some(cancel.clone());
+        }
+        tracing::info!(session = %self.id.as_str(), "答案收齐，续跑");
+        self.spawn_resume(model, caps, limits, cancel, sink);
+        true
+    }
+
+    /// 起续跑轮。调用方必须已经把 `running` 置成 `cancel`。
+    ///
+    /// 同步函数而不是在 [`Self::resume`] 里直接 spawn：`run_locked` 收场时
+    /// 会 await `resume`，`resume` 再 spawn `run_locked` —— async 里互相
+    /// 嵌套，编译器推不出 Send（和 [`Self::spawn_wake`] 同一个理由）。
+    fn spawn_resume(
+        self: &Arc<Self>,
+        model: riot_protocol::ModelEndpoint,
+        caps: TurnCapabilities,
+        limits: TurnLimits,
+        cancel: CancellationToken,
+        sink: SessionSink,
+    ) {
+        let this = Arc::clone(self);
+        tokio::spawn(async move {
+            if let Err(e) = this
+                .run_locked(TurnStart::Resume, model, caps, sink.clone(), cancel, limits)
+                .await
+            {
+                tracing::error!(error = %e, "续跑失败");
+                let _ = sink.send(AgentEvent::Done {
+                    reason: riot_protocol::event::TerminalReason::Error {
+                        error: riot_protocol::event::AgentError::Internal { error: e },
+                    },
+                });
+            }
+        });
+    }
+
+    /// 不等用户答完就收掉挂起：用户直接发了新消息，或者按了停止。
+    ///
+    /// 已完成的结果原样保留；没回答的、答了还没执行的、推迟的，都换成
+    /// 说明原因的错误结果，拼成一条 tool_result 消息进历史 —— 同一条
+    /// assistant 消息的结果必须一次给全。卡片收起。返回是否真有挂起。
+    async fn close_suspension(
+        &self,
+        sink: &SessionSink,
+        now_ms: u64,
+        asked: &str,
+        deferred: &str,
+    ) -> bool {
+        let st = std::mem::take(&mut *self.suspended.lock().await);
+        let Some(suspension) = st.suspension else {
+            return false;
+        };
+        let request_ids: Vec<_> = suspension.asks().map(|a| a.request_id.clone()).collect();
+        let (mut results, sides) = suspension.close_with(
+            MessageId::from_raw(self.ids.next_id("msg")),
+            asked,
+            deferred,
+        );
+        results.stamp(now_ms);
+        let mut history = self.history.lock().await;
+        for mut m in std::iter::once(results).chain(sides) {
+            m.stamp(now_ms);
+            if let Some(p) = &self.persist {
+                p.log.append(&m);
+            }
+            history.push(m.clone());
+            let _ = sink.send(AgentEvent::Message(m));
+        }
+        drop(history);
+        for request_id in request_ids {
+            let _ = sink.send(AgentEvent::PermissionResolved {
+                request_id,
+                reason: riot_protocol::permission::DecisionReason::UserChoice { remembered: false },
+            });
+        }
+        tracing::info!(session = %self.id.as_str(), "挂起被收掉，没回答的调用不执行");
+        true
     }
 
     /// 进行中的半截流快照：（正文, 思考）。空闲时两段都是空串。
@@ -1350,7 +1527,18 @@ impl Session {
     /// `false` 给前端一个明确信号：宿主已经闲着，该把残留的停止键收掉。
     /// 只记日志的话，界面还转圈，用户连点停止也毫无反应。
     pub async fn interrupt(&self) -> bool {
-        self.cancel_turn(true).await
+        if self.cancel_turn(true).await {
+            return true;
+        }
+        // 没有轮在跑，但停在等用户决定：停止键就是"这些都不做了"。
+        let now = riot_protocol::tool::Clock::now_ms(&riot_providers::watchdog::TokioClock);
+        self.close_suspension(
+            &self.sink(),
+            now,
+            "The user stopped the task before answering; this call was not run.",
+            "The user stopped the task; this call was not run.",
+        )
+        .await
     }
 
     /// 关会话 / 退应用时取消本轮，**连同全部后台子 agent**。
@@ -1405,6 +1593,16 @@ impl Session {
                     msg: notice,
                 });
                 tracing::info!(session = %self.id.as_str(), "后台任务通知已排队，安全点注入");
+                return;
+            }
+            // 停在等用户决定：历史末尾是还没有结果的 tool_use，这时塞一条
+            // 通知进去序列就非法了。攒着，续跑或下一轮开工时一并注入。
+            if self.suspended.lock().await.suspension.is_some() {
+                tracing::info!(session = %self.id.as_str(), "会话在等用户决定，通知先攒着");
+                self.pending_notices
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(notice);
                 return;
             }
             let Some(last) = self.last_turn.lock().await.clone() else {
@@ -2217,6 +2415,8 @@ impl Session {
         *self.live_stream.lock().await = LiveStream::default();
         let _ = self.queue.take_all();
         self.pending_asks.clear().await;
+        // 挂起的调用所在的那条 assistant 消息已经被截掉了。
+        *self.suspended.lock().await = Default::default();
         *self.env_seen.lock().await = env_seen;
         *self.env_band.lock().await = 0;
         self.forget_multitask_announce();
@@ -2499,6 +2699,15 @@ impl Session {
                 "轮次收场时有通知或新 MCP 工具，就地唤起新的一轮"
             );
             self.spawn_wake(wake, sink);
+        } else if matches!(
+            result,
+            Ok(Some(
+                riot_protocol::event::TerminalReason::AwaitingUser { .. }
+            ))
+        ) {
+            // 挂起记录交给会话之前用户就答完了（同批兄弟跑得久，卡片早就
+            // 显示出来）：不用再等，直接续跑。
+            self.resume(None, sink).await;
         }
         result.map(|_| ())
     }
@@ -2582,6 +2791,13 @@ impl Session {
             }
             wake
         };
+        // 转了挂起却没交到会话手里的询问（挂起之后这一轮被停止了）：卡片收起。
+        for id in self.pending_asks.drop_suspended().await {
+            let _ = self.sink.send(AgentEvent::PermissionResolved {
+                request_id: riot_protocol::id::RequestId::from_raw(id),
+                reason: riot_protocol::permission::DecisionReason::UserChoice { remembered: false },
+            });
+        }
         // 占位在正常路径上定稿时就撤了；这里兜住半路失败的那条（比如缺
         // key，消息根本没进历史也没落盘）。留着的话，界面上会挂着一条
         // 永远等不到回复、重启之后又消失的用户消息。
@@ -3582,10 +3798,46 @@ impl Session {
                 u64::from(limits.ask_timeout_secs)
                     .clamp(*ASK_TIMEOUT_RANGE.start(), *ASK_TIMEOUT_RANGE.end()),
             ),
+            // 主 agent 要问人时挂起回合（见 riot_protocol::suspend）；子 agent
+            // 拿的是 for_subagents() 那份，照旧原地等。
+            suspendable: true,
+            preanswered: Default::default(),
             hooks: Arc::clone(&hook_engine),
             classifier: Arc::clone(&caps.classifier),
             fs: Arc::new(SystemFs::new()),
         });
+        let subagent_gate: Arc<dyn PermissionGate> = Arc::new(gate.for_subagents());
+
+        // 续跑：取出挂起记录，答案按 tool_use_id 挂到闸上（命中的调用直接
+        // 按答案走，不再过 hook 和决策链）。其他起点先把挂起收掉 —— 用户
+        // 没回答、直接发了新消息（重新生成走不到这里：截历史时已经清了）。
+        let resume = if matches!(input, TurnStart::Resume) {
+            let st = std::mem::take(&mut *self.suspended.lock().await);
+            let Some(suspension) = st.suspension else {
+                tracing::warn!(session = %self.id.as_str(), "续跑时挂起记录已经不在了");
+                return Ok(None);
+            };
+            let answers = suspension
+                .asks()
+                .filter_map(|a| {
+                    st.answers
+                        .get(a.request_id.as_str())
+                        .map(|r| (a.detail.tool_use_id.as_str().to_owned(), r.clone()))
+                })
+                .collect();
+            gate.preanswer(answers);
+            Some(suspension)
+        } else {
+            self.close_suspension(
+                &sink,
+                clock.now_ms(),
+                "The user did not answer and sent a new message instead (see the next \
+                 message); this call was not run.",
+                "The user sent a new message before this call could run; it was not run.",
+            )
+            .await;
+            None
+        };
 
         // 本轮的工具 = 内置 + 子 agent + 外部（MCP、Skill）。
         //
@@ -3598,7 +3850,7 @@ impl Session {
             provider: Arc::clone(&provider),
             model: model.model.clone(),
             cheap: caps.subagent_cheap.clone(),
-            gate: Arc::clone(&gate) as Arc<dyn PermissionGate>,
+            gate: Arc::clone(&subagent_gate),
             // 和上面那个 gate 来自同一次 activate。缺了它，子 agent 的
             // 命令在宿主上裸跑而闸里写着 sandboxed: true。
             sandbox: sandbox.clone(),
@@ -3721,7 +3973,7 @@ impl Session {
         // 分叉种子里也要 prompt_ctx 和 deferred，装配前先留一份。
         let fork_prompt_ctx = prompt_ctx.clone();
         let fork_deferred = deferred.clone();
-        let fork_gate: Arc<dyn PermissionGate> = Arc::clone(&gate) as Arc<dyn PermissionGate>;
+        let fork_gate: Arc<dyn PermissionGate> = Arc::clone(&subagent_gate);
         let scheduler = self.build_scheduler(
             ToolAssembly {
                 registry,
@@ -3848,7 +4100,13 @@ impl Session {
         // 服务端（智谱等）能跑，于是表现成"换个模型就好了"。就地补上
         // 错误结果。transcript 不回写：修复是幂等且确定的，每次组请求
         // 前重修一遍，重启后加载的脏历史同样在这里被治好。
-        let repaired = riot_core::repair::repair_tool_pairing(&mut history);
+        // 续跑的那批调用此刻正该没有结果（主循环马上补上），不能当孤儿修掉。
+        let repaired = match &resume {
+            Some(r) => {
+                riot_core::repair::repair_tool_pairing_except(&mut history, &r.tool_use_ids())
+            }
+            None => riot_core::repair::repair_tool_pairing(&mut history),
+        };
         if repaired > 0 {
             tracing::warn!(
                 session = %self.id.as_str(),
@@ -3864,8 +4122,10 @@ impl Session {
         // 攒着的后台任务通知（上一轮没赶上安全点、或到得太早）跟着这一轮
         // 进历史。重新生成不夹带：那一轮是"把上一个回答重来"，历史已经截到
         // 提问，塞通知进去会改变被重来的那个问题 —— 留到再下一轮。
+        // 续跑也不夹带：历史末尾是还没有结果的 tool_use，通知插进去序列就
+        // 非法了 —— 留到下一轮。
         let pending_notices = match &input {
-            TurnStart::Regenerate => Vec::new(),
+            TurnStart::Regenerate | TurnStart::Resume => Vec::new(),
             _ => std::mem::take(
                 &mut *self
                     .pending_notices
@@ -3883,6 +4143,7 @@ impl Session {
         };
 
         match input {
+            TurnStart::Resume => {}
             TurnStart::Regenerate => {
                 if history.is_empty() {
                     return Err(ui_error!("kernel.history.noPromptBefore"));
@@ -4054,6 +4315,7 @@ impl Session {
             system,
             max_output_tokens_override: model.sampling.max_output_tokens,
             thinking: self.thinking().await,
+            resume,
             ..state
         };
 
@@ -4086,6 +4348,13 @@ impl Session {
             // 前端、内存历史和磁盘，三边拿到的是同一个数。
             if let AgentEvent::Message(m) = &mut ev {
                 m.stamp(clock.now_ms());
+            }
+            // 挂起记录只给宿主：落盘、收着，界面不用它（卡片已经由
+            // PermissionRequest 发过了）。紧跟着就是 Done { AwaitingUser }。
+            if let AgentEvent::Suspended { suspension } = ev {
+                produced = true;
+                self.adopt_suspension(*suspension).await;
+                continue;
             }
             if leaves_a_trace(&ev) {
                 produced = true;
@@ -5216,6 +5485,9 @@ mod tests {
             cwd: s.cwd.clone(),
             // 短超时：hook 要真卡住，测试该很快失败而不是挂十分钟。
             ask_timeout: Duration::from_secs(2),
+            // 这些用例测的是原地等的那条路（子 agent 的闸）；挂起另有用例。
+            suspendable: false,
+            preanswered: Default::default(),
             hooks: Arc::new(crate::hooks::HookEngine::from_config_json(hooks, &s.cwd)),
             classifier: Arc::new(riot_protocol::permission::NoClassifier),
             fs: Arc::new(SystemFs::new()),
@@ -5461,6 +5733,7 @@ mod tests {
                 )
             }
             GateOutcome::Allow { .. } => panic!("hook 说了不行，不能放行"),
+            GateOutcome::Suspend { .. } => panic!("hook 说了不行，不该问人"),
         }
     }
 
@@ -5573,6 +5846,7 @@ mod tests {
                 "改写没跟到执行"
             ),
             GateOutcome::Deny { message } => panic!("不该拒：{message}"),
+            GateOutcome::Suspend { .. } => panic!("不该问人"),
         }
     }
 
@@ -5628,6 +5902,8 @@ mod tests {
             mode_live: Arc::clone(&s.mode),
             cwd: s.cwd.clone(),
             ask_timeout: Duration::from_secs(60),
+            suspendable: true,
+            preanswered: Default::default(),
             hooks: Arc::new(crate::hooks::HookEngine::empty()),
             classifier: Arc::new(riot_protocol::permission::NoClassifier),
             fs: Arc::new(SystemFs::new()),
@@ -9052,5 +9328,190 @@ mod tests {
         s.apply_checkpoint_if_present("u1").await;
         s.clear_redo();
         assert!(!s.redo_available(), "Resend/Regenerate 之后不能再 Redo");
+    }
+
+    // ── 挂起与续跑（riot_protocol::suspend） ─────────────────────────
+
+    /// 模型发一道选择题。提问永远要问人，正好用来走挂起。
+    fn ask_question(id: &str, tu: &str) -> Message {
+        Message::Assistant {
+            id: MessageId::from_raw(id),
+            content: vec![riot_protocol::message::AssistantContent::ToolUse {
+                id: riot_protocol::id::ToolUseId::from_raw(tu),
+                name: "AskUserQuestion".into(),
+                input: serde_json::json!({
+                    "question": "存哪里？",
+                    "options": [
+                        { "id": "o0", "label": "本地" },
+                        { "id": "o1", "label": "云端" },
+                    ],
+                }),
+            }],
+            usage: None,
+            meta: MessageMeta::default(),
+        }
+    }
+
+    /// 装好脚本 provider 和一个活着的出口（续跑走会话自己的出口）。
+    fn suspend_session(
+        dir: &std::path::Path,
+        responses: Vec<Vec<riot_protocol::provider::ProviderEvent>>,
+    ) -> (Arc<Session>, Arc<riot_core::testing::ScriptedProvider>) {
+        struct Discard;
+        impl EventSink for Discard {
+            fn send(&self, _event: AgentEvent) -> Result<(), SinkClosed> {
+                Ok(())
+            }
+        }
+        let s = Arc::new(Session::new(
+            SessionId::from_raw("s1"),
+            dir.to_path_buf(),
+            None,
+        ));
+        let scripted = Arc::new(riot_core::testing::ScriptedProvider::new(responses));
+        assert!(
+            s.test_provider
+                .set(Arc::clone(&scripted) as Arc<dyn Provider>)
+                .is_ok()
+        );
+        s.sink().attach(Arc::new(Discard));
+        (s, scripted)
+    }
+
+    async fn ask_turn(s: &Arc<Session>) {
+        s.run_turn(
+            TurnInput {
+                text: "帮我存一下".into(),
+                ..Default::default()
+            },
+            test_model(),
+            test_caps(),
+            s.sink(),
+            test_limits(),
+        )
+        .await
+        .expect("这一轮要跑完");
+    }
+
+    #[tokio::test]
+    // 续跑轮是 spawn 出去的，真睡着等它收场（没有注入时钟可推）。
+    #[allow(clippy::disallowed_methods)]
+    async fn 提问挂起_答完续跑_答案就是那条调用的结果() {
+        use riot_protocol::provider::ProviderEvent;
+        let dir = tempfile::tempdir().expect("临时目录");
+        let (s, scripted) = suspend_session(
+            dir.path(),
+            vec![
+                vec![ProviderEvent::Message(ask_question("a1", "tu_q"))],
+                vec![ProviderEvent::Message(hist_assistant("a2", "存到云端了"))],
+            ],
+        );
+        ask_turn(&s).await;
+
+        assert!(!s.is_running().await, "停在等用户决定时会话是空闲的");
+        let asks = s.suspended_asks().await;
+        assert_eq!(asks.len(), 1, "卡片要留着");
+        let last = s.history().await.last().cloned().expect("有历史");
+        assert!(
+            last.tool_result_ids().is_empty() && !last.tool_use_ids().is_empty(),
+            "挂起时不写结果：{last:?}"
+        );
+
+        let done = s
+            .answer_suspended(
+                asks[0].request_id.as_str(),
+                PermissionResponse::Allow {
+                    remember: vec![],
+                    choice: vec!["o1".into()],
+                },
+            )
+            .await;
+        assert_eq!(done, Some(true));
+        assert!(s.resume(None, s.sink()).await, "答案收齐要续跑");
+        for _ in 0..500 {
+            if scripted.requests().len() >= 2 && !s.is_running().await {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let reqs = scripted.requests();
+        assert_eq!(reqs.len(), 2, "续跑之后才再请求模型");
+        let sent = serde_json::to_string(&reqs[1].messages).expect("可序列化");
+        assert!(
+            sent.contains("云端"),
+            "用户的选择要成为那条调用的结果：{sent}"
+        );
+        assert!(!sent.contains("Result lost"), "不能被当成孤儿修掉：{sent}");
+        assert!(s.suspended_asks().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn 没回答直接发新消息_没答的调用补成说明再接上这句话() {
+        use riot_protocol::provider::ProviderEvent;
+        let dir = tempfile::tempdir().expect("临时目录");
+        let (s, scripted) = suspend_session(
+            dir.path(),
+            vec![
+                vec![ProviderEvent::Message(ask_question("a1", "tu_q"))],
+                vec![ProviderEvent::Message(hist_assistant("a2", "好，换个做法"))],
+            ],
+        );
+        ask_turn(&s).await;
+        s.run_turn(
+            TurnInput {
+                text: "算了，先不存".into(),
+                ..Default::default()
+            },
+            test_model(),
+            test_caps(),
+            s.sink(),
+            test_limits(),
+        )
+        .await
+        .expect("这一轮要跑完");
+
+        assert!(s.suspended_asks().await.is_empty(), "挂起要被收掉");
+        let reqs = scripted.requests();
+        assert_eq!(reqs.len(), 2);
+        let sent = serde_json::to_string(&reqs[1].messages).expect("可序列化");
+        let note = sent
+            .find("did not answer and sent a new message")
+            .expect("没答的调用要说明原因");
+        let prompt = sent.find("算了，先不存").expect("用户这句话要发出去");
+        assert!(note < prompt, "结果在前、新消息在后：{sent}");
+    }
+
+    #[tokio::test]
+    async fn 停在等用户决定时按停止_补成中断结果不开新轮() {
+        use riot_protocol::provider::ProviderEvent;
+        let dir = tempfile::tempdir().expect("临时目录");
+        let (s, scripted) = suspend_session(
+            dir.path(),
+            vec![vec![ProviderEvent::Message(ask_question("a1", "tu_q"))]],
+        );
+        ask_turn(&s).await;
+
+        assert!(s.interrupt().await, "停止键要收掉挂起");
+        assert!(s.suspended_asks().await.is_empty());
+        let last = s.history().await.last().cloned().expect("有历史");
+        assert_eq!(
+            last.tool_result_ids(),
+            vec![&riot_protocol::id::ToolUseId::from_raw("tu_q")],
+            "那条调用要有结果"
+        );
+        assert!(!s.is_running().await);
+        assert_eq!(scripted.requests().len(), 1, "停止不开新轮");
+    }
+
+    #[tokio::test]
+    async fn 子_agent_的闸不挂起() {
+        let s = Session::new(
+            SessionId::from_raw("s1"),
+            std::path::PathBuf::from("/tmp"),
+            None,
+        );
+        let mut main = gate_with_hooks(&s, serde_json::json!({}));
+        main.suspendable = true;
+        assert!(!main.for_subagents().suspendable);
     }
 }

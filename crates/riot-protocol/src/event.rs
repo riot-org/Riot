@@ -132,7 +132,15 @@ pub enum AgentEvent {
     /// **必须是流的最后一个事件，且必须出现。** 即使内核 panic 被捕获，
     /// 也要合成一条 `Done { reason: Error }`。消费者依赖这一点做资源清理；
     /// 缺失会导致 UI 永远转圈。由 INV-4 断言保证。
-    Done { reason: TerminalReason },
+    /// 回合因为要人做决定而停下。紧挨在 `Done { AwaitingUser }` 之前，
+    /// 交给宿主落盘；界面不用它（卡片走 `PermissionRequest`）。
+    Suspended {
+        suspension: Box<crate::suspend::Suspension>,
+    },
+
+    Done {
+        reason: TerminalReason,
+    },
 }
 
 impl AgentEvent {
@@ -174,6 +182,10 @@ pub enum Transition {
     TodoReconcile,
     /// 接近预算，注入提醒后继续。
     TokenBudgetNudge,
+    /// 续跑：上一轮停在等用户决定，答案到了，先把那批调用跑完。这一次
+    /// `RequestStart` 后面跟的是工具执行而不是模型请求 —— 发它是为了让
+    /// 界面和宿主知道"又开始干活了"（它们都靠 turn 0 的 RequestStart 置忙）。
+    ResumedAfterUser,
 }
 
 /// 终止原因。
@@ -199,6 +211,11 @@ pub enum TerminalReason {
     },
     StopHookPrevented {
         message: String,
+    },
+    /// 要人做决定（权限确认、提问、表单），回合先停下。`asks` 是等回答的
+    /// 卡片数。用户答完由宿主开一轮续跑，见 [`crate::suspend`]。
+    AwaitingUser {
+        asks: u32,
     },
     /// 不可恢复错误。可恢复的错误不会走到这里 —— 它们被扣留并触发恢复循环。
     /// 见 ARCHITECTURE.md §5.4

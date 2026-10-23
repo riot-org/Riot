@@ -375,6 +375,13 @@ export function appendToolOutput(items: Item[], lines: { id: string; text: strin
 
 export function applyDone(s: SessionState, event: Extract<AgentEvent, { type: "done" }>): SessionState {
   const items = [...s.items];
+  const r = event.reason;
+
+  // 回合停在等用户决定：卡片要留着等人答，那几个调用也确实还没结束（答完
+  // 续跑才有结果），工具卡片保持原样。
+  if (r.reason === "awaiting_user") {
+    return { ...s, busy: false, compacting: false, streaming: "", thinking: "", streamingPlan: null };
+  }
 
   // 收尾时把还挂着 running 的工具卡片改掉。否则界面上会永远转圈，
   // 而后台其实什么都没在跑了。
@@ -385,7 +392,6 @@ export function applyDone(s: SessionState, event: Extract<AgentEvent, { type: "d
     }
   }
 
-  const r = event.reason;
   if (r.reason === "error") {
     // 失败只在 Done 里报一次（内核不再往历史写 System 消息），这里是它
     // 唯一的画法。宿主同时把它记成会话状态，切走再切回靠快照画回来。

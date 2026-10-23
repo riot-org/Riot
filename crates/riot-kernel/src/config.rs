@@ -758,6 +758,9 @@ pub struct AppConfig {
     pub default_mode: Option<riot_protocol::permission::PermissionMode>,
     /// 权限弹窗等多久算超时（秒）。超时按拒绝处理。
     ///
+    /// 只管原地等的那几条闸（子 agent）。主 agent 要问人时挂起回合、不计时
+    /// （见 riot_protocol::suspend）。
+    ///
     /// 可配置是因为两种用法要的值差一个量级：盯着屏幕的人希望等久点，
     /// 别手一慢就被拒；挂着跑长任务的人希望快点放弃 —— 那个弹窗根本
     /// 没人看，等待只是让整条任务停在那里。

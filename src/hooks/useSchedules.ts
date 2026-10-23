@@ -47,7 +47,10 @@ export function useSchedules(applySessions: (next: SessionInfo[]) => void) {
         .then(applySessions)
         .catch(() => {});
       // 系统通知由前端发：文案要跟界面语言走，宿主那边没有词典。
-      // 只在跑完那一拍发，开跑不打扰。
+      // 只在跑完、或停在等用户决定那一拍发，开跑不打扰。
+      if (run.phase === "waiting") {
+        void notify(t("app.notify.scheduleWaiting.title"), t("app.notify.scheduleWaiting.body", { name: run.name }));
+      }
       if (run.phase === "done") {
         if (run.error) {
           void notify(

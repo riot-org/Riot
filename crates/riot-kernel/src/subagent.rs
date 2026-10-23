@@ -837,6 +837,12 @@ pub async fn run_job(
             BackgroundTaskStatus::Failed,
             "子任务被 stop hook 拦下 —— 这不该发生在子 agent 上，请上报这个问题。".into(),
         ),
+        // 子 agent 的闸不挂起（见 HostGate::for_subagents），理论上到不了；
+        // 同上，穷举比通配安全。
+        Some(TerminalReason::AwaitingUser { .. }) => (
+            BackgroundTaskStatus::Failed,
+            "子任务停在等用户决定 —— 这不该发生在子 agent 上，请上报这个问题。".into(),
+        ),
         None => (
             BackgroundTaskStatus::Failed,
             "子任务的事件流异常结束（没有终止事件）".into(),

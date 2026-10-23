@@ -10,6 +10,7 @@ export default {
   "composer.build.parallel": "병렬 빌드",
   "composer.build.parallelHint": "멀티태스크 모드, 백그라운드 하위 agent가 분담",
   "composer.build.message": "계획 빌드 시작",
+  "composer.placeholder.awaiting": "답하지 않은 카드가 있습니다… 바로 보내면 답하지 않은 카드는 건너뜁니다",
   "composer.placeholder.busy":
     "작업 중입니다… 지금 보내면 대기열에 들어가고, 현재 작업이 끝나면 자동으로 전송됩니다",
   "composer.drop.hint": "놓으면 입력창에 추가됩니다",

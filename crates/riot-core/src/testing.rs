@@ -263,6 +263,7 @@ impl ToolRunner for ScriptedToolRunner {
                 },
             },
             side_messages: Vec::new(),
+            suspended: None,
             cancelled,
         }));
 
@@ -440,6 +441,7 @@ impl ToolRunner for BreachingToolRunner {
                     },
                 },
                 side_messages: Vec::new(),
+                suspended: None,
                 cancelled: 0,
             },
         )]))

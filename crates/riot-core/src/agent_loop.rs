@@ -99,6 +99,18 @@ pub fn run_agent(
                 return;
             }
 
+            // ── 续跑 ──────────────────────────────────────────────
+            // 上次停在等用户决定。答案到了：不发请求，直接把那批调用跑完。
+            let resumed = state.resume.take();
+            let calls = if let Some(r) = &resumed {
+                yield AgentEvent::RequestStart {
+                    turn: state.turn,
+                    model: state.model.clone(),
+                    after: Some(Transition::ResumedAfterUser),
+                };
+                r.calls_to_run()
+            } else {
+
             yield AgentEvent::RequestStart {
                 turn: state.turn,
                 model: state.model.clone(),
@@ -440,6 +452,8 @@ pub fn run_agent(
             }
             state.tool_calls_since_todo =
                 todo_nudge::advance(state.tool_calls_since_todo, calls.iter().map(|c| &c.name));
+            calls
+            };
 
             let batch_ctx = BatchContext {
                 session_id: state.session_id.clone(),
@@ -491,7 +505,48 @@ pub fn run_agent(
                 return;
             }
 
+            // 续跑的批次：和上次已完成的结果合到一起。又挂起了就合并槽位；
+            // 跑完了就按原顺序拼成一条 tool_result 消息。
+            let outcome = outcome.map(|mut o| {
+                match (resumed, o.suspended.take()) {
+                    (Some(prev), Some(newer)) => o.suspended = Some(Box::new(prev.merge(*newer))),
+                    (Some(prev), None) => {
+                        let (id, fresh) = match o.results {
+                            Message::User { id, content, .. } => (id, content),
+                            other => (other.id().clone(), Vec::new()),
+                        };
+                        let (results, mut sides) = prev.into_results(id, fresh);
+                        sides.append(&mut o.side_messages);
+                        o.results = results;
+                        o.side_messages = sides;
+                    }
+                    (None, s) => o.suspended = s,
+                }
+                o
+            });
+
             match outcome {
+                // 有调用要人做决定：回合停下，记录交给宿主落盘，不写 tool_result
+                //（见 riot_protocol::suspend）。用户已经按了停止的话不挂起，
+                // 下面照中断收场。
+                Some(o) if o.suspended.is_some() && !cancel.is_cancelled() => {
+                    let Some(suspension) = o.suspended else { unreachable!() };
+                    let asks = u32::try_from(suspension.asks().count()).unwrap_or(u32::MAX);
+                    yield AgentEvent::Suspended { suspension };
+                    yield AgentEvent::Done { reason: TerminalReason::AwaitingUser { asks } };
+                    return;
+                }
+                Some(o) if o.suspended.is_some() => {
+                    if let Some(msg) = synthesize_cancelled_results(&state) {
+                        state.messages.push(msg.clone());
+                        yield AgentEvent::Message(msg);
+                    }
+                    invariants::check_tool_pairing(&state.messages);
+                    yield AgentEvent::Done {
+                        reason: TerminalReason::Aborted { by: AbortSource::User },
+                    };
+                    return;
+                }
                 Some(o) => {
                     state.messages.push(o.results.clone());
                     yield AgentEvent::Message(o.results);

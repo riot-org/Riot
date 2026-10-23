@@ -117,6 +117,15 @@ describe("applyDone", () => {
     expect(applyDone(state({ asks: [ask] }), done).asks).toEqual([]);
     expect(applyDone(state({ asks: [ask], tasks: [bg] }), done).asks).toEqual([ask]);
   });
+
+  it("keeps cards and running tools when the turn pauses for the user", () => {
+    const ask = { requestId: "r1", detail: {} as never };
+    const s = state({ busy: true, asks: [ask], items: [tool("t1")] });
+    const out = applyDone(s, { type: "done", reason: { reason: "awaiting_user", asks: 1 } });
+    expect(out.busy).toBe(false);
+    expect(out.asks).toEqual([ask]);
+    expect(out.items[0]).toMatchObject({ status: "running" });
+  });
 });
 
 describe("appendToolOutput", () => {

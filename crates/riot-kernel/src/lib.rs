@@ -332,12 +332,12 @@ async fn dispatch(request: RpcRequest, manager: &manager::SessionManager) -> Rpc
         Req::PermissionRespond {
             request_id,
             response,
-        } => {
-            manager
-                .respond_permission(request_id.as_str(), response)
-                .await;
-            RpcResponse::Ok
-        }
+            config,
+        } => RpcResponse::PermissionResponded {
+            resumed: manager
+                .respond_permission(request_id.as_str(), response, config.map(|c| *c))
+                .await,
+        },
         Req::QueueList { session_id } => RpcResponse::QueueList {
             entries: manager.queue_list(session_id.as_str()).await,
         },

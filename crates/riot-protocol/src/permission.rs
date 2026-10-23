@@ -38,6 +38,11 @@ pub enum GateOutcome {
     /// 拒绝。`message` 会作为 tool_result 发回模型 —— 所以要写成模型能
     /// 据此改变行为的话，而不是给人看的错误码。
     Deny { message: String },
+    /// 要人做决定，而这条闸不在原地等（主 agent）：回合停下，用户答完
+    /// 再续跑。见 [`crate::suspend`]。
+    Suspend {
+        ask: Box<crate::suspend::SuspendedAsk>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

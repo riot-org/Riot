@@ -41,7 +41,7 @@ pub enum BatchEvent {
     Done(BatchOutcome),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ToolCall {
     pub id: ToolUseId,
     pub name: String,
@@ -66,4 +66,7 @@ pub struct BatchOutcome {
     pub side_messages: Vec<Message>,
     /// 本批有多少个工具因中断而未跑完。
     pub cancelled: usize,
+    /// 有调用在等用户决定：这时 `results` 是空的，全部结果（已完成的、
+    /// 挂起的、推迟的）都在这条记录的槽位里。见 [`crate::suspend`]。
+    pub suspended: Option<Box<crate::suspend::Suspension>>,
 }

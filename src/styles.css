@@ -1808,6 +1808,17 @@ html[data-host='web'] body {
   animation: thread-busy-pulse 1.6s ease-in-out infinite;
 }
 
+/* 停在等用户决定：不闪（没在跑），换个颜色和"在跑"区分开。 */
+.thread-awaiting {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--warn);
+  vertical-align: 1px;
+}
+
 @keyframes thread-busy-pulse {
   0%,
   100% {

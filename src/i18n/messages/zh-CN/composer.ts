@@ -11,6 +11,7 @@ export default {
   "composer.build.parallel": "并行构建",
   "composer.build.parallelHint": "多任务模式，后台子 agent 分工",
   "composer.build.message": "开始构建计划",
+  "composer.placeholder.awaiting": "还有卡片等你处理…直接发消息会跳过没回答的卡片",
   "composer.placeholder.busy": "它正在做事…此刻发送会排队，当前任务完成后自动发出",
   "composer.drop.hint": "松手，加进输入框",
   "composer.closeEsc": "关闭 (Esc)",

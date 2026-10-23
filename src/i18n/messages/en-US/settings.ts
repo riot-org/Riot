@@ -292,7 +292,7 @@ export default {
   "settings.permission.clamp.min": "Adjusted to the minimum, {value}",
   "settings.permission.timeout": "Approval timeout",
   "settings.permission.timeout.desc":
-    "How long a prompt waits for an answer before giving up; a timeout counts as a refusal. Range {min}–{max} seconds. Questions from the model are exempt and wait until you answer.",
+    "Applies only to approval prompts from background subtasks: how long one waits for an answer before giving up; a timeout counts as a refusal. Range {min}–{max} seconds. Confirmations, questions and forms in the main conversation have no time limit; the task pauses until you deal with them.",
   "settings.permission.timeout.aria": "Approval timeout (seconds)",
   "settings.permission.unit.seconds": "sec",
   "settings.permission.turns": "Per-turn step limit",

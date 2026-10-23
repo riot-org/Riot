@@ -442,6 +442,8 @@ export interface SessionInfo {
   model: string;
   /** 此刻有没有轮子在跑。侧栏给后台忙碌的会话画指示点用。 */
   busy: boolean;
+  /** 回合停在等用户决定（权限确认、提问、表单）。侧栏画"等你处理"。 */
+  awaitingUser: boolean;
 }
 
 export interface ConfigStatus {

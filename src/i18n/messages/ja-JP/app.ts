@@ -30,6 +30,10 @@ export default {
   "app.notify.scheduleDone.title": "スケジュールタスクが完了しました",
 
   "app.notify.scheduleDone.body": "「{name}」が完了しました。結果を確認してください。",
+  "app.notify.awaiting.title": "確認が必要です",
+  "app.notify.awaiting.body": "タスクがあなたの確認を待って止まっています。",
+  "app.notify.scheduleWaiting.title": "定期タスクが確認を待っています",
+  "app.notify.scheduleWaiting.body": "「{name}」があなたの確認を待って止まっています。",
 
   "app.notify.scheduleFailed.title": "スケジュールタスクが失敗しました",
 
@@ -91,6 +95,7 @@ export default {
   "app.project.actions": "プロジェクト操作",
   "app.project.removeFromList": "一覧から削除",
   "app.session.actions": "セッション操作",
+  "app.session.awaiting": "確認待ち",
 
   "app.topbar.sessionSettings": "セッション設定",
   "app.topbar.needSession": "先にセッションを開いてください",

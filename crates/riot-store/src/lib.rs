@@ -40,6 +40,8 @@ use tokio::sync::{mpsc, oneshot};
 
 use riot_protocol::id::SessionId;
 use riot_protocol::message::{Attachment, Message, UserContent};
+use riot_protocol::permission::PermissionResponse;
+use riot_protocol::suspend::{SuspendState, Suspension};
 
 /// transcript 里的一行。
 ///
@@ -118,6 +120,19 @@ pub enum Record {
     /// 记录写下的是"删了哪些"这个**结果**，重放不需要再判定一遍；
     /// 判定逻辑将来变了，旧记录的重放结果也不会跟着漂移。
     Delete { id: String },
+    /// 回合停在等用户决定（见 `riot_protocol::suspend`）。
+    ///
+    /// 不另记"续跑完了"：续跑那一轮写出的 tool_result 本身就说明挂起已经
+    /// 结束。加载时只认最后一条，且只在那些 tool_use 还在活历史里、又都
+    /// 没有结果时才还原 —— 回滚、编辑、停止都会让它自然作废。
+    /// 旧加载器不认识这行会当坏行跳过：卡片丢了，悬空的 tool_use 由内核
+    /// 的历史自愈补上，会话照样能用。
+    Suspend { suspension: Box<Suspension> },
+    /// 挂起期间收到的一条答案。重启后补答剩下的，不用把已答的再答一遍。
+    SuspendAnswer {
+        request_id: String,
+        response: PermissionResponse,
+    },
 }
 
 /// transcript 里记下的一张用户附图。`text` 有值 = 当时是视觉兼容的转述图。
@@ -202,6 +217,23 @@ pub struct LoadedTranscript {
     pub live: Vec<Message>,
     /// 边界之前的消息。文件里还在，只是不再进模型上下文。
     pub archived: Vec<Message>,
+    /// 还在等用户决定的挂起（见 [`Record::Suspend`]）。
+    pub suspended: Option<SuspendState>,
+}
+
+/// 挂起记录还作不作数：它的调用都还在活历史里，而且一个结果都没有。
+/// 续跑写了结果、停止补了结果、回滚截掉了那条 assistant 消息，都让它作废。
+fn suspension_is_open(st: &SuspendState, live: &[Message]) -> bool {
+    let Some(s) = &st.suspension else {
+        return false;
+    };
+    let ids = s.tool_use_ids();
+    let uses: std::collections::HashSet<_> = live.iter().flat_map(|m| m.tool_use_ids()).collect();
+    let results: std::collections::HashSet<_> =
+        live.iter().flat_map(|m| m.tool_result_ids()).collect();
+    !ids.is_empty()
+        && ids.iter().all(|id| uses.contains(id))
+        && !ids.iter().any(|id| results.contains(id))
 }
 
 /// 扫描一个 transcript 得到的摘要。索引重建用。
@@ -264,6 +296,7 @@ impl Transcripts {
             meta: None,
             live: Vec::new(),
             archived: Vec::new(),
+            suspended: None,
         };
         let path = self.path_of(id);
         let bytes = match tokio::fs::read(&path).await {
@@ -279,6 +312,7 @@ impl Transcripts {
         let mut live = Vec::new();
         let mut archived = Vec::new();
         let mut rewind_stack = Vec::new();
+        let mut suspended: Option<SuspendState> = None;
         let mut skipped = 0usize;
         for (i, line) in bytes.split(|&b| b == b'\n').enumerate() {
             if line.is_empty() {
@@ -323,6 +357,17 @@ impl Transcripts {
                 Ok(Record::Delete { id }) => {
                     apply_delete(&mut live, &mut archived, &id);
                 }
+                Ok(Record::Suspend { suspension }) => {
+                    suspended = Some(SuspendState::new(*suspension));
+                }
+                Ok(Record::SuspendAnswer {
+                    request_id,
+                    response,
+                }) => {
+                    if let Some(st) = suspended.as_mut().filter(|st| st.awaits(&request_id)) {
+                        st.answers.insert(request_id, response);
+                    }
+                }
                 Err(e) => {
                     skipped += 1;
                     tracing::debug!(line = i + 1, error = %e, "transcript 有读不懂的行");
@@ -336,10 +381,12 @@ impl Transcripts {
                 "transcript 里有 {skipped} 行读不懂，已跳过（多半是上次崩溃留下的半行）"
             );
         }
+        let suspended = suspended.filter(|st| suspension_is_open(st, &live));
         LoadedTranscript {
             meta,
             live,
             archived,
+            suspended,
         }
     }
 
@@ -603,6 +650,11 @@ enum Cmd {
     Delete {
         id: String,
     },
+    Suspend(Box<Suspension>),
+    SuspendAnswer {
+        request_id: String,
+        response: PermissionResponse,
+    },
     /// 等所有已提交的追加真正写进文件。
     Flush(oneshot::Sender<()>),
     /// 写完手上的、关掉文件句柄、此后 append 静默丢弃。
@@ -740,6 +792,31 @@ impl SessionLog {
         }
     }
 
+    /// 记下一次挂起。必须在那条 assistant 消息 `append` 之后调用。
+    pub fn append_suspend(&self, suspension: &Suspension) {
+        if self
+            .sender()
+            .send(Cmd::Suspend(Box::new(suspension.clone())))
+            .is_err()
+        {
+            tracing::debug!(path = %self.path.display(), "写入任务已关闭，丢弃挂起记录");
+        }
+    }
+
+    /// 记下挂起期间收到的一条答案。
+    pub fn append_suspend_answer(&self, request_id: &str, response: &PermissionResponse) {
+        if self
+            .sender()
+            .send(Cmd::SuspendAnswer {
+                request_id: request_id.to_owned(),
+                response: response.clone(),
+            })
+            .is_err()
+        {
+            tracing::debug!(path = %self.path.display(), "写入任务已关闭，丢弃挂起答案");
+        }
+    }
+
     /// 等所有已提交的追加落盘。退出钩子用；从没写过东西时是空操作。
     pub async fn flush(&self) {
         self.ack(Cmd::Flush).await;
@@ -802,6 +879,14 @@ async fn write_loop(path: PathBuf, meta: TranscriptMeta, mut rx: mpsc::Unbounded
                     created_at_ms,
                 }),
                 Cmd::Delete { id } => Some(Record::Delete { id }),
+                Cmd::Suspend(suspension) => Some(Record::Suspend { suspension }),
+                Cmd::SuspendAnswer {
+                    request_id,
+                    response,
+                } => Some(Record::SuspendAnswer {
+                    request_id,
+                    response,
+                }),
                 Cmd::Flush(ack) => {
                     acks.push(ack);
                     None
@@ -1452,6 +1537,97 @@ mod tests {
         let parts = store.load_parts(&SessionId::from_raw("s1")).await;
         assert_eq!(parts.live, vec![user("m2", "改好之后重新发的")]);
         assert!(parts.archived.is_empty());
+    }
+
+    fn tool_use_msg(id: &str, tool_id: &str) -> Message {
+        Message::Assistant {
+            id: riot_protocol::id::MessageId::from_raw(id),
+            content: vec![riot_protocol::message::AssistantContent::ToolUse {
+                id: riot_protocol::id::ToolUseId::from_raw(tool_id),
+                name: "Bash".into(),
+                input: serde_json::json!({ "command": "ls" }),
+            }],
+            usage: None,
+            meta: Default::default(),
+        }
+    }
+
+    fn suspension_of(tool_id: &str) -> Suspension {
+        use riot_protocol::permission::{AskPreview, DecisionReason, PermissionAsk};
+        use riot_protocol::suspend::{SuspendSlot, SuspendedAsk};
+        let id = riot_protocol::id::ToolUseId::from_raw(tool_id);
+        Suspension {
+            slots: vec![SuspendSlot::Asked {
+                tool_use_id: id.clone(),
+                name: "Bash".into(),
+                ask: Box::new(SuspendedAsk {
+                    request_id: riot_protocol::id::RequestId::from_raw("r1"),
+                    detail: PermissionAsk {
+                        tool_use_id: id,
+                        tool_name: "Bash".into(),
+                        summary: riot_protocol::text::UiText::new("x"),
+                        agent_label: None,
+                        preview: AskPreview::Plain {
+                            text: riot_protocol::text::UiText::new("x"),
+                        },
+                        suggestions: vec![],
+                        reason: DecisionReason::UserChoice { remembered: false },
+                    },
+                    input: serde_json::json!({ "command": "ls" }),
+                }),
+            }],
+            side_messages: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn 挂起和已收到的答案重启后还在() {
+        let d = dir();
+        let store = Transcripts::new(d.path());
+        let log = store.open(meta("s1"));
+        log.append(&user("m1", "跑一下"));
+        log.append(&tool_use_msg("m2", "t1"));
+        log.append_suspend(&suspension_of("t1"));
+        log.append_suspend_answer("r1", &PermissionResponse::Deny { message: None });
+        // 不属于这次挂起的答案不认。
+        log.append_suspend_answer("r-other", &PermissionResponse::Deny { message: None });
+        log.flush().await;
+
+        let parts = store.load_parts(&SessionId::from_raw("s1")).await;
+        let st = parts.suspended.expect("挂起要还原");
+        assert_eq!(st.answers.len(), 1);
+        assert!(st.complete());
+    }
+
+    #[tokio::test]
+    async fn 调用有了结果或被截掉后挂起作废() {
+        let d = dir();
+        let store = Transcripts::new(d.path());
+        let log = store.open(meta("s1"));
+        log.append(&user("m1", "跑一下"));
+        log.append(&tool_use_msg("m2", "t1"));
+        log.append_suspend(&suspension_of("t1"));
+        log.append(&Message::User {
+            id: riot_protocol::id::MessageId::from_raw("m3"),
+            content: vec![UserContent::ToolResult {
+                tool_use_id: riot_protocol::id::ToolUseId::from_raw("t1"),
+                content: riot_protocol::message::ToolResultContent::text("续跑的结果"),
+                is_error: false,
+            }],
+            meta: Default::default(),
+        });
+        log.flush().await;
+        let parts = store.load_parts(&SessionId::from_raw("s1")).await;
+        assert!(parts.suspended.is_none(), "续跑写了结果，挂起就结束了");
+
+        let log = store.open(meta("s2"));
+        log.append(&user("m1", "跑一下"));
+        log.append(&tool_use_msg("m2", "t1"));
+        log.append_suspend(&suspension_of("t1"));
+        log.append_rewind("m1");
+        log.flush().await;
+        let parts = store.load_parts(&SessionId::from_raw("s2")).await;
+        assert!(parts.suspended.is_none(), "那条 assistant 消息被截掉了");
     }
 
     #[tokio::test]
