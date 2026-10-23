@@ -185,8 +185,8 @@ export function ComposerDock({
   onSessionThinking: (thinking: ThinkingPolicy) => void;
   /** 宿主侧这个会话的当前模式，不是全局默认值。 */
   initialMode: PermissionMode;
-  /** 宿主主动切的模式（批准计划）。null = 没发生过。 */
-  hostMode: PermissionMode | null;
+  /** 宿主主动切的模式（批准计划）。null = 没发生过。带序号：是一次事件，见 SessionState.hostMode。 */
+  hostMode: { mode: PermissionMode; seq: number } | null;
   /** 宿主侧这个会话的多任务开关。 */
   initialMultitask?: boolean;
   tokens: { input: number; output: number; context: number };
@@ -289,11 +289,18 @@ export function ComposerDock({
   // 宿主主动切换（批准计划时用户选的执行档）→ 界面跟上。
   // 回写 setPermissionMode 是为了把模式落进会话索引（幂等 —— 宿主
   // 内存里已经是这个值了，这一步只补持久化）。
+  //
+  // 挂载时已经在的那一次不算（和 permissionPick 同一个道理）：那次切换
+  // 早已落地，之后用户可能又换过（点「构建」就会切回执行档）。再落一遍
+  // 就是把模式拽回过去 —— 而且连宿主一起拽，下一轮真的按旧模式跑。
+  // 挂载时的模式以 initialMode（宿主会话列表里的当前值）为准。
+  const seenHostSeq = useRef(hostMode?.seq ?? 0);
   useEffect(() => {
-    if (!hostMode) return;
-    setMode(hostMode);
-    modeCache.set(sessionId, hostMode);
-    void setPermissionMode(sessionId, hostMode).catch(() => {});
+    if (!hostMode || hostMode.seq === seenHostSeq.current) return;
+    seenHostSeq.current = hostMode.seq;
+    setMode(hostMode.mode);
+    modeCache.set(sessionId, hostMode.mode);
+    void setPermissionMode(sessionId, hostMode.mode).catch(() => {});
   }, [hostMode, sessionId]);
   /** 这个会话可用的斜杠命令 + 技能。每次挂载拉一次（用户加了 .md 切一下会话就有）。 */
   const [commands, setCommands] = useState<SlashCommand[]>([]);

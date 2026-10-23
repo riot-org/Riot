@@ -153,8 +153,13 @@ export interface SessionState {
    * 宿主主动切换的权限模式（批准计划时用户选的执行档）。null = 没发生过。
    * Composer 靠它同步显示 —— 不同步的话界面还写着「规划模式」，
    * 宿主已经按「自动接受编辑」放行了。
+   *
+   * `[约束]` 它是一次**事件**，不是当前模式：带序号，Composer 只认没见过
+   * 的那次。当成状态的话，Composer 每次重新挂载都会把很早以前那次切换
+   * 再落一遍 —— 进规划（mode_changed: plan）之后点了「构建」，切个会话
+   * 回来又被拽回规划，连宿主一起。
    */
-  hostMode: PermissionMode | null;
+  hostMode: { mode: PermissionMode; seq: number } | null;
   /** 排队面板：模型跑动中发的、还没注入对话的插话。 */
   queued: QueuedItem[];
   /**

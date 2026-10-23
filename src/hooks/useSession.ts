@@ -641,7 +641,7 @@ export function useSession(
           break;
 
         case "mode_changed":
-          setState((s) => ({ ...s, hostMode: event.mode }));
+          setState((s) => ({ ...s, hostMode: { mode: event.mode, seq: (s.hostMode?.seq ?? 0) + 1 } }));
           break;
 
         case "background_task":
