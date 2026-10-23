@@ -161,7 +161,7 @@ export default {
   "transcript.tool.report": "產生滲透報告（{count} 條發現）",
 
   "transcript.permission.title": "權限確認",
-  "transcript.permission.pending": "還有 {count} 個待確認",
+  "transcript.permission.badge": "需要確認",
   "transcript.permission.deny": "拒絕",
   "transcript.permission.always": "總是允許（記規則）",
   "transcript.permission.alwaysTitle": "寫一條永久規則（可在 設定 → 權限 撤銷）：{rules}",

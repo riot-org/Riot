@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 
 import {
   envVarSet,
@@ -11,28 +11,30 @@ import {
 import { useImeGuard } from "../hooks/useImeGuard";
 import { useT } from "../i18n";
 import { Markdown } from "./Markdown";
-import { useEscLayer } from "./Modal";
 import { MODE_LABEL_KEY } from "./pickers";
 
-interface Props {
-  ask: PermissionAsk;
-  /** 含这一个在内，还有几个请求排着队。 */
-  pendingCount: number;
-  onAnswer: (r: PermissionResponse) => void;
-}
-
 /**
- * 权限确认。
+ * 权限确认（Bash、写文件、删文件、联网……）。长在对话流末尾，不弹窗。
+ *
+ * 照 Claude Code：权限请求是对话里的一步，不是盖住界面的系统对话框。
+ * 回合停在等用户决定时（见内核 riot_protocol::suspend）会话是空闲的，
+ * 卡片能挂很久、重启后还在 —— 一层遮罩挡住的正是"模型为什么要跑这条
+ * 命令"的上下文。
  *
  * `[约束]` 必须显示**将要执行的原文** —— 完整命令、完整路径、完整 diff。
  * 显示摘要等于让用户盲签：他点"允许"时以为批准的是摘要里那件事。
  *
- * 没有"关闭"按钮，Esc 等于拒绝。给一个语义模糊的退出口，用户会用它来
- * 跳过自己没看懂的东西，而没看懂正是最该拒绝的情况。
+ * 不抢焦点：焦点多半在输入框，回车属于输入框，一个习惯性的回车不该
+ * 批准任何东西。焦点在卡片里时 Esc 等于拒绝（键盘用户的捷径）。
  */
-export function PermissionDialog({ ask, pendingCount, onAnswer }: Props) {
-  const { t, tn } = useT();
-  const denyRef = useRef<HTMLButtonElement>(null);
+export function PermissionCard({
+  ask,
+  onAnswer,
+}: {
+  ask: PermissionAsk;
+  onAnswer: (r: PermissionResponse) => void;
+}) {
+  const { t } = useT();
   // 答过一次就锁死所有按钮 —— IPC 慢时连点会重复提交同一个决定。
   const [answered, setAnswered] = useState(false);
 
@@ -42,15 +44,6 @@ export function PermissionDialog({ ask, pendingCount, onAnswer }: Props) {
     onAnswer(r);
   };
 
-  useEffect(() => {
-    // 焦点落在"拒绝"上。一个习惯性的回车不应该批准一次删除。
-    denyRef.current?.focus();
-  }, []);
-
-  // Esc 走公共栈：图片查看器叠在权限卡之上时，Esc 只关最上层的查看器，
-  // 不会顺手把底下的权限请求也拒了。
-  useEscLayer(() => answer({ decision: "deny" }));
-
   // 内核给出了"可以记住"的规则建议时才显示"总是允许"。没有建议
   // 却显示这个按钮，等于许诺一个不会兑现的行为。
   const rememberable = ask.suggestions.filter((s) => s.type === "add_rule");
@@ -59,67 +52,51 @@ export function PermissionDialog({ ask, pendingCount, onAnswer }: Props) {
     .join(t("transcript.listSep"));
 
   return (
-    <div className="modal-backdrop">
-      <div
-        className="modal"
-        role="dialog"
-        aria-modal="true"
-        aria-label={t("transcript.permission.title")}
-      >
-        <div className="modal-head">
-          <span className="modal-tool">{ask.tool_name}</span>
-          <span className="modal-title">
-            {ask.agent_label
-              ? t("transcript.permission.fromTask", { label: ask.agent_label, summary: renderUiText(ask.summary) })
-              : renderUiText(ask.summary)}
-          </span>
-          {/* 并发工具会一次问好几个。不说还剩几个的话，用户答完一个
-              又冒出一个，会以为是自己点错了或者程序在重复询问。 */}
-          {pendingCount > 1 ? (
-            <span className="modal-queue">
-              {tn("transcript.permission.pending", pendingCount - 1)}
-            </span>
-          ) : null}
-        </div>
+    <div
+      className="plan-card perm-card"
+      role="region"
+      aria-label={t("transcript.permission.title")}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          e.stopPropagation();
+          answer({ decision: "deny" });
+        }
+      }}
+    >
+      <div className="plan-card-head">
+        <span className="plan-card-badge">{t("transcript.permission.badge")}</span>
+        <span className="modal-tool">{ask.tool_name}</span>
+        <span className="plan-card-title">
+          {ask.agent_label
+            ? t("transcript.permission.fromTask", { label: ask.agent_label, summary: renderUiText(ask.summary) })
+            : renderUiText(ask.summary)}
+        </span>
+      </div>
 
-        <Preview preview={ask.preview} />
+      <Preview preview={ask.preview} />
 
-        <div className="modal-actions">
+      <div className="plan-card-actions">
+        <button className="btn-deny" disabled={answered} onClick={() => answer({ decision: "deny" })}>
+          {t("transcript.permission.deny")}
+        </button>
+        {/* 把危险的"总是允许"（写永久规则）推到左侧、降成弱按钮，和
+            右下角的主操作"允许一次"拉开距离 —— 相邻且等重时误点一下
+            就是持久放权。 */}
+        <span className="plan-card-spacer" />
+        {rememberable.length > 0 ? (
           <button
-            ref={denyRef}
-            className="btn-deny"
+            className="btn-allow-always"
+            title={t("transcript.permission.alwaysTitle", { rules })}
             disabled={answered}
-            onClick={() => answer({ decision: "deny" })}
+            onClick={() => answer({ decision: "allow", remember: rememberable })}
           >
-            {t("transcript.permission.deny")}
-            {/* Esc=拒绝是纯键盘捷径，界面上不写出来没人发现得了 */}
-            <span className="kbd-hint">esc</span>
+            {t("transcript.permission.always")}
+            <span className="allow-always-sub">{t("transcript.permission.alwaysSub", { rules })}</span>
           </button>
-          {/* 把危险的"总是允许"（写永久规则）推到左侧、降成弱按钮，和
-              右下角的主操作"允许一次"拉开距离 —— 相邻且等重时误点一下
-              就是持久放权。 */}
-          <span className="modal-actions-spacer" />
-          {rememberable.length > 0 ? (
-            <button
-              className="btn-allow-always"
-              title={t("transcript.permission.alwaysTitle", { rules })}
-              disabled={answered}
-              onClick={() => answer({ decision: "allow", remember: rememberable })}
-            >
-              {t("transcript.permission.always")}
-              <span className="allow-always-sub">
-                {t("transcript.permission.alwaysSub", { rules })}
-              </span>
-            </button>
-          ) : null}
-          <button
-            className="btn-allow"
-            disabled={answered}
-            onClick={() => answer({ decision: "allow" })}
-          >
-            {t("transcript.permission.once")}
-          </button>
-        </div>
+        ) : null}
+        <button className="btn-allow" disabled={answered} onClick={() => answer({ decision: "allow" })}>
+          {t("transcript.permission.once")}
+        </button>
       </div>
     </div>
   );

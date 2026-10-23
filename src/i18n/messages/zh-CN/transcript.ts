@@ -175,7 +175,7 @@ export default {
 
   // 权限弹窗
   "transcript.permission.title": "权限确认",
-  "transcript.permission.pending": "还有 {count} 个待确认",
+  "transcript.permission.badge": "需要确认",
   "transcript.permission.deny": "拒绝",
   "transcript.permission.always": "总是允许（记规则）",
   "transcript.permission.alwaysTitle": "写一条永久规则（可在 设置 → 权限 撤销）：{rules}",

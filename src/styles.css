@@ -11395,7 +11395,21 @@ button.fold-head:hover,
   display: none;
 }
 
-/* ── 权限弹窗：总是允许 ─────────────────────── */
+/* ── 对话流里的权限确认卡 ─────────────────────
+   壳和选择题卡同一套（.plan-card）；预览区沿用弹窗时代的 .preview，
+   去掉它给弹窗留的内边距和撑满。 */
+.perm-card .preview {
+  padding: 0 2px 10px;
+  flex: none;
+}
+
+/* 规则模式（`Bash(npm run *)`）仍用等宽：.plan-card-actions 那条覆盖是给
+   换模式卡的中文说明写的。 */
+.perm-card .plan-card-actions .allow-always-sub {
+  font-family: var(--mono);
+}
+
+/* ── 权限确认：总是允许 ─────────────────────── */
 
 .btn-allow-always {
   display: flex;

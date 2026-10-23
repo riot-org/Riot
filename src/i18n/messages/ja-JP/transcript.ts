@@ -163,7 +163,7 @@ export default {
   "transcript.tool.report": "ペンテストレポートを生成（{count} 件の発見）",
 
   "transcript.permission.title": "権限の確認",
-  "transcript.permission.pending": "他に {count} 件が確認待ち",
+  "transcript.permission.badge": "確認",
   "transcript.permission.deny": "拒否",
   "transcript.permission.always": "常に許可（ルールを記憶）",
   "transcript.permission.alwaysTitle": "永続的なルールを書き込みます（設定 → 権限 で取り消し可）：{rules}",

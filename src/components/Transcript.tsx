@@ -60,7 +60,7 @@ import { Composer } from "./Composer";
 import { ConfirmDialog, type ConfirmRequest } from "./ConfirmDialog";
 import { PlanModeIcon } from "./icons";
 import { HYDRATE_EVENT, LazyMarkdown, Markdown } from "./Markdown";
-import { AskChoiceCard, EnvVarsCard, ModeSwitchCard } from "./PermissionDialog";
+import { AskChoiceCard, EnvVarsCard, ModeSwitchCard, PermissionCard } from "./PermissionDialog";
 import {
   type Block,
   groupBlocks,
@@ -552,6 +552,8 @@ export const Transcript = memo(function Transcript({
   choiceAsk,
   onAnswerMode,
   onAnswerChoice,
+  permAsks,
+  onAnswerPermission,
   onRegenerate,
   onEditEntry,
   onResendEntry,
@@ -592,6 +594,9 @@ export const Transcript = memo(function Transcript({
   choiceAsk?: { requestId: string; detail: PermissionAsk };
   onAnswerMode?: (r: PermissionResponse) => void;
   onAnswerChoice?: (r: PermissionResponse) => void;
+  /** 权限确认（Bash、写文件……）。按到达顺序全部内联在对话末尾，各答各的。 */
+  permAsks?: { requestId: string; detail: PermissionAsk }[];
+  onAnswerPermission?: (requestId: string, r: PermissionResponse) => void;
   onRegenerate?: (itemId: string) => void;
   /** 上下文编辑：把这条气泡的文本换掉。false = 没改成，编辑框保留草稿。 */
   onEditEntry?: (item: TextItem, text: string, images?: ImageInput[]) => Promise<boolean>;
@@ -1678,7 +1683,7 @@ export const Transcript = memo(function Transcript({
     // pinBottom 不进依赖：依赖列的是"什么变化该重新贴底"，那是内容本身。
     // 把每帧新建的函数混进去只会让这个列表失去表达力。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, streaming, thinking, modeAsk?.requestId, choiceAsk?.requestId, busy]);
+  }, [items, streaming, thinking, modeAsk?.requestId, choiceAsk?.requestId, permAsks?.length, busy]);
 
   // 还在转圈的工具。底部状态行靠它说清此刻在等谁 —— 一次 build 跑两
   // 分钟的时候，"生成中"是句废话。
@@ -1882,6 +1887,17 @@ export const Transcript = memo(function Transcript({
             />
           )
         ) : null}
+        {/* 权限确认同样长在对话流里（照 Claude Code）。key 让每个请求拿到
+            全新的卡片实例：上一张的"已答"状态不会残留到下一张上。 */}
+        {onAnswerPermission
+          ? permAsks?.map((a) => (
+              <PermissionCard
+                key={a.requestId}
+                ask={a.detail}
+                onAnswer={(r) => onAnswerPermission(a.requestId, r)}
+              />
+            ))
+          : null}
         {/*
          * 状态行在整个忙碌期间常驻，**不和流式内容二选一**。
          *
@@ -1894,7 +1910,7 @@ export const Transcript = memo(function Transcript({
          */}
         {compacting ? (
           <Dots label={t("transcript.wait.compacting")} timed since={waitSince} />
-        ) : busy && !modeAsk && !choiceAsk ? (
+        ) : busy && !modeAsk && !choiceAsk && !permAsks?.length ? (
           <Dots label={waitLabel} timed since={waitSince} />
         ) : null}
         </div>

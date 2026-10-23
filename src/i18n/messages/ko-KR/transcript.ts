@@ -174,7 +174,7 @@ export default {
 
   // 권한 확인 창
   "transcript.permission.title": "권한 확인",
-  "transcript.permission.pending": "확인 대기 {count}개 더 있음",
+  "transcript.permission.badge": "확인 필요",
   "transcript.permission.deny": "거부",
   "transcript.permission.always": "항상 허용 (규칙 저장)",
   "transcript.permission.alwaysTitle": "영구 규칙을 기록합니다 (설정 → 권한에서 철회 가능): {rules}",

@@ -181,8 +181,7 @@ export default {
   "transcript.tool.report#one": "Generate pentest report ({count} finding)",
 
   "transcript.permission.title": "Permission required",
-  "transcript.permission.pending": "{count} more pending",
-  "transcript.permission.pending#one": "{count} more pending",
+  "transcript.permission.badge": "Approval",
   "transcript.permission.deny": "Deny",
   "transcript.permission.always": "Always allow (save rule)",
   "transcript.permission.alwaysTitle":

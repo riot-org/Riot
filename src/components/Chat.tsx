@@ -10,7 +10,6 @@ import {
   type ThinkingPolicy,
 } from "../bridge";
 import { SessionChangesBar } from "./SessionChangesBar";
-import { PermissionDialog } from "./PermissionDialog";
 import { hasActiveTodos, TodoPanel } from "./TodoPanel";
 import { thinkingClock, useSession, waitStartedAt } from "../hooks/useSession";
 import { t, useT } from "../i18n";
@@ -238,8 +237,9 @@ export function Chat({
   // 会话),任务自动让位 —— 它是进行时的进度,不是要留档的结果。
   const todoActive = busy && hasActiveTodos(session.items);
 
-  // 换模式的建议和选择题都走对话流里的内联卡：它们是对话的一部分，
-  // 不是危险操作。Bash / Write 这类权限询问仍弹窗 —— 必须看见原文才能签。
+  // 所有询问都走对话流里的内联卡（照 Claude Code，不弹窗）：换模式的建议、
+  // 选择题、环境变量表单，以及 Bash / Write 这类权限确认 —— 后者的卡片
+  // 照样摆出将要执行的原文。
   const isModeAsk = (a: (typeof session.asks)[number]) =>
     a.detail.tool_name === SWITCH_MODE_TOOL;
   // 环境变量表单也走选择题这条内联路（见 Transcript 里按 kind 分卡）。
@@ -247,7 +247,13 @@ export function Chat({
     a.detail.preview.kind === "choice" || a.detail.preview.kind === "env_vars";
   const modeAsk = session.asks.find(isModeAsk);
   const choiceAsk = session.asks.find(isChoiceAsk);
-  const modalAsk = session.asks.find((a) => !isModeAsk(a) && !isChoiceAsk(a));
+  // 并发工具会一次问好几个，按到达顺序全部排在对话末尾，各答各的。
+  const permAsks = useMemo(
+    () => session.asks.filter((a) => !isModeAsk(a) && !isChoiceAsk(a)),
+    // isModeAsk / isChoiceAsk 是纯函数，只依赖 asks。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [session.asks],
+  );
   // 内联卡片的回答走 ref 取当时的请求：给 Transcript 的回调要稳定（它是
   // memo 的，流式期间只在结构变了时才重渲染，见 lib/liveText）。
   const asksRef = useRef({ modeAsk, choiceAsk, answer: session.answer });
@@ -259,6 +265,9 @@ export function Chat({
   const onAnswerChoice = useCallback((r: PermissionResponse) => {
     const { choiceAsk: ask, answer } = asksRef.current;
     if (ask) void answer(r, ask.requestId);
+  }, []);
+  const onAnswerPermission = useCallback((requestId: string, r: PermissionResponse) => {
+    void asksRef.current.answer(r, requestId);
   }, []);
 
   // 正在流的正文 / 思考不作为 prop 传给 Transcript，放进这个 store 由叶子
@@ -433,21 +442,13 @@ export function Chat({
             execMode={execMode}
             onAnswerMode={onAnswerMode}
             onAnswerChoice={onAnswerChoice}
+            permAsks={permAsks}
+            onAnswerPermission={onAnswerPermission}
           />
         </SubagentsContext.Provider>
       )}
       {dock}
 
-      {visible && modalAsk ? (
-        // key 让每个请求拿到全新的弹窗实例：并发的两个请求先后弹出时，
-        // 第一个里勾的"总是允许"不会残留到第二个上。
-        <PermissionDialog
-          key={modalAsk.requestId}
-          ask={modalAsk.detail}
-          pendingCount={session.asks.length}
-          onAnswer={(r) => void session.answer(r, modalAsk.requestId)}
-        />
-      ) : null}
     </div>
   );
 }
