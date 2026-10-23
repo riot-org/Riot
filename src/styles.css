@@ -11409,6 +11409,20 @@ button.fold-head:hover,
   font-family: var(--mono);
 }
 
+/* 按钮只有一行字：.plan-card-actions 那套 46px 高是给换模式卡的两行按钮
+   定的，套在这里又高又笨。「总是允许」的说明并到同一行，跟在主文案后面。 */
+.perm-card .plan-card-actions {
+  align-items: center;
+}
+
+.perm-card .plan-card-actions button {
+  min-height: 30px;
+  padding: 4px 14px;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
 /* ── 权限确认：总是允许 ─────────────────────── */
 
 .btn-allow-always {
