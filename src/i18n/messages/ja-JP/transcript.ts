@@ -183,6 +183,7 @@ export default {
   "transcript.ask.other": "その他",
   "transcript.ask.otherPlaceholder": "自分で入力…（Enter で送信）",
   "transcript.ask.skip": "スキップ",
+  "transcript.ask.unanswered": "回答されませんでした",
   "transcript.env.ariaLabel": "環境変数を入力",
   "transcript.env.badge": "環境変数",
   "transcript.env.alreadySet": "設定済み",

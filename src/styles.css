@@ -10624,6 +10624,24 @@ button.field-slider-state:hover {
   content: '✓ ';
 }
 
+/* 答完的选择题：只读，选项不再是按钮，悬停不变色。 */
+.ask-card-answered .choice-opt:hover {
+  border-color: var(--border);
+}
+
+.ask-card-answered .choice-opt.on:hover {
+  border-color: var(--accent);
+}
+
+.ask-card-answered .choice-opt:not(.on) {
+  color: var(--text-dim);
+}
+
+.ask-card-note {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
 /* 代码引用（`起始行:结束行:路径`）：标题位是可点的文件路径，点开用默认
    应用打开。和普通代码块要看得出区别 —— 前者是"去看仓库里的这段"，
    后者是"这是我建议写的代码"。 */

@@ -103,7 +103,11 @@ pub fn preview_parts(input: &serde_json::Value) -> Option<(String, Vec<AskChoice
     ))
 }
 
-/// 一条选择怎么写成给模型看的话。只进 tool_result，不进界面。
+/// 一条选择怎么写成给模型看的话。只进 tool_result —— 界面也靠它：
+/// 答完的选择题卡从结果里认出点了哪项（ui_payload 到不了前端）。
+///
+/// `[约束]` 格式和 `src/lib/askAnswer.ts` 对齐（`用户选了：` 开头、选项写成
+/// `label（id）`、自己填写的是 `自己填写：原文`），改一边必须改另一边。
 ///
 /// 点了现成选项：`label（id）`。自己填写：`自己填写：原文`，前缀不外泄 ——
 /// `__other:` 是宿主和工具之间的编码，模型不该看见实现细节。

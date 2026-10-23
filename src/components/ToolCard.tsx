@@ -9,6 +9,7 @@ import {
   terminalIdFromResult,
   useRunningAgentTerminals,
 } from "../lib/agentTerminals";
+import { type AnsweredAsk, answeredAsk } from "../lib/askAnswer";
 import { LEGACY_PLAN_TOOL, openPlanPanel, PLAN_TOOL, SWITCH_MODE_TOOL } from "../lib/plan";
 import { agentIdFromResult, openSubagent, SubagentsContext } from "../lib/subagentLink";
 import { Chevron } from "./Chevron";
@@ -65,7 +66,38 @@ export const ToolCard = memo(function ToolCard({
   if (tool.name === "Task") return <TaskCard tool={tool} />;
   // 计划也有自己的卡：标题 + 概述，点开是右侧抽屉里的计划面板。
   if (tool.name === PLAN_TOOL) return <PlanCard tool={tool} />;
+  // 选择题答完之后留着原来那张卡，标出用户点的那项。还在等回答时对话
+  // 底部有可点的那张（AskChoiceCard），这里只占一行。
+  if (tool.name === "AskUserQuestion" && tool.status !== "running") {
+    const answered = answeredAsk(tool.input, tool.status, tool.result);
+    if (answered) return <AnsweredAskCard ask={answered} />;
+  }
   return <PlainToolCard tool={tool} eager={eager} />;
+});
+
+/**
+ * 答完的选择题：和提问时同一张卡（同一套样式），只读。点中的选项高亮，
+ * 自己写的那句另起一项，没作答的在卡尾说一声。
+ */
+const AnsweredAskCard = memo(function AnsweredAskCard({ ask }: { ask: AnsweredAsk }) {
+  const { t } = useT();
+  return (
+    <div className="plan-card ask-card ask-card-answered" role="region" aria-label={t("transcript.ask.ariaLabel")}>
+      <div className="plan-card-head">
+        <span className="plan-card-badge">{t("transcript.ask.badge")}</span>
+        <span className="plan-card-title">{ask.question}</span>
+      </div>
+      <div className="choice-list ask-choices">
+        {ask.options.map((o) => (
+          <div key={o.id} className={ask.picked.includes(o.id) ? "choice-opt on" : "choice-opt"}>
+            {o.label}
+          </div>
+        ))}
+        {ask.other ? <div className="choice-opt on choice-opt-other">{ask.other}</div> : null}
+      </div>
+      {ask.unanswered ? <div className="ask-card-note">{t("transcript.ask.unanswered")}</div> : null}
+    </div>
+  );
 });
 
 /**

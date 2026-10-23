@@ -196,6 +196,7 @@ export default {
   "transcript.ask.other": "其他",
   "transcript.ask.otherPlaceholder": "自己写…（Enter 提交）",
   "transcript.ask.skip": "跳过",
+  "transcript.ask.unanswered": "没有作答",
   "transcript.env.ariaLabel": "填写环境变量",
   "transcript.env.badge": "环境变量",
   "transcript.env.alreadySet": "已配置",

@@ -56,8 +56,11 @@ export type Block =
  *
  * CreatePlan 同理：计划卡是打开计划面板的入口，也是"这一轮产出了什么"
  * 的答案 —— 规划轮里它前面往往是几十步只读侦察，折进去就没了。
+ *
+ * AskUserQuestion 也不折：答完它留成那张选择题卡、标着用户点的那项，
+ * 这是对话本身的一部分（谁拍了什么板），不是过程。
  */
-const KEEP_VISIBLE = new Set(["Task", PLAN_TOOL]);
+const KEEP_VISIBLE = new Set(["Task", PLAN_TOOL, "AskUserQuestion"]);
 
 function foldable(it: Item): it is FoldItem {
   if (it.kind === "thinking") return true;

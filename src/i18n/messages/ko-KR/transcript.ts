@@ -195,6 +195,7 @@ export default {
   "transcript.ask.other": "기타",
   "transcript.ask.otherPlaceholder": "직접 입력… (Enter로 제출)",
   "transcript.ask.skip": "건너뛰기",
+  "transcript.ask.unanswered": "답하지 않았습니다",
   "transcript.env.ariaLabel": "환경 변수 입력",
   "transcript.env.badge": "환경 변수",
   "transcript.env.alreadySet": "설정됨",

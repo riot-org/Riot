@@ -203,6 +203,7 @@ export default {
   "transcript.ask.other": "Other",
   "transcript.ask.otherPlaceholder": "Write your own… (Enter to submit)",
   "transcript.ask.skip": "Skip",
+  "transcript.ask.unanswered": "Not answered",
   "transcript.env.ariaLabel": "Provide environment variables",
   "transcript.env.badge": "Environment",
   "transcript.env.alreadySet": "Set",
