@@ -23,7 +23,8 @@ export function GeneralPane() {
   ];
 
   return (
-    <Group title={t("settings.tab.general.title")}>
+    // 不给分组标题：这页只有这一组，页面标题已经叫「通用」，再写一遍是重复。
+    <Group>
       <Card>
         <Row title={t("settings.general.language")} desc={t("settings.general.language.desc")}>
           <FieldSelect
