@@ -8907,15 +8907,31 @@ button.pl-hit:hover:not(:disabled) {
 }
 
 .mode-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 3px;
   text-align: left;
-  padding: 10px 12px;
+  /* 左边留出单选圆点的位置。 */
+  padding: 10px 12px 10px 36px;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 10px;
+}
+
+/* 单选圆点：六张卡长得一样，光靠描边变亮看不出选的是哪一个 —— 而这里
+   选错就是"全部放行"。和标题行对齐（10px 内边距 + 13px 字的行高居中）。 */
+.mode-card::before {
+  content: '';
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  width: 14px;
+  height: 14px;
+  box-sizing: border-box;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 50%;
 }
 
 .mode-card:hover {
@@ -8924,7 +8940,15 @@ button.pl-hit:hover:not(:disabled) {
 
 .mode-card.active {
   border-color: var(--accent);
-  background: var(--bg-active);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg));
+}
+
+/* 选中：描边换强调色，里面一个实心点（inset 阴影画内圈留白）。 */
+.mode-card.active::before {
+  border-color: var(--accent);
+  background: var(--accent);
+  /* 内圈留白和选中卡的底色同色，不然圆点里套着一圈更深的环。 */
+  box-shadow: inset 0 0 0 2.5px color-mix(in srgb, var(--accent) 8%, var(--bg));
 }
 
 .mode-card-name {
