@@ -105,7 +105,11 @@
      那一档看着发虚，各加深一档（见浅色块）。 */
   --tree-text: var(--text-soft);
   --tree-chevron: var(--text-faint);
-  --text-dim: #a2a2ad;
+  /* 次要文字。四档文字色按明度（L*）排开：正文 94 → soft 88 → dim 74 →
+     faint 62，间距大致均匀。早先是 #a2a2ad（L* 67），和 faint 只差 5，
+     "次要"和"最淡"两档读起来是同一档灰，层级等于少了一级；而 faint 卡在
+     AA 线上不能再暗，只能把 dim 往上提。 */
+  --text-dim: #b4b4be;
   /* 最淡一级也要够得着 WCAG AA 的正文线 —— 它大量用在 11–13px 的
      必读小字上（标签标题、placeholder、说明），不是纯装饰。想再淡的
      装饰性符号请用透明度，别再加灰阶。
@@ -370,7 +374,9 @@ html[data-theme='light'] {
   --text-soft: #3c3c44;
   --tree-text: var(--text);
   --tree-chevron: var(--text-dim);
-  --text-dim: #5f5f68;
+  /* 同深色：faint 卡在 AA 线上不能再浅，dim 往深压，两档拉开（L* 34 / 45，
+     早先 41 / 45 几乎一样）。 */
+  --text-dim: #50505a;
   /* WCAG AA 按最灰的底算：输入条 --bg-input ≈4.7:1，菜单 --bg-nav ≈4.9:1，
      正文 ≈5.3:1；连 hover 底 --bg-hover 也还有 ≈4.5:1。再淡就掉线，
      想更淡请用透明度。 */
