@@ -2987,7 +2987,12 @@ html[data-host='web'] body {
   background: var(--bg-card);
   border: 1px solid var(--border-strong);
   color: var(--text-dim);
-  box-shadow: 0 4px 16px var(--shadow-color);
+  /* 第一层是页面底色的一圈光晕：按钮压在正文上时，紧挨着它的字被
+     这圈"让开"，而不是被一个圆硬切掉半个字 —— 底色和页面几乎一样，
+     只有描边的话边界看不清。第二层投影让它浮起来。 */
+  box-shadow:
+    0 0 0 6px color-mix(in srgb, var(--bg) 85%, transparent),
+    0 4px 16px var(--shadow-color);
   z-index: var(--z-panel);
 }
 
