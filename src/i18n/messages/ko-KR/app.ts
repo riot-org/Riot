@@ -96,6 +96,7 @@ export default {
   "app.project.removeFromList": "목록에서 제거",
   "app.session.actions": "세션 작업",
   "app.session.awaiting": "확인 대기",
+  "app.session.runs": "{count}회 실행",
 
   "app.topbar.sessionSettings": "세션 설정",
   "app.topbar.needSession": "먼저 세션을 열어 주세요",

@@ -217,6 +217,45 @@ export function Sidebar(props: SidebarProps) {
 }
 
 
+/**
+ * 定时任务开的会话标题是「任务名 · MM-DD」（宿主 run_schedule 里定的）。
+ * 拆开来：名字可以截断，日期放右边不截。不是这个形状就返回 null。
+ */
+function splitRunTitle(title: string | null | undefined): { name: string; date: string } | null {
+  const m = title?.match(/^(.*\S) · (\d{2}-\d{2})$/);
+  return m?.[1] && m[2] ? { name: m[1], date: m[2] } : null;
+}
+
+type Entry =
+  | { kind: "one"; session: SessionInfo }
+  | { kind: "group"; name: string; runs: { session: SessionInfo; date: string }[] };
+
+/** 同名的定时任务会话收成一组，组排在它最近那次的位置上。顺序沿用传入的（最近在上）。 */
+function groupRuns(ordered: SessionInfo[]): Entry[] {
+  const byName = new Map<string, { session: SessionInfo; date: string }[]>();
+  for (const s of ordered) {
+    const split = splitRunTitle(s.title);
+    if (!split) continue;
+    const runs = byName.get(split.name) ?? [];
+    runs.push({ session: s, date: split.date });
+    byName.set(split.name, runs);
+  }
+  const out: Entry[] = [];
+  const placed = new Set<string>();
+  for (const s of ordered) {
+    const split = splitRunTitle(s.title);
+    const runs = split ? byName.get(split.name) : undefined;
+    if (!split || !runs || runs.length < 2) {
+      out.push({ kind: "one", session: s });
+      continue;
+    }
+    if (placed.has(split.name)) continue;
+    placed.add(split.name);
+    out.push({ kind: "group", name: split.name, runs });
+  }
+  return out;
+}
+
 function ProjectGroup(
   props: SidebarProps & {
     root: string;
@@ -257,6 +296,84 @@ function ProjectGroup(
     return b.seq - a.seq;
   });
   const busy = collapsed && ordered.some((s) => s.busy);
+  // 定时任务每跑一次就新开一个「任务名 · MM-DD」会话。同名的收成一组：
+  // 组头是任务名和次数，展开后每行只写日期 —— 不然侧栏被一模一样的
+  // 标题刷满，截断后连日期都看不见。只有一个的不成组。
+  const entries = groupRuns(ordered);
+  const [openGroups, setOpenGroups] = useState<Set<string>>(() => new Set());
+  const toggleGroup = (name: string) =>
+    setOpenGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+
+  /** 一行会话。`date` 有值 = 组里的一次运行，标签只写日期。 */
+  const renderRow = (s: SessionInfo, date: string | null) => {
+    if (renaming === s.id) {
+      return (
+        <input
+          key={s.id}
+          className="rename-input"
+          defaultValue={s.title ?? ""}
+          autoFocus
+          onFocus={(e) => e.currentTarget.select()}
+          onCompositionStart={ime.onCompositionStart}
+          onCompositionEnd={ime.onCompositionEnd}
+          onKeyDown={(e) => {
+            // 组字中的回车确认候选词、Esc 取消候选，都不该动这次改名。
+            if (ime.isComposing(e)) return;
+            if (e.key === "Enter") onRenameSubmit(s.id, e.currentTarget.value);
+            if (e.key === "Escape") onRenameCancel();
+          }}
+          onBlur={(e) => onRenameSubmit(s.id, e.currentTarget.value)}
+        />
+      );
+    }
+    const split = date === null ? splitRunTitle(s.title) : null;
+    return (
+      <div
+        key={s.id}
+        className={
+          (s.id === active && !schedulesActive ? "thread active" : "thread") +
+          (menuAnchor === `session:${s.id}` ? " menu-open" : "")
+        }
+        onContextMenu={(e) => onSessionMenu(e, s)}
+      >
+        <button className="thread-label" onClick={() => onSelect(s.id)}>
+          {/* 正在跑的会话给个小圆点 —— 切走之后它还在干活，列表里
+              得看得出来，不然用户以为它闲着。 */}
+          {s.busy ? (
+            <span className="thread-busy" title={t("common.running")} aria-label={t("common.running")} />
+          ) : s.awaitingUser ? (
+            // 停在等用户决定：不在跑，但得回来点卡片。
+            <span
+              className="thread-awaiting"
+              title={t("app.session.awaiting")}
+              aria-label={t("app.session.awaiting")}
+            />
+          ) : null}
+          {date !== null ? (
+            <span className="thread-title">{date}</span>
+          ) : split ? (
+            // 日期单独放右侧、不参与截断：长任务名截掉的是名字尾巴，不是日期。
+            <>
+              <span className="thread-title">{split.name}</span>
+              <span className="thread-meta">
+                <span className="thread-date">{split.date}</span>
+              </span>
+            </>
+          ) : (
+            <span className="thread-title">{s.title ?? t("app.newSession")}</span>
+          )}
+        </button>
+        <button className="row-btn" onClick={(e) => onSessionMenu(e, s)} title={t("app.session.actions")}>
+          <DotsIcon />
+        </button>
+      </div>
+    );
+  };
   const foldState = t(collapsed ? "app.project.collapsed" : "app.project.expanded");
 
   return (
@@ -323,62 +440,45 @@ function ProjectGroup(
         aria-hidden={collapsed}
       >
         <div className="smooth-fold-inner project-threads-inner">
-          {ordered.map((s) =>
-            renaming === s.id ? (
-              <input
-                key={s.id}
-                className="rename-input"
-                defaultValue={s.title ?? ""}
-                autoFocus
-                onFocus={(e) => e.currentTarget.select()}
-                onCompositionStart={ime.onCompositionStart}
-                onCompositionEnd={ime.onCompositionEnd}
-                onKeyDown={(e) => {
-                  // 组字中的回车确认候选词、Esc 取消候选，都不该动这次改名。
-                  if (ime.isComposing(e)) return;
-                  if (e.key === "Enter") onRenameSubmit(s.id, e.currentTarget.value);
-                  if (e.key === "Escape") onRenameCancel();
-                }}
-                onBlur={(e) => onRenameSubmit(s.id, e.currentTarget.value)}
-              />
-            ) : (
-              <div
-                key={s.id}
-                className={
-                  (s.id === active && !schedulesActive ? "thread active" : "thread") +
-                  (menuAnchor === `session:${s.id}` ? " menu-open" : "")
-                }
-                onContextMenu={(e) => onSessionMenu(e, s)}
-              >
-                <button className="thread-label" onClick={() => onSelect(s.id)}>
-                  {/* 正在跑的会话给个小圆点 —— 切走之后它还在干活，列表里
-                      得看得出来，不然用户以为它闲着。 */}
-                  {s.busy ? (
-                    <span
-                      className="thread-busy"
-                      title={t("common.running")}
-                      aria-label={t("common.running")}
-                    />
-                  ) : s.awaitingUser ? (
-                    // 停在等用户决定：不在跑，但得回来点卡片。
-                    <span
-                      className="thread-awaiting"
-                      title={t("app.session.awaiting")}
-                      aria-label={t("app.session.awaiting")}
-                    />
-                  ) : null}
-                  {s.title ?? t("app.newSession")}
-                </button>
-                <button
-                  className="row-btn"
-                  onClick={(e) => onSessionMenu(e, s)}
-                  title={t("app.session.actions")}
-                >
-                  <DotsIcon />
-                </button>
+          {entries.map((e) => {
+            if (e.kind === "one") return renderRow(e.session, null);
+            const open = openGroups.has(e.name) || e.runs.some((r) => r.session.id === active);
+            const busyRun = e.runs.some((r) => r.session.busy);
+            const waitingRun = e.runs.some((r) => r.session.awaitingUser);
+            return (
+              <div key={`group:${e.name}`} className="thread-group">
+                <div className="thread">
+                  <button
+                    type="button"
+                    className="thread-label"
+                    aria-expanded={open}
+                    onClick={() => toggleGroup(e.name)}
+                  >
+                    {busyRun ? (
+                      <span className="thread-busy" title={t("common.running")} aria-label={t("common.running")} />
+                    ) : waitingRun ? (
+                      <span
+                        className="thread-awaiting"
+                        title={t("app.session.awaiting")}
+                        aria-label={t("app.session.awaiting")}
+                      />
+                    ) : null}
+                    <span className="thread-title">{e.name}</span>
+                    {/* 组头只挂次数：日期在展开后的每一行上，挂在这里只会把任务名挤短。 */}
+                    <span className="thread-meta">
+                      <span className="thread-runs" title={t("app.session.runs", { count: e.runs.length })}>
+                        ×{e.runs.length}
+                      </span>
+                      <Chevron open={open} />
+                    </span>
+                  </button>
+                </div>
+                {open ? (
+                  <div className="thread-group-runs">{e.runs.map((r) => renderRow(r.session, r.date))}</div>
+                ) : null}
               </div>
-            ),
-          )}
+            );
+          })}
         </div>
       </div>
     </div>

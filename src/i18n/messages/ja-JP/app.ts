@@ -96,6 +96,7 @@ export default {
   "app.project.removeFromList": "一覧から削除",
   "app.session.actions": "セッション操作",
   "app.session.awaiting": "確認待ち",
+  "app.session.runs": "{count} 回実行",
 
   "app.topbar.sessionSettings": "セッション設定",
   "app.topbar.needSession": "先にセッションを開いてください",

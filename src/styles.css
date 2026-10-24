@@ -1776,16 +1776,44 @@ html[data-host='web'] body {
 .thread-label {
   flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: center;
   /* 对齐项目名：头 6 + 开关 2 + 箭头 14 + 缝 6 + 文件夹 14 + 缝 6 */
   padding: 6px 4px 6px 48px;
   border: none;
   background: transparent;
   font-size: 13px;
   color: var(--text-dim);
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
   text-align: left;
+}
+
+/* 标题吃掉剩余宽度、自己截断；右侧的日期 / 次数不参与截断。 */
+.thread-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.thread-meta {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 8px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+}
+
+.thread-runs {
+  color: var(--text-faint);
+}
+
+/* 定时任务的一组运行：展开后每行只写日期，比组头再缩进一级。 */
+.thread-group-runs .thread-label {
+  padding-left: 62px;
 }
 
 /* 标题是 button，全局 button:hover 会再铺一层。半透明 hover 叠两层

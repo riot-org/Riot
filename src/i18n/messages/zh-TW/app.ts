@@ -96,6 +96,7 @@ export default {
   "app.project.removeFromList": "從列表移除",
   "app.session.actions": "會話操作",
   "app.session.awaiting": "等你處理",
+  "app.session.runs": "執行了 {count} 次",
 
   "app.topbar.sessionSettings": "會話設定",
   "app.topbar.needSession": "請先開啟一個會話",

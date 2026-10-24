@@ -100,6 +100,7 @@ export default {
   "app.project.removeFromList": "Remove from list",
   "app.session.actions": "Session actions",
   "app.session.awaiting": "Waiting for you",
+  "app.session.runs": "{count} runs",
 
   "app.topbar.sessionSettings": "Session settings",
   "app.topbar.needSession": "Open a session first",
