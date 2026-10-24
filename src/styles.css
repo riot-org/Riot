@@ -2766,9 +2766,21 @@ html[data-host='web'] body {
   --chat-gutter: 24px;
 }
 
-/* 空会话的招呼语。只占输入框上面那块空地并在其中居中 —— 输入框自己
-   留在底部的老位置（Codex 同款）。整块跟着输入框一起上移的话，打出
-   第一句话时输入框会从屏幕中间"掉"到底部，是这一步唯一的动静。 */
+/* 空会话：招呼语和输入框作为一组，在整列里略高于正中（Claude 同款）。
+   早先输入框留在底部老位置（Codex 同款），招呼语悬在中间，两者之间是
+   大半屏空白，像页面没加载完。代价是打出第一句话时输入框落回底部 ——
+   这是一次明确的状态切换（开始对话了），可以接受。
+   .chat-empty 只改布局，dock 的 DOM 位置不动：Composer 不会重挂载。 */
+.chat-empty {
+  justify-content: center;
+  padding-bottom: 12vh;
+}
+
+.chat-empty .hero {
+  flex: none;
+  padding-bottom: 12px;
+}
+
 .hero {
   flex: 1;
   min-height: 0;

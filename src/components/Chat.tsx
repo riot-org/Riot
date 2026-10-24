@@ -391,7 +391,7 @@ export function Chat({
   );
 
   return (
-    <div className="chat">
+    <div className={empty ? "chat chat-empty" : "chat"}>
       {empty ? (
         <div className="hero">
           <span className="hero-logo">
