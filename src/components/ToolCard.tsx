@@ -76,8 +76,10 @@ export const ToolCard = memo(function ToolCard({
 });
 
 /**
- * 答完的选择题：和提问时同一张卡（同一套样式），只读。点中的选项高亮，
- * 自己写的那句另起一项，没作答的在卡尾说一声。
+ * 答完的选择题：还是那张卡（同一个徽标、同一句问题），但它已经是一条
+ * 记录、不能再点 —— 选项不再画成一个个带框的大按钮，收成一张紧凑的只读
+ * 列表：点中的打勾、强调色，没选的变淡。自己写的那句另起一行，没作答的
+ * 在卡尾说一声。
  */
 const AnsweredAskCard = memo(function AnsweredAskCard({ ask }: { ask: AnsweredAsk }) {
   const { t } = useT();
@@ -87,14 +89,14 @@ const AnsweredAskCard = memo(function AnsweredAskCard({ ask }: { ask: AnsweredAs
         <span className="plan-card-badge">{t("transcript.ask.badge")}</span>
         <span className="plan-card-title">{ask.question}</span>
       </div>
-      <div className="choice-list ask-choices">
+      <ul className="ask-answers">
         {ask.options.map((o) => (
-          <div key={o.id} className={ask.picked.includes(o.id) ? "choice-opt on" : "choice-opt"}>
+          <li key={o.id} className={ask.picked.includes(o.id) ? "on" : undefined}>
             {o.label}
-          </div>
+          </li>
         ))}
-        {ask.other ? <div className="choice-opt on choice-opt-other">{ask.other}</div> : null}
-      </div>
+        {ask.other ? <li className="on">{ask.other}</li> : null}
+      </ul>
       {ask.unanswered ? <div className="ask-card-note">{t("transcript.ask.unanswered")}</div> : null}
     </div>
   );
