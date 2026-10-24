@@ -6,7 +6,7 @@
 //! 行是无边框的紧凑列表(Cursor 同款):图标认文件类型、颜色认状态,
 //! 一屏能扫二十个文件。每行一个框的话,十个文件就把面板占满了。
 
-import { useContext, useLayoutEffect, useRef, useState } from "react";
+import { useContext, useRef, useState } from "react";
 
 import type { FileChange } from "../bridge";
 import { type MessageKey, t, useT } from "../i18n";
@@ -192,22 +192,12 @@ function fullTitle(c: FileChange): string {
 }
 
 /**
- * 行宽稳定多久之后才重新判断目录显不显示。
+ * 文件名在前、目录在后（VS Code 的写法）：扫一列改动时认的是文件名，
+ * 目录只是区分同名文件的补充。目录用淡色小字跟在后面，放不下就自己
+ * 截断 —— 文件名永远完整。
  *
- * `[约束]` 不能跟着 ResizeObserver 每帧算。判断必须先摘掉 `.tight`
- * 再 `offsetWidth` 强制一次同步布局才量得到可用宽度 —— `.change-path`
- * 是 `flex: 0 1 auto` 的内容宽盒子，收窄之后量到的是文件名宽度而不是
- * 行里还剩多少地方，不摘就再也长不回来。一次改动列表几十行，每行每帧
- * 一次强制布局，侧栏开合动画和拖分隔线全被拖住。
- *
- * 行宽只在连续变形（开合动画、拖分隔线、拉窗口）时变，而目录显不显示
- * 是纯装饰 —— 停下来之后再定，没人看得出晚了这一拍。
- */
-const REFIT_QUIET_MS = 80;
-
-/**
- * 够宽就目录+文件名；行被挤窄时整段目录拿掉，只留文件名。
- * 半截 `src/fea…` 既认不出目录、又占着文件名的位置，不如干脆不画。
+ * 早先是"目录/文件名"整条等宽字，行一窄就整段拿掉目录（要量宽度、
+ * 防抖重算）；文件名打头之后截断目录就够了，那套测量也不再需要。
  */
 function ChangePath({
   dir,
@@ -218,38 +208,10 @@ function ChangePath({
   name: string;
   deleted: boolean;
 }) {
-  const ref = useRef<HTMLSpanElement>(null);
-
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el || !dir) return;
-    const row = el.closest(".change-head");
-    const fit = () => {
-      el.classList.remove("tight");
-      void el.offsetWidth;
-      const dirEl = el.querySelector(".change-dir");
-      const nameEl = el.querySelector(".change-name");
-      const need = (dirEl?.scrollWidth ?? 0) + (nameEl?.scrollWidth ?? 0);
-      if (need > el.clientWidth + 1) el.classList.add("tight");
-    };
-    let timer = 0;
-    const ro = new ResizeObserver(() => {
-      window.clearTimeout(timer);
-      timer = window.setTimeout(fit, REFIT_QUIET_MS);
-    });
-    ro.observe(row ?? el);
-    // 首次同步定一次：挂载那一拍走防抖的话，目录会先出现再被抽掉。
-    fit();
-    return () => {
-      window.clearTimeout(timer);
-      ro.disconnect();
-    };
-  }, [dir, name]);
-
   return (
-    <span ref={ref} className={deleted ? "change-path deleted" : "change-path"}>
-      {dir ? <span className="change-dir">{dir}</span> : null}
+    <span className={deleted ? "change-path deleted" : "change-path"}>
       <span className="change-name">{name}</span>
+      {dir ? <span className="change-dir">{dir}</span> : null}
     </span>
   );
 }
@@ -298,5 +260,6 @@ function EyeIcon() {
 function splitDisplayPath(path: string): { dir: string; name: string } {
   const slash = path.lastIndexOf("/");
   if (slash < 0) return { dir: "", name: path };
-  return { dir: path.slice(0, slash + 1), name: path.slice(slash + 1) };
+  // 目录跟在文件名后面显示，末尾的斜杠去掉。
+  return { dir: path.slice(0, slash), name: path.slice(slash + 1) };
 }

@@ -11654,7 +11654,7 @@ button.fold-head:hover,
   align-items: center;
   gap: 6px;
   width: 100%;
-  padding: 5px 8px;
+  padding: 3px 8px;
   background: transparent;
   border: none;
   border-radius: 7px;
@@ -11708,33 +11708,28 @@ button.fold-head:hover,
 
 .change-path {
   display: flex;
+  align-items: baseline;
+  gap: 6px;
   min-width: 0;
   flex: 0 1 auto;
   overflow: hidden;
-  font-family: var(--mono);
   font-size: 13px;
   white-space: nowrap;
 }
 
-/* 目录和文件名都不压缩。压缩会让目录字溢出来盖在文件名上，
-   而 scrollWidth 还是“没溢出”，tight 判断就失效了。 */
-.change-dir,
+/* 文件名不压缩，目录吃剩下的宽度、放不下就截断。 */
 .change-name {
   flex-shrink: 0;
+  /* 介于正文和目录灰之间：要比路径亮一档，又不能抢中间对话。 */
+  color: var(--text-soft);
 }
 
 .change-dir {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
   color: var(--text-faint);
-}
-
-/* 行宽不够装下完整目录时，整段拿掉，只留文件名。 */
-.change-path.tight .change-dir {
-  display: none;
-}
-
-.change-name {
-  /* 介于正文和目录灰之间：要比路径亮一档，又不能抢中间对话。 */
-  color: var(--text-soft);
 }
 
 /* 把复制/展开顶到行尾，+- 贴在文件名后面。 */
