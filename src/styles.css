@@ -12366,6 +12366,9 @@ button.fold-head:hover,
   flex-shrink: 0;
   display: flex;
   align-items: center;
+  /* 和主区 .topbar、设置页 .settings-body-top 同高：几个整页的标题都从
+     这条下面起，切页时标题不跳。 */
+  min-height: 44px;
   padding: 0 10px;
 }
 
@@ -12377,25 +12380,34 @@ button.fold-head:hover,
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 16px 24px 48px;
+  /* 版式照设置页（.settings-scroll / .settings-inner / .pane-head）：同样的
+     留白、同样的正文宽度、标题在同一个高度。 */
+  padding: 12px 40px 72px;
 }
 
 .sp-inner {
-  max-width: 640px;
+  max-width: 720px;
   margin: 0 auto;
   display: flex;
   flex-direction: column;
   gap: 14px;
 }
 
+.sp-head {
+  padding: 26px 0 4px;
+}
+
 .sp-head h2 {
-  margin: 0 0 4px;
+  margin: 0;
   font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
 .sp-sub {
-  margin: 0;
-  font-size: 12px;
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
   color: var(--text-dim);
 }
 
@@ -13385,11 +13397,13 @@ button.fold-head:hover,
     min-height: 0;
   }
 
-  .settings-scroll {
+  .settings-scroll,
+  .sp-scroll {
     padding: 4px 14px calc(72px + env(safe-area-inset-bottom));
   }
 
-  .pane-head {
+  .pane-head,
+  .sp-head {
     padding-top: 14px;
   }
 
