@@ -5544,6 +5544,11 @@
           "const": "token_budget_nudge",
           "description": "接近预算，注入提醒后继续。",
           "type": "string"
+        },
+        {
+          "const": "resumed_after_user",
+          "description": "续跑：上一轮停在等用户决定，答案到了，先把那批调用跑完。这一次\n`RequestStart` 后面跟的是工具执行而不是模型请求 —— 发它是为了让\n界面和宿主知道\"又开始干活了\"（它们都靠 turn 0 的 RequestStart 置忙）。",
+          "type": "string"
         }
       ]
     },

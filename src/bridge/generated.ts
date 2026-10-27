@@ -76,7 +76,8 @@ export type Transition =
   | "output_limit_recovery"
   | "stop_hook_blocking"
   | "todo_reconcile"
-  | "token_budget_nudge";
+  | "token_budget_nudge"
+  | "resumed_after_user";
 /**
  * 流式增量。高频（每秒可能上百条），仅用于打字机效果。
  *
