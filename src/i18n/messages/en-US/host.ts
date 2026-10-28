@@ -43,7 +43,7 @@ export default {
   "host.sandbox.installFailed": "Failed to install command isolation.",
   "host.sandbox.uninstallFailed": "Failed to uninstall command isolation.",
   "host.preview.outOfScope":
-    "{path} is outside what the app is allowed to read. Readable locations are project directories, the app's own data directory, system temp directories, and common folders such as Desktop, Downloads, Documents and Pictures. To use a file elsewhere, open its directory as a project or copy it into one of those locations first.",
+    "Can't read \u201c{name}\u201d: it isn't in a project or a common folder. Copy it to Desktop, Downloads or a project and try again.",
   "host.file.readFailed": "Failed to read the file.",
   "host.file.notFile": "This path is not a file.",
   "host.file.tooLarge": "The file is too large ({size} MB); in-app preview supports up to {max} MB. Open it with a system app instead.",

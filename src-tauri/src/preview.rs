@@ -121,8 +121,14 @@ fn temp_dirs() -> Vec<PathBuf> {
 /// `[约束]` 这是 `read_image` / `read_file_bytes` 唯一该用的入口。它们不做
 /// 别的检查就直接读 `path` 的那个版本，等于把任意文件读取暴露给 webview。
 pub async fn resolve(state: &AppState, requested: &str) -> Result<PathBuf, UiError> {
-    resolve_in(&roots(state).await, requested)
-        .ok_or_else(|| ui_error!("host.preview.outOfScope", path = requested))
+    resolve_in(&roots(state).await, requested).ok_or_else(|| {
+        // 提示里只放文件名：整条路径往往很长（微信这类沙盒临时目录），
+        // 读的人要知道的是"哪个文件"，完整路径留在 path 里。
+        let name = std::path::Path::new(requested)
+            .file_name()
+            .map_or_else(|| requested.to_owned(), |n| n.to_string_lossy().into_owned());
+        ui_error!("host.preview.outOfScope", path = requested, name = name)
+    })
 }
 
 /// 把前端传来的路径解析成一个允许**写**的绝对路径（预览里改完保存）。

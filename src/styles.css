@@ -4021,6 +4021,9 @@ html[data-host='web'] body {
   border-radius: 10px;
   padding: 8px 14px;
   text-align: center;
+  /* 文案里常带长路径或文件名，中间没有空格可断 —— 不允许任意处断行的话
+     整行撑出容器。 */
+  overflow-wrap: anywhere;
 }
 
 /* 色块：编辑区里的 @ 引用、斜杠命令、浏览器取件的页面元素。内联，跟着

@@ -939,8 +939,16 @@ export function ComposerDock({
     }
   };
 
-  /** 拖进来或从对话框选的路径:图片读成内容，其它的变成引用块。 */
-  const takePaths = async (paths: string[]) => {
+  /**
+   * 拖进来或从对话框选的路径:图片读成内容，其它的变成引用块。
+   *
+   * `fallback`：粘贴时剪贴板里同时给的图片数据。按路径一张都读不出来时
+   * 改用它 —— 微信这类应用复制图片，剪贴板里的路径在它自己的沙盒临时目录
+   * （`~/Library/Containers/…`），不在预览围栏里，读不了；像素数据却是现成
+   * 的。不能反过来优先用像素：访达里复制图片文件时，剪贴板给的"图"是
+   * 文件图标，不是图片本身。
+   */
+  const takePaths = async (paths: string[], fallback: File[] = []) => {
     const images = paths.filter((p) => IMAGE_EXT.test(p));
     const files = paths.filter((p) => !IMAGE_EXT.test(p));
 
@@ -953,7 +961,9 @@ export function ComposerDock({
       );
       await addShots(ok);
       const failed = read.filter((r): r is string => typeof r === "string");
-      if (failed.length) setDropError(failed[0] ?? "");
+      const backup = fallback.filter((f) => f.type.startsWith("image/"));
+      if (failed.length && ok.length === 0 && backup.length) await takeFiles(backup);
+      else if (failed.length) setDropError(failed[0] ?? "");
     }
 
     // 非图片文件走和 `@` 一样的引用块：都是"用户点名了这个文件"，
@@ -996,7 +1006,7 @@ export function ComposerDock({
   const pasteFiles = async (files: File[]): Promise<boolean> => {
     const paths = await clipboardPaths().catch(() => []);
     if (paths.length) {
-      await takePaths(paths);
+      await takePaths(paths, files);
       return true;
     }
     if (files.length) {

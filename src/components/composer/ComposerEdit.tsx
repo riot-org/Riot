@@ -122,7 +122,8 @@ export function ComposerEdit({
     }
   };
 
-  const takePaths = async (paths: string[]) => {
+  /** `fallback`：粘贴时剪贴板给的图片数据，按路径读不出来时用（理由见 ComposerDock 的 takePaths）。 */
+  const takePaths = async (paths: string[], fallback: File[] = []) => {
     const images = paths.filter((p) => IMAGE_EXT.test(p));
     const files = paths.filter((p) => !IMAGE_EXT.test(p));
     if (images.length && allowImages) {
@@ -134,7 +135,9 @@ export function ComposerEdit({
       );
       await addShots(ok);
       const failed = readPaths.filter((r): r is string => typeof r === "string");
-      if (failed.length) setDropError(failed[0] ?? "");
+      const backup = fallback.filter((f) => f.type.startsWith("image/"));
+      if (failed.length && ok.length === 0 && backup.length) await takeFiles(backup);
+      else if (failed.length) setDropError(failed[0] ?? "");
     }
     if (files.length && parseChips) {
       const el = ref.current;
@@ -161,7 +164,7 @@ export function ComposerEdit({
   const pasteFiles = async (files: File[]): Promise<boolean> => {
     const paths = await clipboardPaths().catch(() => []);
     if (paths.length) {
-      await takePaths(paths);
+      await takePaths(paths, files);
       return true;
     }
     if (files.length) {
