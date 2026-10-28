@@ -1269,7 +1269,9 @@ function CodeBlock({
   // 不走 bridge 的 openInDefaultApp —— 它把失败吞掉了（那是给"静默降级"
   // 场景用的），这里要拿到失败才能在界面上说"打不开"。
   const openRef = () => {
-    const full = refPath.startsWith("/") || !root ? refPath : `${root}/${refPath}`;
+    // 绝对路径认盘符和 UNC（`D:/…`、`\\server\…`），不能只看 `/` 开头 ——
+    // 否则 Windows 上 `D:/…` 被拼到项目根后面，成了不存在的路径。
+    const full = looksAbsPath(refPath) || !root ? refPath : joinRoot(root, refPath);
     openPath(full).catch(() => flashRefErr(true));
   };
 

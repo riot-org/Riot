@@ -13,14 +13,6 @@
     "dialog:default",
     "opener:default",
     "opener:allow-reveal-item-in-dir",
-    {
-      "identifier": "opener:allow-open-path",
-      "allow": [
-        { "path": "$HOME/**" },
-        { "path": "$TEMP/**" },
-        { "path": "/tmp/**" }
-      ]
-    },
     "allow-subscribe-session",
     "allow-send-turn",
     "allow-regenerate-turn",
@@ -46,6 +38,7 @@
     "allow-create-session",
     "allow-probe-dirs",
     "allow-path-exists",
+    "allow-open-local-path",
     "allow-list-sessions",
     "allow-get-history",
     "allow-delete-session",

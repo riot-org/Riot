@@ -14,6 +14,7 @@
 //! 少数命令对远程观看者**语义不同**，在这里就地处理并注明理由 —— 那是
 //! "这个观看者不在这台机器前"这一事实的直接后果，不是业务逻辑：
 //! - `clipboard_paths`：读的是宿主机的剪贴板，和手机上按 ⌘V 的人无关，回空。
+//! - `open_local_path`：在宿主机上用系统应用打开文件，远端的人看不见，报错。
 //! - `set_appearance`：改的是桌面那扇窗的原生外观，手机上切个主题不该把它
 //!   一起换掉，空操作。
 //! - `notify`：系统通知要弹在远端用户手里的设备上（浏览器里前端自己走
@@ -202,6 +203,8 @@ pub async fn dispatch(
         "path_exists" => val(crate::path_exists(a.take("path")?)),
         // 宿主机的剪贴板和远端用户无关（见模块说明）。
         "clipboard_paths" => val(Vec::<String>::new()),
+        // 用宿主机上的应用打开文件，远端的人看不见；网页版前端也不会调它。
+        "open_local_path" => Err(ui_error!("host.open.remote")),
 
         // ── 定时任务 ──
         "schedule_list" => ok(crate::schedule_list(st).await),

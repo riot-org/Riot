@@ -33,6 +33,7 @@ const COMMANDS: &[&str] = &[
     "create_session",
     "probe_dirs",
     "path_exists",
+    "open_local_path",
     "list_sessions",
     "get_history",
     "delete_session",

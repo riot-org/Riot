@@ -41,6 +41,7 @@ pub mod kernel;
 mod nav_guard;
 #[cfg(feature = "desktop")]
 pub mod notification;
+pub mod open_local;
 #[cfg(feature = "desktop")]
 pub mod pasteboard;
 pub mod persist;
@@ -1491,6 +1492,14 @@ fn path_exists(path: String) -> bool {
     std::path::Path::new(&path).exists()
 }
 
+/// 用系统默认应用打开本地文件；可执行类的改成在文件夹里显示。
+/// 不走 opener 插件的路径范围 —— 理由见 [`open_local`]。
+#[cfg(feature = "desktop")]
+#[tauri::command]
+fn open_local_path(app: tauri::AppHandle, path: String) -> HostResult<open_local::Opened> {
+    Ok(open_local::open(&app, &path)?)
+}
+
 /// 所有活着的会话。前端启动或刷新后用它对齐侧边栏。
 #[cfg_attr(feature = "desktop", tauri::command)]
 async fn list_sessions(state: State<'_, AppState>) -> HostResult<Vec<state::SessionInfo>> {
@@ -1959,6 +1968,7 @@ pub fn run() {
             create_session,
             probe_dirs,
             path_exists,
+            open_local_path,
             list_sessions,
             get_history,
             delete_session,

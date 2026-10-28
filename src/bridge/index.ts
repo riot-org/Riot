@@ -1802,15 +1802,12 @@ export async function openInDefaultApp(path: string): Promise<void> {
 }
 
 /** 用系统默认应用打开路径。失败会抛，调用方自己决定怎么告诉用户。 */
-export async function openPath(path: string): Promise<void> {
+export async function openPath(path: string): Promise<"opened" | "revealed"> {
   if (!host.openLocal) throw new Error(t("errors.webNoLocalOpen"));
-  // opener 插件是分离式启动，目标不存在它也报成功。先自己查一遍，
-  // 让"文件不存在"成为看得见的失败，而不是点了没反应。
-  if (!(await invoke<boolean>("path_exists", { path }))) {
-    throw new Error(t("errors.fileNotFound", { path }));
-  }
-  const { openPath: open } = await import("@tauri-apps/plugin-opener");
-  await open(path);
+  // 宿主自己开：先查存在（opener 分离式启动，不存在也报成功），可执行类
+  // 文件不打开、改成在文件夹里显示。不走 opener 插件的 open_path —— 它按
+  // 目录划范围，Windows 上 D 盘项目里的文件全被拒（见 src-tauri/src/open_local.rs）。
+  return invoke<"opened" | "revealed">("open_local_path", { path });
 }
 
 /** 用系统浏览器打开网址。失败会抛。浏览器里就是开个新标签。 */
