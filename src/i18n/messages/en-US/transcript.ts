@@ -8,7 +8,7 @@ export default {
 
   "transcript.find.placeholder": "Find in session",
   "transcript.find.prev": "Previous",
-  "transcript.find.prevTitle": "Previous (⇧Enter)",
+  "transcript.find.prevTitle": "Previous ({key})",
   "transcript.find.next": "Next",
   "transcript.find.nextTitle": "Next (Enter)",
   "transcript.find.close": "Close find",

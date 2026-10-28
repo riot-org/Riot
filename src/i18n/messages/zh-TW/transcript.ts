@@ -7,7 +7,7 @@ export default {
 
   "transcript.find.placeholder": "在會話中尋找",
   "transcript.find.prev": "上一個",
-  "transcript.find.prevTitle": "上一個 (⇧Enter)",
+  "transcript.find.prevTitle": "上一個 ({key})",
   "transcript.find.next": "下一個",
   "transcript.find.nextTitle": "下一個 (Enter)",
   "transcript.find.close": "關閉尋找",

@@ -56,7 +56,7 @@ export default {
   "panels.fileTree.filter.placeholder": "篩選檔案…",
   "panels.fileTree.clear": "清除",
   "panels.fileTree.openFromDisk": "從磁碟開啟",
-  "panels.fileTree.openFromDisk.title": "從磁碟開啟…（⌘O）",
+  "panels.fileTree.openFromDisk.title": "從磁碟開啟…（{key}）",
   "panels.fileTree.noMatch": "沒有符合的檔案",
   "panels.fileTree.symlink": "符號連結",
 

@@ -712,7 +712,7 @@ pub fn uninstall() -> Result<(), String> {
 /// GUI 启动的 Windows 进程环境里通常没有它（Git Bash 会设，但从宿主
 /// 起的内核继承不到）—— 读错变量的后果是缓存目录一条都进不了
 /// writable，沙箱下第一条 `cargo build` 就死在"写不了缓存"上。
-pub(crate) fn home_dir() -> Option<PathBuf> {
+pub fn home_dir() -> Option<PathBuf> {
     #[cfg(windows)]
     return std::env::var_os("USERPROFILE").map(PathBuf::from);
     #[cfg(not(windows))]

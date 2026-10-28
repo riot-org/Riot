@@ -19,6 +19,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 
 import { type DirEntry, listDir, searchFiles } from "../bridge";
 import { useT } from "../i18n";
+import { shortcut } from "../lib/keys";
 import { startFileDrag } from "../lib/fileDrag";
 import { basename, joinRoot, relativeTo } from "../pathDisplay";
 import { Chevron } from "./Chevron";
@@ -443,7 +444,7 @@ export function FileTree({
             type="button"
             className="icon file-tree-disk"
             onClick={onPickFromDisk}
-            title={t("panels.fileTree.openFromDisk.title")}
+            title={t("panels.fileTree.openFromDisk.title", { key: shortcut("O") })}
             aria-label={t("panels.fileTree.openFromDisk")}
           >
             <DiskOpenIcon />

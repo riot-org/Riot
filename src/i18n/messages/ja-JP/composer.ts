@@ -116,7 +116,7 @@ export default {
   "composer.sessionSettings.sampling.resetDone": "戻しました",
   "composer.sessionSettings.venv": "Python 仮想環境",
   "composer.sessionSettings.venv.hint":
-    "VIRTUAL_ENV を設定し、その bin を PATH の先頭に置くことで python / pip がこの環境を指すようになります。空にするとシステムのデフォルトに戻ります。システムの選択ダイアログは .venv のようなドットで始まるフォルダを既定で隠します（⌘⇧. で切り替え）。パスを直接入力しても構いません。",
+    "VIRTUAL_ENV を設定し、その bin（Windows では Scripts）を PATH の先頭に置くことで python / pip がこの環境を指すようになります。空にするとシステムのデフォルトに戻ります。macOS の選択ダイアログは .venv のようなドットで始まるフォルダを既定で隠します（⌘⇧. で切り替え）。パスを直接入力しても構いません。",
   "composer.sessionSettings.venv.placeholder": "venv のルートフォルダ",
   "composer.sessionSettings.venv.pick": "選択…",
   "composer.sessionSettings.venv.found": "{name} を検出しました。使用する",

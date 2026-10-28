@@ -125,7 +125,7 @@ export default {
   "composer.sessionSettings.sampling.resetDone": "Reset",
   "composer.sessionSettings.venv": "Python virtual environment",
   "composer.sessionSettings.venv.hint":
-    "Sets VIRTUAL_ENV and puts its bin first on PATH so python / pip resolve to this environment. Clear to restore the system default. The system picker hides dot-folders like .venv by default (⌘⇧. toggles them); you can also type the path directly.",
+    "Sets VIRTUAL_ENV and puts its bin (Scripts on Windows) first on PATH so python / pip resolve to this environment. Clear to restore the system default. The macOS picker hides dot-folders like .venv by default (⌘⇧. toggles them); you can also type the path directly.",
   "composer.sessionSettings.venv.placeholder": "venv root folder",
   "composer.sessionSettings.venv.pick": "Choose…",
   "composer.sessionSettings.venv.found": "Found {name}, use it",

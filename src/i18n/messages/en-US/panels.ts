@@ -64,7 +64,7 @@ export default {
   "panels.fileTree.filter.placeholder": "Filter files…",
   "panels.fileTree.clear": "Clear",
   "panels.fileTree.openFromDisk": "Open from disk",
-  "panels.fileTree.openFromDisk.title": "Open from disk… (⌘O)",
+  "panels.fileTree.openFromDisk.title": "Open from disk… ({key})",
   "panels.fileTree.noMatch": "No matching files",
   "panels.fileTree.symlink": "Symbolic link",
 

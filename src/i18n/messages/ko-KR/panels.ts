@@ -60,7 +60,7 @@ export default {
   "panels.fileTree.filter.placeholder": "파일 필터…",
   "panels.fileTree.clear": "지우기",
   "panels.fileTree.openFromDisk": "디스크에서 열기",
-  "panels.fileTree.openFromDisk.title": "디스크에서 열기… (⌘O)",
+  "panels.fileTree.openFromDisk.title": "디스크에서 열기… ({key})",
   "panels.fileTree.noMatch": "일치하는 파일이 없습니다",
   "panels.fileTree.symlink": "심볼릭 링크",
 

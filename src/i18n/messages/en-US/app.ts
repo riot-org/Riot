@@ -46,7 +46,6 @@ export default {
   "app.treeMenu.addToChat": "Add to chat",
   "app.treeMenu.copyRelPath": "Copy relative path",
   "app.treeMenu.copyFullPath": "Copy full path",
-  "app.treeMenu.revealInFileManager": "Reveal in Finder / Explorer",
 
   "app.sessionMenu.rename": "Rename",
   "app.sessionMenu.delete": "Delete session",
@@ -78,9 +77,9 @@ export default {
   "app.schedules.clearDone": "Clear",
 
   "app.sidebar.expand": "Show sidebar",
-  "app.sidebar.expandTitle": "Show sidebar (⌘B)",
+  "app.sidebar.expandTitle": "Show sidebar ({key})",
   "app.sidebar.collapse": "Hide sidebar",
-  "app.sidebar.collapseTitle": "Hide sidebar (⌘B)",
+  "app.sidebar.collapseTitle": "Hide sidebar ({key})",
   "app.sidebar.schedules": "Scheduled tasks",
   "app.sidebar.missedTitle": "{count} tasks were missed while the app was closed",
   "app.sidebar.missedTitle#one": "{count} task was missed while the app was closed",
@@ -105,7 +104,7 @@ export default {
   "app.topbar.sessionSettings": "Session settings",
   "app.topbar.needSession": "Open a session first",
   "app.win.terminal": "Terminal panel",
-  "app.win.terminalTitle": "Terminal panel (⌘J)",
+  "app.win.terminalTitle": "Terminal panel ({key})",
   "app.win.terminalNeedSession": "Open a session to use the terminal",
   "app.win.terminalRunning": "{count} service(s) running in the terminal",
   "app.win.drawer": "Side panel",

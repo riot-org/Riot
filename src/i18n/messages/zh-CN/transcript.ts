@@ -11,7 +11,7 @@ export default {
   // 会话内查找（⌘F）
   "transcript.find.placeholder": "在会话中查找",
   "transcript.find.prev": "上一个",
-  "transcript.find.prevTitle": "上一个 (⇧Enter)",
+  "transcript.find.prevTitle": "上一个 ({key})",
   "transcript.find.next": "下一个",
   "transcript.find.nextTitle": "下一个 (Enter)",
   "transcript.find.close": "关闭查找",

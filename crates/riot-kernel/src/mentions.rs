@@ -213,6 +213,15 @@ fn looks_like_path(s: &str) -> bool {
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
 }
 
+/// `~/x` / `~\x` 去掉开头的 `~` 和分隔符，剩下相对主目录的部分。
+///
+/// `[约束]` 主目录走 `riot_runtime::sandbox::home_dir`，不读 `HOME`：GUI 启动的
+/// Windows 进程环境里通常没有 `HOME`（约定是 `USERPROFILE`），读它的话
+/// Windows 上所有 `@~/…` 引用都解析失败。
+pub(crate) fn strip_home_prefix(raw: &str) -> Option<&str> {
+    raw.strip_prefix("~/").or_else(|| raw.strip_prefix("~\\"))
+}
+
 /// 相对路径以**项目根**为基准（不是文件所在目录 —— 用户是在项目语境里
 /// 说话）。`~/` 展开成 HOME，绝对路径原样。
 fn resolve(raw: &str, cwd: &Path) -> Option<PathBuf> {
@@ -220,9 +229,8 @@ fn resolve(raw: &str, cwd: &Path) -> Option<PathBuf> {
     if raw.is_empty() {
         return None;
     }
-    if let Some(rel) = raw.strip_prefix("~/") {
-        let home = std::env::var("HOME").ok()?;
-        return Some(Path::new(&home).join(rel));
+    if let Some(rel) = strip_home_prefix(raw) {
+        return Some(riot_runtime::sandbox::home_dir()?.join(rel));
     }
     let p = Path::new(raw);
     Some(if p.is_absolute() {
@@ -568,6 +576,20 @@ fn walk(root: &Path) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 主目录前缀认两种分隔符() {
+        assert_eq!(strip_home_prefix("~/docs/a.md"), Some("docs/a.md"));
+        assert_eq!(strip_home_prefix(r"~\docs\a.md"), Some(r"docs\a.md"), "Windows 写法");
+        assert_eq!(strip_home_prefix("~user/a"), None, "别人的主目录不展开");
+        assert_eq!(strip_home_prefix("./~/a"), None);
+    }
+
+    #[test]
+    fn 波浪号引用落到主目录() {
+        let home = riot_runtime::sandbox::home_dir().expect("测试机有主目录");
+        assert_eq!(resolve("~/a.md", Path::new("/proj")), Some(home.join("a.md")));
+    }
 
     fn raws(text: &str) -> Vec<String> {
         parse(text, Path::new("/proj"))

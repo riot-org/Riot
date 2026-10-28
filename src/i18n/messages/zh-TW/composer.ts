@@ -116,7 +116,7 @@ export default {
   "composer.sessionSettings.sampling.resetDone": "已恢復",
   "composer.sessionSettings.venv": "Python 虛擬環境",
   "composer.sessionSettings.venv.hint":
-    "注入 VIRTUAL_ENV 並把 bin 排到 PATH 最前面，python / pip 直接落在這個環境。清空則恢復系統預設。系統選擇框預設隱藏 .venv 這類點開頭的資料夾（⌘⇧. 切換顯示），也可以直接手動輸入路徑。",
+    "注入 VIRTUAL_ENV 並把它的 bin（Windows 上是 Scripts）排到 PATH 最前面，python / pip 直接落在這個環境。清空則恢復系統預設。macOS 的系統選擇框預設隱藏 .venv 這類點開頭的資料夾（⌘⇧. 切換顯示），也可以直接手動輸入路徑。",
   "composer.sessionSettings.venv.placeholder": "venv 根目錄",
   "composer.sessionSettings.venv.pick": "選擇…",
   "composer.sessionSettings.venv.found": "偵測到 {name}，使用",

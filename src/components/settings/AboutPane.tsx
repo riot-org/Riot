@@ -6,6 +6,7 @@ import {
 } from "../../bridge";
 import { type MessageKey, useT } from "../../i18n";
 import { Card, CardBlock, Group, Row } from "./layout";
+import { revealInFileManagerLabel } from "../../lib/platform";
 
 function friendlyUpdateError(raw: string): MessageKey {
   if (/403|429|rate limit/i.test(raw)) return "settings.about.err.rateLimit";
@@ -98,7 +99,7 @@ export function AboutPane({
               </>
             }
           >
-            <button onClick={() => void revealInFinder(configDir)}>{t("common.revealInFinder")}</button>
+            <button onClick={() => void revealInFinder(configDir)}>{revealInFileManagerLabel()}</button>
           </Row>
         </Card>
       </Group>

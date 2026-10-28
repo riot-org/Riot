@@ -210,14 +210,14 @@ fn extract_refs(line: &str) -> Vec<String> {
 
 /// 把引用路径解析成绝对路径。支持 `@/abs`、`@~/home`、`@./rel`、`@rel`。
 fn resolve_ref(r: &str, base_dir: &Path) -> Option<PathBuf> {
+    use crate::mentions::strip_home_prefix;
     // 去掉尾部常见的标点（引用出现在句子里："见 @./docs/a.md。"）
     let r = r.trim_end_matches(['.', ',', ';', ':', '!', '?', ')', '）', '。', '，', '；']);
     if r.is_empty() {
         return None;
     }
-    if let Some(home_rel) = r.strip_prefix("~/") {
-        let home = std::env::var("HOME").ok()?;
-        return Some(Path::new(&home).join(home_rel));
+    if let Some(home_rel) = strip_home_prefix(r) {
+        return Some(riot_runtime::sandbox::home_dir()?.join(home_rel));
     }
     let p = Path::new(r);
     Some(if p.is_absolute() {

@@ -258,7 +258,8 @@ function EyeIcon() {
 }
 
 function splitDisplayPath(path: string): { dir: string; name: string } {
-  const slash = path.lastIndexOf("/");
+  // 项目外的文件在 Windows 上是 `D:\…` 这种反斜杠路径，两种分隔符都认。
+  const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
   if (slash < 0) return { dir: "", name: path };
   // 目录跟在文件名后面显示，末尾的斜杠去掉。
   return { dir: path.slice(0, slash), name: path.slice(slash + 1) };

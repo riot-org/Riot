@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { browserScopeList, host, type PermissionMode, type SessionInfo } from "../bridge";
 import { useT } from "../i18n";
+import { shortcut } from "../lib/keys";
 import { Chevron } from "./Chevron";
 import { useEscLayer } from "./Modal";
 import { PermissionMenu } from "./pickers";
@@ -60,7 +61,7 @@ export function SidebarReveal({
         <button
           className="tb-btn"
           onClick={onToggle}
-          title={t("app.sidebar.expandTitle")}
+          title={t("app.sidebar.expandTitle", { key: shortcut("B") })}
           aria-label={t("app.sidebar.expand")}
         >
           <SidebarToggleIcon />
@@ -187,7 +188,7 @@ export function WindowControls({
         className={terminalOpen ? "tb-btn active" : "tb-btn"}
         onClick={onToggleTerminal}
         disabled={!terminalEnabled}
-        title={terminalEnabled ? t("app.win.terminalTitle") : t("app.win.terminalNeedSession")}
+        title={terminalEnabled ? t("app.win.terminalTitle", { key: shortcut("J") }) : t("app.win.terminalNeedSession")}
         aria-label={t("app.win.terminal")}
         aria-pressed={terminalOpen}
       >

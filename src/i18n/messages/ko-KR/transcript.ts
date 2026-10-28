@@ -9,7 +9,7 @@ export default {
   // 세션 내 찾기 (⌘F)
   "transcript.find.placeholder": "세션에서 찾기",
   "transcript.find.prev": "이전",
-  "transcript.find.prevTitle": "이전 (⇧Enter)",
+  "transcript.find.prevTitle": "이전 ({key})",
   "transcript.find.next": "다음",
   "transcript.find.nextTitle": "다음 (Enter)",
   "transcript.find.close": "찾기 닫기",

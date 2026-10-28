@@ -60,7 +60,7 @@ export default {
   "panels.fileTree.filter.placeholder": "ファイルを絞り込む…",
   "panels.fileTree.clear": "クリア",
   "panels.fileTree.openFromDisk": "ディスクから開く",
-  "panels.fileTree.openFromDisk.title": "ディスクから開く…（⌘O）",
+  "panels.fileTree.openFromDisk.title": "ディスクから開く…（{key}）",
   "panels.fileTree.noMatch": "一致するファイルはありません",
   "panels.fileTree.symlink": "シンボリックリンク",
 

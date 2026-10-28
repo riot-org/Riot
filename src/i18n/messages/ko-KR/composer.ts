@@ -118,7 +118,7 @@ export default {
   "composer.sessionSettings.sampling.resetDone": "복원됨",
   "composer.sessionSettings.venv": "Python 가상 환경",
   "composer.sessionSettings.venv.hint":
-    "VIRTUAL_ENV를 주입하고 bin을 PATH 맨 앞에 두어 python / pip이 이 환경을 가리키게 합니다. 비우면 시스템 기본값으로 돌아갑니다. 시스템 선택 창은 .venv처럼 점으로 시작하는 폴더를 기본으로 숨기므로(⌘⇧.로 표시 전환) 경로를 직접 입력해도 됩니다.",
+    "VIRTUAL_ENV를 주입하고 bin(Windows에서는 Scripts)을 PATH 맨 앞에 두어 python / pip이 이 환경을 가리키게 합니다. 비우면 시스템 기본값으로 돌아갑니다. macOS 선택 창은 .venv처럼 점으로 시작하는 폴더를 기본으로 숨기므로(⌘⇧.로 표시 전환) 경로를 직접 입력해도 됩니다.",
   "composer.sessionSettings.venv.placeholder": "venv 루트 폴더",
   "composer.sessionSettings.venv.pick": "선택…",
   "composer.sessionSettings.venv.found": "{name}을(를) 발견했습니다. 사용",

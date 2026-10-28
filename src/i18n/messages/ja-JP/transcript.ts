@@ -7,7 +7,7 @@ export default {
 
   "transcript.find.placeholder": "セッション内を検索",
   "transcript.find.prev": "前へ",
-  "transcript.find.prevTitle": "前へ (⇧Enter)",
+  "transcript.find.prevTitle": "前へ ({key})",
   "transcript.find.next": "次へ",
   "transcript.find.nextTitle": "次へ (Enter)",
   "transcript.find.close": "検索を閉じる",

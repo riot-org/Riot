@@ -14,6 +14,7 @@
 
 import type { PanelState } from "../bridge";
 import { type MessageKey, useT } from "../i18n";
+import { shortcut } from "../lib/keys";
 import { useUnsaved } from "../lib/unsavedEdits";
 import { basename } from "../pathDisplay";
 import {
@@ -223,21 +224,21 @@ export function WorkbenchEmpty({
           <DiffIcon />
         </span>
         <span className="wb-empty-label">{t("app.workbench.changes")}</span>
-        <kbd className="wb-empty-kbd">⌘⇧G</kbd>
+        <kbd className="wb-empty-kbd">{shortcut("G", { shift: true })}</kbd>
       </button>
       <button type="button" className="wb-empty-item" onClick={onBrowser}>
         <span className="wb-empty-icon">
           <BrowserIcon />
         </span>
         <span className="wb-empty-label">{t("app.workbench.browser")}</span>
-        <kbd className="wb-empty-kbd">⌘T</kbd>
+        <kbd className="wb-empty-kbd">{shortcut("T")}</kbd>
       </button>
       <button type="button" className="wb-empty-item" onClick={onFiles}>
         <span className="wb-empty-icon">
           <FolderIcon />
         </span>
         <span className="wb-empty-label">{t("app.workbench.files")}</span>
-        <kbd className="wb-empty-kbd">⌘⇧E</kbd>
+        <kbd className="wb-empty-kbd">{shortcut("E", { shift: true })}</kbd>
       </button>
     </div>
   );

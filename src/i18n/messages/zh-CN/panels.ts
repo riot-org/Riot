@@ -61,7 +61,7 @@ export default {
   "panels.fileTree.filter.placeholder": "筛选文件…",
   "panels.fileTree.clear": "清除",
   "panels.fileTree.openFromDisk": "从磁盘打开",
-  "panels.fileTree.openFromDisk.title": "从磁盘打开…（⌘O）",
+  "panels.fileTree.openFromDisk.title": "从磁盘打开…（{key}）",
   "panels.fileTree.noMatch": "没有匹配的文件",
   "panels.fileTree.symlink": "符号链接",
 

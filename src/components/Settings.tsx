@@ -39,6 +39,7 @@ import { RemotePane } from "./settings/RemotePane";
 import { SkillsPane } from "./settings/SkillsPane";
 import { WebPane } from "./settings/WebPane";
 import type { LeaveGuard } from "./settings/shared";
+import { revealInFileManagerLabel } from "../lib/platform";
 
 interface Props {
   status: ConfigStatus;
@@ -242,7 +243,7 @@ export function Settings({
                   <p className="hint">{t("settings.configBroken.hint")}</p>
                   <code className="path">{status.configBackup}</code>
                   <button onClick={() => void revealInFinder(status.configBackup ?? "")}>
-                    {t("common.revealInFinder")}
+                    {revealInFileManagerLabel()}
                   </button>
                 </div>
               ) : null}

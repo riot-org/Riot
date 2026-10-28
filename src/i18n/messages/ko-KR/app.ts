@@ -46,7 +46,6 @@ export default {
   "app.treeMenu.addToChat": "대화에 추가",
   "app.treeMenu.copyRelPath": "상대 경로 복사",
   "app.treeMenu.copyFullPath": "전체 경로 복사",
-  "app.treeMenu.revealInFileManager": "Finder / 탐색기에서 보기",
 
   "app.sessionMenu.rename": "이름 바꾸기",
   "app.sessionMenu.delete": "세션 삭제",
@@ -75,9 +74,9 @@ export default {
   "app.schedules.clearDone": "정리",
 
   "app.sidebar.expand": "사이드바 펼치기",
-  "app.sidebar.expandTitle": "사이드바 펼치기 (⌘B)",
+  "app.sidebar.expandTitle": "사이드바 펼치기 ({key})",
   "app.sidebar.collapse": "사이드바 접기",
-  "app.sidebar.collapseTitle": "사이드바 접기 (⌘B)",
+  "app.sidebar.collapseTitle": "사이드바 접기 ({key})",
   "app.sidebar.schedules": "예약 작업",
   "app.sidebar.missedTitle": "앱이 닫혀 있는 동안 작업 {count}개를 놓쳤습니다",
   "app.sidebar.projects": "프로젝트",
@@ -101,7 +100,7 @@ export default {
   "app.topbar.sessionSettings": "세션 설정",
   "app.topbar.needSession": "먼저 세션을 열어 주세요",
   "app.win.terminal": "터미널 패널",
-  "app.win.terminalTitle": "터미널 패널 (⌘J)",
+  "app.win.terminalTitle": "터미널 패널 ({key})",
   "app.win.terminalNeedSession": "터미널을 사용하려면 먼저 세션을 열어 주세요",
   "app.win.terminalRunning": "터미널에서 서비스 {count}개 실행 중",
   "app.win.drawer": "사이드 패널",

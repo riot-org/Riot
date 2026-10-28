@@ -47,7 +47,6 @@ export default {
   "app.treeMenu.addToChat": "添加到对话",
   "app.treeMenu.copyRelPath": "复制相对路径",
   "app.treeMenu.copyFullPath": "复制完整路径",
-  "app.treeMenu.revealInFileManager": "在访达 / 资源管理器中显示",
 
   "app.sessionMenu.rename": "重命名",
   "app.sessionMenu.delete": "删除会话",
@@ -76,9 +75,9 @@ export default {
   "app.schedules.clearDone": "清理",
 
   "app.sidebar.expand": "展开侧边栏",
-  "app.sidebar.expandTitle": "展开侧边栏（⌘B）",
+  "app.sidebar.expandTitle": "展开侧边栏（{key}）",
   "app.sidebar.collapse": "收起侧边栏",
-  "app.sidebar.collapseTitle": "收起侧边栏（⌘B）",
+  "app.sidebar.collapseTitle": "收起侧边栏（{key}）",
   "app.sidebar.schedules": "定时任务",
   "app.sidebar.missedTitle": "有 {count} 个任务在 App 关着时错过了",
   "app.sidebar.projects": "项目",
@@ -102,7 +101,7 @@ export default {
   "app.topbar.sessionSettings": "会话设置",
   "app.topbar.needSession": "先打开一个会话",
   "app.win.terminal": "终端面板",
-  "app.win.terminalTitle": "终端面板（⌘J）",
+  "app.win.terminalTitle": "终端面板（{key}）",
   "app.win.terminalNeedSession": "先打开一个会话再用终端",
   "app.win.terminalRunning": "{count} 个服务在终端里跑着",
   "app.win.drawer": "侧边面板",

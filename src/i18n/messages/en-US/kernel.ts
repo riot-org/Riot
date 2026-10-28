@@ -60,7 +60,7 @@ export default {
   // ── MCP ────────────────────────────────────────────────────
   "kernel.mcp.notRunning": "No MCP server named \u201c{id}\u201d is running. Enable it in Settings first.",
   "kernel.mcp.commandNotFound":
-    "Failed to start: command \u201c{command}\u201d not found. Apps launched from Finder or the Dock do not get the terminal's PATH; use the absolute path from `which {command}`, or make sure npx / uvx / node is installed.",
+    "Failed to start: command \u201c{command}\u201d not found. Apps not launched from a terminal do not get the terminal's PATH; use the absolute path from `which {command}` (`where {command}` on Windows), or make sure npx / uvx / node is installed.",
   "kernel.mcp.spawnFailed": "Failed to start. Check the command path and arguments.",
   "kernel.mcp.disconnected": "The process exited or the connection dropped. Click Reconnect to try again.",
   "kernel.mcp.stopped": "Stopped.",

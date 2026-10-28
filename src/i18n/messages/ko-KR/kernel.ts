@@ -59,7 +59,7 @@ export default {
   // ── MCP ─────────────────────────────────────────────────────
   "kernel.mcp.notRunning": "「{id}」라는 MCP 서버가 실행 중이 아닙니다. 먼저 설정에서 사용하도록 설정하세요.",
   "kernel.mcp.commandNotFound":
-    "시작 실패: 명령 「{command}」을(를) 찾을 수 없습니다. Finder나 Dock에서 열면 터미널의 PATH가 없으므로, 명령을 `which {command}`가 출력하는 절대 경로로 바꾸거나 npx / uvx / node가 설치되어 있는지 확인하세요.",
+    "시작 실패: 명령 「{command}」을(를) 찾을 수 없습니다. 터미널이 아닌 곳에서 실행하면 터미널의 PATH가 없으므로, 명령을 `which {command}`(Windows에서는 `where {command}`)가 출력하는 절대 경로로 바꾸거나 npx / uvx / node가 설치되어 있는지 확인하세요.",
   "kernel.mcp.spawnFailed": "시작에 실패했습니다. 명령 경로와 인수를 확인하세요.",
   "kernel.mcp.disconnected": "프로세스가 종료되었거나 연결이 끊어졌습니다. 「다시 연결」을 눌러 다시 시도하세요.",
   "kernel.mcp.stopped": "중지되었습니다.",

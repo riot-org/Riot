@@ -46,7 +46,6 @@ export default {
   "app.treeMenu.addToChat": "チャットに追加",
   "app.treeMenu.copyRelPath": "相対パスをコピー",
   "app.treeMenu.copyFullPath": "フルパスをコピー",
-  "app.treeMenu.revealInFileManager": "Finder / エクスプローラーで表示",
 
   "app.sessionMenu.rename": "名前を変更",
   "app.sessionMenu.delete": "セッションを削除",
@@ -75,9 +74,9 @@ export default {
   "app.schedules.clearDone": "クリア",
 
   "app.sidebar.expand": "サイドバーを表示",
-  "app.sidebar.expandTitle": "サイドバーを表示（⌘B）",
+  "app.sidebar.expandTitle": "サイドバーを表示（{key}）",
   "app.sidebar.collapse": "サイドバーを隠す",
-  "app.sidebar.collapseTitle": "サイドバーを隠す（⌘B）",
+  "app.sidebar.collapseTitle": "サイドバーを隠す（{key}）",
   "app.sidebar.schedules": "スケジュールタスク",
   "app.sidebar.missedTitle": "アプリ終了中に {count} 件のタスクが未実行でした",
   "app.sidebar.projects": "プロジェクト",
@@ -101,7 +100,7 @@ export default {
   "app.topbar.sessionSettings": "セッション設定",
   "app.topbar.needSession": "先にセッションを開いてください",
   "app.win.terminal": "ターミナルパネル",
-  "app.win.terminalTitle": "ターミナルパネル（⌘J）",
+  "app.win.terminalTitle": "ターミナルパネル（{key}）",
   "app.win.terminalNeedSession": "ターミナルを使うには先にセッションを開いてください",
   "app.win.terminalRunning": "{count} 個のサービスがターミナルで実行中",
   "app.win.drawer": "サイドパネル",

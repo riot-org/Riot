@@ -51,6 +51,7 @@ import {
 } from "../lib/promptText";
 import { findHits, findTextRanges } from "../lib/findHits";
 import { type LiveTextStore, useLiveText } from "../lib/liveText";
+import { editorOwnsKey, isModKey, shortcut, terminalOwnsKey } from "../lib/keys";
 import { ENTER_TRANSCRIPT_EVENT } from "../lib/transcriptNav";
 import { estimateTurnHeight, isLongUserText, lastAssistantIndex } from "../lib/turnHeight";
 import { openPlanPanel } from "../lib/plan";
@@ -457,7 +458,7 @@ function FindBar({
         <button
           type="button"
           className="find-btn"
-          title={t("transcript.find.prevTitle")}
+          title={t("transcript.find.prevTitle", { key: shortcut("Enter", { shift: true, mod: false }) })}
           aria-label={t("transcript.find.prev")}
           disabled={!total}
           onClick={() => step(-1)}
@@ -1101,7 +1102,9 @@ export const Transcript = memo(function Transcript({
       return;
     }
     const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "f") {
+      // 编辑器和终端里的 ⌘F / Ctrl+F 归它们自己（编辑器有自己的查找）。
+      if (editorOwnsKey(e.target) || terminalOwnsKey(e.target)) return;
+      if (isModKey(e) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "f") {
         e.preventDefault();
         setFindOpen(true);
       }

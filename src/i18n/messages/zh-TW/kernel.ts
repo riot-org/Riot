@@ -59,7 +59,7 @@ export default {
   // ── MCP ─────────────────────────────────────────────────────
   "kernel.mcp.notRunning": "沒有叫「{id}」的 MCP 伺服器在執行。先在設定裡啟用它。",
   "kernel.mcp.commandNotFound":
-    "啟動失敗：找不到命令「{command}」。從 Finder 或 Dock 開啟時沒有終端機裡的 PATH，把命令改成 `which {command}` 給出的絕對路徑，或確認 npx / uvx / node 已安裝。",
+    "啟動失敗：找不到命令「{command}」。不是從終端機啟動時拿不到終端機裡的 PATH，把命令改成 `which {command}`（Windows 上是 `where {command}`）給出的絕對路徑，或確認 npx / uvx / node 已安裝。",
   "kernel.mcp.spawnFailed": "啟動失敗。檢查命令路徑和參數。",
   "kernel.mcp.disconnected": "程序結束或連線中斷。點「重新連線」再試。",
   "kernel.mcp.stopped": "已停止。",

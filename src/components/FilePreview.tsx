@@ -32,6 +32,7 @@ import { ProjectRootContext } from "./Markdown";
 // 为什么不用 file-viewer 的 md 管线：见 MarkdownView 头注释。
 import MarkdownView from "./MarkdownView";
 import { ShotViewer } from "./ToolCard";
+import { revealInFileManagerLabel } from "../lib/platform";
 
 // 预览器和它的 renderer 管线只在第一次打开预览时加载，
 // 启动 bundle 不背这份体积。
@@ -424,7 +425,7 @@ export function FilePreviewPanel({
             type="button"
             className="icon"
             onClick={() => void revealInFinder(active)}
-            title={t("common.revealInFinder")}
+            title={revealInFileManagerLabel()}
           >
             <RevealIcon />
           </button>

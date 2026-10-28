@@ -8,6 +8,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { SessionInfo } from "../bridge";
 import { useImeGuard } from "../hooks/useImeGuard";
 import { useT } from "../i18n";
+import { shortcut } from "../lib/keys";
 import { basename } from "../pathDisplay";
 import { Chevron } from "./Chevron";
 import {
@@ -135,7 +136,7 @@ export function Sidebar(props: SidebarProps) {
         <button
           className="tb-btn"
           onClick={onCollapse}
-          title={t("app.sidebar.collapseTitle")}
+          title={t("app.sidebar.collapseTitle", { key: shortcut("B") })}
           aria-label={t("app.sidebar.collapse")}
         >
           {/* 这颗键住在展开着的侧栏里，所以总是"开"的样子；收起后顶栏那颗是空的。 */}

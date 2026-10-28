@@ -61,7 +61,7 @@ export default {
   // ── MCP ─────────────────────────────────────────────────────
   "kernel.mcp.notRunning": "没有叫「{id}」的 MCP 服务器在运行。先在设置里启用它。",
   "kernel.mcp.commandNotFound":
-    "启动失败：找不到命令「{command}」。从访达或 Dock 打开时没有终端里的 PATH，把命令改成 `which {command}` 给出的绝对路径，或确认 npx / uvx / node 已安装。",
+    "启动失败：找不到命令「{command}」。不是从终端启动时拿不到终端里的 PATH，把命令改成 `which {command}`（Windows 上是 `where {command}`）给出的绝对路径，或确认 npx / uvx / node 已安装。",
   "kernel.mcp.spawnFailed": "启动失败。检查命令路径和参数。",
   "kernel.mcp.disconnected": "进程退出或连接断开。点「重连」再试。",
   "kernel.mcp.stopped": "已停止。",

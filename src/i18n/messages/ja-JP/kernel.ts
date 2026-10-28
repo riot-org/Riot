@@ -59,7 +59,7 @@ export default {
   // ── MCP ─────────────────────────────────────────────────────
   "kernel.mcp.notRunning": "「{id}」という MCP サーバーは実行されていません。まず設定で有効にしてください。",
   "kernel.mcp.commandNotFound":
-    "起動に失敗しました：コマンド「{command}」が見つかりません。Finder や Dock から起動した場合はターミナルの PATH が引き継がれないため、コマンドを `which {command}` が返す絶対パスに変えるか、npx / uvx / node がインストールされているか確認してください。",
+    "起動に失敗しました：コマンド「{command}」が見つかりません。ターミナル以外から起動した場合はターミナルの PATH が引き継がれないため、コマンドを `which {command}`（Windows では `where {command}`）が返す絶対パスに変えるか、npx / uvx / node がインストールされているか確認してください。",
   "kernel.mcp.spawnFailed": "起動に失敗しました。コマンドのパスと引数を確認してください。",
   "kernel.mcp.disconnected": "プロセスが終了したか、接続が切れました。「再接続」をクリックしてやり直してください。",
   "kernel.mcp.stopped": "停止しました。",

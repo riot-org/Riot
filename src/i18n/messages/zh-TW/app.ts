@@ -46,7 +46,6 @@ export default {
   "app.treeMenu.addToChat": "加入對話",
   "app.treeMenu.copyRelPath": "複製相對路徑",
   "app.treeMenu.copyFullPath": "複製完整路徑",
-  "app.treeMenu.revealInFileManager": "在 Finder / 檔案總管中顯示",
 
   "app.sessionMenu.rename": "重新命名",
   "app.sessionMenu.delete": "刪除會話",
@@ -75,9 +74,9 @@ export default {
   "app.schedules.clearDone": "清理",
 
   "app.sidebar.expand": "展開側邊欄",
-  "app.sidebar.expandTitle": "展開側邊欄（⌘B）",
+  "app.sidebar.expandTitle": "展開側邊欄（{key}）",
   "app.sidebar.collapse": "收合側邊欄",
-  "app.sidebar.collapseTitle": "收合側邊欄（⌘B）",
+  "app.sidebar.collapseTitle": "收合側邊欄（{key}）",
   "app.sidebar.schedules": "排程任務",
   "app.sidebar.missedTitle": "有 {count} 個任務在 App 關閉時錯過了",
   "app.sidebar.projects": "專案",
@@ -101,7 +100,7 @@ export default {
   "app.topbar.sessionSettings": "會話設定",
   "app.topbar.needSession": "請先開啟一個會話",
   "app.win.terminal": "終端機面板",
-  "app.win.terminalTitle": "終端機面板（⌘J）",
+  "app.win.terminalTitle": "終端機面板（{key}）",
   "app.win.terminalNeedSession": "請先開啟一個會話再使用終端機",
   "app.win.terminalRunning": "{count} 個服務在終端機裡執行中",
   "app.win.drawer": "側邊面板",

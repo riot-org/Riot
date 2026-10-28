@@ -70,6 +70,7 @@ import { useSessionRecency } from "./hooks/useSessionRecency";
 import { useBrowserPanel } from "./hooks/useBrowserPanel";
 import { useT } from "./i18n";
 import { trackChatColWidth } from "./lib/chatColWidth";
+import { isModKey, terminalOwnsKey } from "./lib/keys";
 import { planPanelOpen, subscribePanelBrowser } from "./lib/linkIntent";
 import { type PlanState, samePlan, sameTodos, subscribePlanOpen } from "./lib/plan";
 import { newPresetId } from "./lib/prompts";
@@ -132,6 +133,7 @@ import {
   sessionListEq,
 } from "./lib/sessionList";
 import { Chat } from "./components/Chat";
+import { revealInFileManagerLabel } from "./lib/platform";
 
 /**
  * 布局照着 Codex 桌面端：左侧按项目分组的会话列表（可拖宽、可收起），
@@ -537,7 +539,7 @@ export function App() {
       action: () => void navigator.clipboard.writeText(target.abs),
     });
     entries.push({
-      label: t("app.treeMenu.revealInFileManager"),
+      label: revealInFileManagerLabel(),
       action: () => void revealInFinder(target.abs),
     });
     setMenu({ x: e.clientX, y: e.clientY, entries });
@@ -927,8 +929,11 @@ export function App() {
   }, [anyBusy, applySessions]);
 
   /**
-   * 全局 ⌘ 快捷键。macOS 用户带着 Finder/浏览器的肌肉记忆来 ——
-   * ⌘N 新会话、⌘, 设置、⌘B 侧栏、⌘J 终端。
+   * 全局 ⌘ 快捷键（Windows / Linux 上是 Ctrl，见 lib/keys）。macOS 用户带着
+   * Finder/浏览器的肌肉记忆来 —— ⌘N 新会话、⌘, 设置、⌘B 侧栏、⌘J 终端。
+   *
+   * `[约束]` Windows / Linux 上焦点在终端里时一个都不拦：Ctrl+W / P / N / B /
+   * J 都是 shell 的键，拦下来就是在终端里删个词却关掉了标签。
    *
    * `[约束]` ⌘W 必须拦下来 preventDefault，否则 WKWebView 默认会关掉整个
    * 窗口 —— 用户想关的多半是一个面板，不是整个应用。这里把它接住当"收起
@@ -936,7 +941,7 @@ export function App() {
    */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!e.metaKey || e.ctrlKey || e.altKey) return;
+      if (!isModKey(e) || e.altKey || terminalOwnsKey(e.target)) return;
       const k = e.key.toLowerCase();
       switch (k) {
         case "n": {
@@ -1212,7 +1217,7 @@ export function App() {
       anchor: `project:${root}`,
       entries: [
         { label: t("app.newSession"), action: () => void newSession(root) },
-        { label: t("common.revealInFinder"), action: () => void revealInFinder(root) },
+        { label: revealInFileManagerLabel(), action: () => void revealInFinder(root) },
         {
           label: t("app.projectMenu.copyPath"),
           action: () => void navigator.clipboard.writeText(root),
