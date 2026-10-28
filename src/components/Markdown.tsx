@@ -10,6 +10,8 @@ import {
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
+import remarkCjkFriendly from "remark-cjk-friendly";
+import remarkCjkFriendlyGfmStrikethrough from "remark-cjk-friendly-gfm-strikethrough";
 
 import { openInBrowser, openPath, readFileBytes, revealInFinder } from "../bridge";
 import { useTimedFlag } from "../hooks/useTimedFlag";
@@ -347,8 +349,19 @@ export const Markdown = memo(function Markdown({
   );
 });
 
-const REMARK_PLUGINS = [
+/**
+ * `[约束]` 两个 cjk-friendly 插件紧跟在 remarkGfm 后面，删除线那个必须在
+ * remarkGfm **之后**（它改的是 GFM 注册的 `~~` 解析，放前面不生效）。
+ *
+ * 它们修的是 CommonMark 对中文的一条规则：`**` 内侧是标点、外侧是汉字时
+ * 不算闭合。模型写中文常把句号包进加粗再紧接下一句 ——
+ * `**第一，防止踩踏。**昨天…` —— 不加这两个插件的话，两对星号原样露出来。
+ * 英文的判定不变。
+ */
+export const REMARK_PLUGINS = [
   remarkGfm,
+  remarkCjkFriendly,
+  remarkCjkFriendlyGfmStrikethrough,
   remarkCjkAutolinks,
   remarkCodeRefs,
   remarkTableCellFloor,
