@@ -16,7 +16,7 @@
  * 占用本身来自服务方的 usage，不依赖它。
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { type ContextBreakdown, sessionContextBreakdown } from "../bridge";
 import { useT } from "../i18n";
@@ -54,14 +54,14 @@ function itemLabel(key: ContextRowKey, name: string): string {
 
 export function ContextRing({
   sessionId,
-  used,
+  used: reported,
   threshold,
   totals,
   window: contextWindow,
 }: {
   /** 明细按会话查。 */
   sessionId: string;
-  /** 当前上下文占用。 */
+  /** 当前上下文占用：服务方最近一次随回复报的数。 */
   used: number;
   /** 到这个数就自动压缩。 */
   threshold: number;
@@ -77,6 +77,19 @@ export function ContextRing({
   const [detail, setDetail] = useState<ContextBreakdown | null | undefined>(undefined);
   /** 展开着的那一行。延迟加载的 MCP 工具和计入的那行同名，单独给个键。 */
   const [expanded, setExpanded] = useState<ContextRowKey | "deferredMcp" | null>(null);
+  /**
+   * 明细的总数，连同拉它那一刻的 `used`。
+   *
+   * `used` 只在有回复时更新，压缩不产生回复 —— 压完它还是压缩前的数，环、
+   * 百分比、当前占用三处都跟着停在旧值，而明细是内核照压缩后的历史现估的，
+   * 剩余空间一下子对不上。所以明细拉回来后改信它的总数，直到下一个 usage
+   * 进来（`used` 变了）再换回服务方的准数。
+   */
+  const [fresh, setFresh] = useState<{ sessionId: string; base: number; total: number } | null>(
+    null,
+  );
+  const reportedRef = useRef(reported);
+  reportedRef.current = reported;
 
   // 每次打开现拉一次：明细跟着历史、MCP 连接、技能目录变，缓存住就会过期。
   // 关掉或换会话时丢掉在途的结果，免得旧会话的明细画到新会话的浮层里。
@@ -85,8 +98,13 @@ export function ContextRing({
     let live = true;
     setDetail(undefined);
     setExpanded(null);
+    const base = reportedRef.current;
     sessionContextBreakdown(sessionId).then(
-      (b) => live && setDetail(b),
+      (b) => {
+        if (!live) return;
+        setDetail(b);
+        setFresh({ sessionId, base, total: b.total });
+      },
       () => live && setDetail(null),
     );
     return () => {
@@ -94,6 +112,8 @@ export function ContextRing({
     };
   }, [open, sessionId]);
 
+  const used =
+    fresh && fresh.sessionId === sessionId && fresh.base === reported ? fresh.total : reported;
   const cap = contextWindow && contextWindow > threshold ? contextWindow : threshold;
   const pct = cap > 0 ? Math.min((used / cap) * 100, 100) : 0;
   /** 压缩点在进度条上的位置。分母就是阈值时它在最右端，不画。 */
