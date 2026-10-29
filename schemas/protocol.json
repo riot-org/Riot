@@ -1022,6 +1022,122 @@
         }
       ]
     },
+    "ContextBreakdown": {
+      "description": "一个会话此刻的上下文明细。除注明外都是估算的 token 数。",
+      "properties": {
+        "custom_instructions": {
+          "description": "用户为这个会话补充的指令（系统提示词里单独一节）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "deferred_mcp_tools": {
+          "description": "ToolSearch 延迟着、还没加载的 MCP 工具。**不计入占用**。",
+          "items": {
+            "$ref": "#/$defs/ContextItem"
+          },
+          "type": "array"
+        },
+        "deferred_system_tools": {
+          "description": "ToolSearch 延迟着、还没加载的内置工具。**不计入占用**。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mcp_tools": {
+          "description": "进了请求的 MCP 工具，逐个列出。",
+          "items": {
+            "$ref": "#/$defs/ContextItem"
+          },
+          "type": "array"
+        },
+        "memory_files": {
+          "description": "记忆文件（AGENTS.md 等），随首条消息注入。",
+          "items": {
+            "$ref": "#/$defs/ContextItem"
+          },
+          "type": "array"
+        },
+        "messages": {
+          "description": "对话消息：真实占用减去其它各项；没有 usage 时按内容估。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reported": {
+          "description": "服务方最近一次报的真实占用。`None` = 还没有 usage（新会话、刚压缩完），\n下面全是估算。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "since_last_update": {
+          "description": "最近一次 usage 之后新增的消息（还没被服务方数过）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "skills": {
+          "description": "Skill 工具（技能清单就写在它的描述里）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "system_prompt": {
+          "description": "内置的系统提示词（不含自定义指令）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "system_tools": {
+          "description": "内置工具的定义（描述 + schema），不含 Skill 和 MCP。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total": {
+          "description": "计入占用的各项之和 —— 有 usage 时就是真实占用加上新增那段。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "system_prompt",
+        "custom_instructions",
+        "system_tools",
+        "mcp_tools",
+        "skills",
+        "memory_files",
+        "messages",
+        "since_last_update",
+        "deferred_system_tools",
+        "deferred_mcp_tools",
+        "total"
+      ],
+      "type": "object"
+    },
+    "ContextItem": {
+      "description": "可展开类别里的一项（一个 MCP 工具、一份记忆文件）。",
+      "properties": {
+        "name": {
+          "description": "MCP 工具是完整工具名（`mcp__<服务器>__<工具>`），记忆文件是路径。",
+          "type": "string"
+        },
+        "tokens": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "tokens"
+      ],
+      "type": "object"
+    },
     "DecisionReason": {
       "description": "决策理由。UI 的解释、日志、遥测共用同一份数据。\n\n没有理由的决策无法调试 —— 用户报\"为什么它问我这个\"时，\n你需要能立刻回答。",
       "oneOf": [
@@ -3474,6 +3590,35 @@
           "type": "object"
         },
         {
+          "description": "上下文明细（输入框右下角的浮层）。带本轮配置 —— 工具清单和系统\n提示词要照开轮时的同一套装配估出来，而 MCP、技能、自定义指令都在配置里。",
+          "properties": {
+            "method": {
+              "const": "session.context_breakdown",
+              "type": "string"
+            },
+            "params": {
+              "properties": {
+                "config": {
+                  "$ref": "#/$defs/TurnConfig"
+                },
+                "session_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "session_id",
+                "config"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
           "description": "改会话标题。自定义标题会抑制自动起名。",
           "properties": {
             "method": {
@@ -4224,6 +4369,22 @@
             },
             "result": {
               "const": "git_changes",
+              "type": "string"
+            }
+          },
+          "required": [
+            "result",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/ContextBreakdown"
+            },
+            "result": {
+              "const": "context_breakdown",
               "type": "string"
             }
           },

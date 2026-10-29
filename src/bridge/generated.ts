@@ -868,6 +868,13 @@ export type RpcRequest =
       };
     }
   | {
+      method: "session.context_breakdown";
+      params: {
+        config: TurnConfig;
+        session_id: string;
+      };
+    }
+  | {
       method: "session.set_title";
       params: {
         session_id: string;
@@ -1174,6 +1181,10 @@ export type RpcResponse =
         git: GitChanges;
       };
       result: "git_changes";
+    }
+  | {
+      data: ContextBreakdown;
+      result: "context_breakdown";
     }
   | {
       data: {
@@ -1967,6 +1978,70 @@ export interface GitChanges {
    * "没有仓库"和"工作区干净"混成同一个空列表。
    */
   repo: boolean;
+}
+/**
+ * 一个会话此刻的上下文明细。除注明外都是估算的 token 数。
+ */
+export interface ContextBreakdown {
+  /**
+   * 用户为这个会话补充的指令（系统提示词里单独一节）。
+   */
+  custom_instructions: number;
+  /**
+   * ToolSearch 延迟着、还没加载的 MCP 工具。**不计入占用**。
+   */
+  deferred_mcp_tools: ContextItem[];
+  /**
+   * ToolSearch 延迟着、还没加载的内置工具。**不计入占用**。
+   */
+  deferred_system_tools: number;
+  /**
+   * 进了请求的 MCP 工具，逐个列出。
+   */
+  mcp_tools: ContextItem[];
+  /**
+   * 记忆文件（AGENTS.md 等），随首条消息注入。
+   */
+  memory_files: ContextItem[];
+  /**
+   * 对话消息：真实占用减去其它各项；没有 usage 时按内容估。
+   */
+  messages: number;
+  /**
+   * 服务方最近一次报的真实占用。`None` = 还没有 usage（新会话、刚压缩完），
+   * 下面全是估算。
+   */
+  reported?: number | null;
+  /**
+   * 最近一次 usage 之后新增的消息（还没被服务方数过）。
+   */
+  since_last_update: number;
+  /**
+   * Skill 工具（技能清单就写在它的描述里）。
+   */
+  skills: number;
+  /**
+   * 内置的系统提示词（不含自定义指令）。
+   */
+  system_prompt: number;
+  /**
+   * 内置工具的定义（描述 + schema），不含 Skill 和 MCP。
+   */
+  system_tools: number;
+  /**
+   * 计入占用的各项之和 —— 有 usage 时就是真实占用加上新增那段。
+   */
+  total: number;
+}
+/**
+ * 可展开类别里的一项（一个 MCP 工具、一份记忆文件）。
+ */
+export interface ContextItem {
+  /**
+   * MCP 工具是完整工具名（`mcp__<服务器>__<工具>`），记忆文件是路径。
+   */
+  name: string;
+  tokens: number;
 }
 /**
  * MCP 连接状态快照,给设置页看。

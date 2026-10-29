@@ -11458,6 +11458,213 @@ button.fold-head:hover,
   white-space: nowrap;
 }
 
+/* ── 上下文明细（分类估算） ── */
+
+/* 类别色：条上的分段和行首的色块共用。挑的是在深浅两套底上都站得住的
+   中间调，两套主题不必各配一份；系统提示词用中性灰，它是"背景成本"。 */
+.ctx-panel {
+  --ctx-c-system: #8b8f96;
+  --ctx-c-tools: var(--accent);
+  --ctx-c-mcp: #22a5b8;
+  --ctx-c-skills: #d4a72c;
+  --ctx-c-rules: #c46fd1;
+  --ctx-c-memory: #e08a4f;
+  --ctx-c-messages: #8b7cf0;
+}
+
+/* 有明细时浮层放宽：一行要放下类别名、token 数和占比。 */
+.ctx-panel:has(.ctx-cats) {
+  width: 288px;
+}
+
+.ctx-bar.segmented {
+  display: flex;
+}
+
+.ctx-seg {
+  display: block;
+  height: 100%;
+  transition: width var(--dur-3) var(--ease-out);
+}
+
+.ctx-seg:first-child {
+  border-radius: 2px 0 0 2px;
+}
+
+.ctx-c-systemPrompt {
+  background: var(--ctx-c-system);
+}
+
+.ctx-c-systemTools {
+  background: var(--ctx-c-tools);
+}
+
+.ctx-c-mcpTools {
+  background: var(--ctx-c-mcp);
+}
+
+.ctx-c-skills {
+  background: var(--ctx-c-skills);
+}
+
+.ctx-c-customInstructions {
+  background: var(--ctx-c-rules);
+}
+
+.ctx-c-memoryFiles {
+  background: var(--ctx-c-memory);
+}
+
+.ctx-c-messages {
+  background: var(--ctx-c-messages);
+}
+
+/* 服务方还没数过的那段：同一个颜色打淡，读起来是"消息的延续"。 */
+.ctx-c-sinceLastUpdate {
+  background: color-mix(in srgb, var(--ctx-c-messages) 45%, transparent);
+}
+
+/* 压缩缓冲区：斜纹，表示"占着但不是内容" —— 那一截条满了就会压缩。 */
+.ctx-c-autocompactBuffer {
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--text-faint) 0 2px,
+    transparent 2px 4px
+  );
+  opacity: 0.6;
+}
+
+.ctx-c-freeSpace {
+  background: none;
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+
+.ctx-loading {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.ctx-cats {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ctx-panel > .ctx-cats {
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.ctx-cat-line {
+  display: grid;
+  grid-template-columns: 8px 1fr auto 34px 10px;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 2px 0;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  font: inherit;
+  font-size: 11px;
+  color: var(--text-dim);
+  text-align: left;
+}
+
+button.ctx-cat-line {
+  cursor: pointer;
+}
+
+button.ctx-cat-line:hover,
+button.ctx-cat-line:focus-visible {
+  background: none;
+  color: var(--text);
+}
+
+.ctx-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.ctx-dot.none {
+  box-shadow: inset 0 0 0 1px var(--text-faint);
+}
+
+.ctx-cat-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ctx-cat-num,
+.ctx-cat-pct {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.ctx-cat-pct {
+  text-align: right;
+  color: var(--text-faint);
+}
+
+.ctx-caret {
+  color: var(--text-faint);
+  transition: transform var(--dur-2) var(--ease-out);
+}
+
+.ctx-caret.open {
+  transform: rotate(90deg);
+}
+
+.ctx-items {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 140px;
+  margin: 1px 0 3px 14px;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.ctx-item-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding-right: 50px;
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+
+.ctx-item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ctx-deferred {
+  margin-top: 6px;
+}
+
+.ctx-deferred-head {
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+
+.ctx-deferred .ctx-cats {
+  margin-top: 2px;
+}
+
+.ctx-deferred .ctx-cat-line {
+  color: var(--text-faint);
+}
+
 .ctx-note {
   margin: 9px 0 0;
   padding-top: 8px;

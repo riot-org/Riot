@@ -1043,6 +1043,48 @@ impl TaskTool {
     }
 }
 
+/// Task 工具的 schema。提出来是给上下文明细用的：估算工具清单体积时不必
+/// 为了拿一段描述去装一整套子 agent 依赖（见 `Session::context_breakdown`）。
+pub(crate) fn task_input_schema() -> schemars::Schema {
+    schemars::schema_for!(Input)
+}
+
+/// Task 工具的描述。和 [`task_input_schema`] 同一个用意。
+pub(crate) fn task_prompt() -> String {
+    "Launches a subagent that works on a task autonomously.\n\n\
+     Use it for: research that needs multi-step exploration (you do not know where \
+     the thing is and have to cast a wide net), independent sub-problems that can run \
+     in parallel, a slice of implementation that can be delivered on its own.\n\n\
+     NEVER use it for: reading a file whose path you already know (call Read), finding \
+     one specific symbol (call Grep). Those finish in a single step, and wrapping them \
+     in a subagent only makes them slower.\n\n\
+     `subagent_type` is `explore` (read-only reconnaissance, cheap, parallel-friendly) \
+     or `general-purpose` (full tool set, can edit code and run commands).\n\n\
+     Write the prompt as if briefing a colleague on their first day: it CANNOT see any \
+     part of this conversation. Spell out the background, the goal, the scope, the \
+     directions you already ruled out, and the relevant file paths; say what shape of \
+     result you want back. Its report is not in the conversation: the user sees only a \
+     task card and has to click it to read the report, so relay the key points yourself. You \
+     may start several Task calls in one message to run them \
+     in parallel.\n\n\
+     `run_in_background=true` puts it in the background: you get an agent id \
+     immediately and can end your turn, and a notification message (carrying its \
+     report) wakes you when it finishes. Use it for implementation or test work that \
+     runs for minutes, and whenever you have other things to coordinate meanwhile. \
+     NEVER wait for it, poll it, or redo its work in the foreground. Short \
+     reconnaissance is better run synchronously.\n\n\
+     `resume=<agent id>` continues a subagent that already ran (it remembers \
+     everything, so the prompt only carries the delta). `resume=\"self\"` forks you \
+     into a background subagent to do a stretch of real work — it inherits this \
+     conversation's full context, so you do not restate the background; after forking, \
+     you only coordinate in the foreground and MUST NOT keep doing the same work. Do \
+     not over-split for the sake of parallelism: one subagent is enough for a small or \
+     medium task.\n\n\
+     When you mention a subagent in your reply, write it as a link \
+     `[task name](agent:<agent id>)` so the user can open its full session."
+        .into()
+}
+
 #[async_trait]
 impl Tool for TaskTool {
     fn name(&self) -> &str {
@@ -1051,44 +1093,13 @@ impl Tool for TaskTool {
     }
 
     fn input_schema(&self) -> schemars::Schema {
-        schemars::schema_for!(Input)
+        task_input_schema()
     }
 
     /// `[约束]` 描述不能随 `depth` 变：分叉的工具清单要和父逐字节一致，
     /// 前缀缓存才命中（见模块文档）。深度差异只体现在运行时的拒绝上。
     fn prompt(&self, _ctx: &PromptContext) -> String {
-        "Launches a subagent that works on a task autonomously.\n\n\
-         Use it for: research that needs multi-step exploration (you do not know where \
-         the thing is and have to cast a wide net), independent sub-problems that can run \
-         in parallel, a slice of implementation that can be delivered on its own.\n\n\
-         NEVER use it for: reading a file whose path you already know (call Read), finding \
-         one specific symbol (call Grep). Those finish in a single step, and wrapping them \
-         in a subagent only makes them slower.\n\n\
-         `subagent_type` is `explore` (read-only reconnaissance, cheap, parallel-friendly) \
-         or `general-purpose` (full tool set, can edit code and run commands).\n\n\
-         Write the prompt as if briefing a colleague on their first day: it CANNOT see any \
-         part of this conversation. Spell out the background, the goal, the scope, the \
-         directions you already ruled out, and the relevant file paths; say what shape of \
-         result you want back. Its report is not in the conversation: the user sees only a \
-         task card and has to click it to read the report, so relay the key points yourself. You \
-         may start several Task calls in one message to run them \
-         in parallel.\n\n\
-         `run_in_background=true` puts it in the background: you get an agent id \
-         immediately and can end your turn, and a notification message (carrying its \
-         report) wakes you when it finishes. Use it for implementation or test work that \
-         runs for minutes, and whenever you have other things to coordinate meanwhile. \
-         NEVER wait for it, poll it, or redo its work in the foreground. Short \
-         reconnaissance is better run synchronously.\n\n\
-         `resume=<agent id>` continues a subagent that already ran (it remembers \
-         everything, so the prompt only carries the delta). `resume=\"self\"` forks you \
-         into a background subagent to do a stretch of real work — it inherits this \
-         conversation's full context, so you do not restate the background; after forking, \
-         you only coordinate in the foreground and MUST NOT keep doing the same work. Do \
-         not over-split for the sake of parallelism: one subagent is enough for a small or \
-         medium task.\n\n\
-         When you mention a subagent in your reply, write it as a link \
-         `[task name](agent:<agent id>)` so the user can open its full session."
-            .into()
+        task_prompt()
     }
 
     fn describe(&self, input: &serde_json::Value) -> UiText {

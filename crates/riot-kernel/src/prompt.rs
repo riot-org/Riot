@@ -127,12 +127,26 @@ impl Sections {
     pub(crate) fn render(&self) -> String {
         self.items
             .iter()
-            .map(|s| match self.flavor {
-                Flavor::Anthropic => format!("<{0}>\n{1}\n</{0}>", s.name, s.body.trim()),
-                Flavor::OpenAiCompatible => format!("## {}\n\n{}", s.name, s.body.trim()),
-            })
+            .map(|s| self.render_one(s))
             .collect::<Vec<_>>()
             .join("\n\n")
+    }
+
+    fn render_one(&self, s: &Section) -> String {
+        match self.flavor {
+            Flavor::Anthropic => format!("<{0}>\n{1}\n</{0}>", s.name, s.body.trim()),
+            Flavor::OpenAiCompatible => format!("## {}\n\n{}", s.name, s.body.trim()),
+        }
+    }
+
+    /// 某一节渲染后的字节数（含标签）。没有这一节就是 0。上下文明细按它
+    /// 把自定义指令从系统提示词里单拎出来。
+    fn rendered_len(&self, name: &str) -> usize {
+        self.items
+            .iter()
+            .filter(|s| s.name == name)
+            .map(|s| self.render_one(s).len())
+            .sum()
     }
 
     #[cfg(test)]
@@ -153,6 +167,17 @@ pub(crate) fn system_prompt(input: &SystemPromptInput<'_>) -> String {
         project.render()
     )
 }
+
+/// 用户自定义指令那一节（[`USER_RULES`]）在系统提示词里占多少字节。
+///
+/// 和 [`system_prompt`] 走同一次装配，上下文明细拿它把「自定义指令」从
+/// 「系统提示词」里拆出来 —— 两者加起来就是整段系统提示词。
+pub(crate) fn rules_bytes(input: &SystemPromptInput<'_>) -> usize {
+    assemble(input).1.rendered_len(USER_RULES)
+}
+
+/// 用户自定义指令那一节的名字。
+const USER_RULES: &str = "user_rules";
 
 /// 装配两组分节：`(跨会话共享, 逐项目)`。
 ///
@@ -220,7 +245,7 @@ fn assemble(input: &SystemPromptInput<'_>) -> (Sections, Sections) {
         // 项目内容会被切进带断点的静态块。
         let extra = extra.replace(SYSTEM_SECTION_BOUNDARY, "");
         project.push(
-            "user_rules",
+            USER_RULES,
             format!("Additional instructions from the user for this session:\n{extra}"),
         );
     }

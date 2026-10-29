@@ -771,6 +771,159 @@ fn is_mcp_tool(name: &str) -> bool {
     name.starts_with("mcp__")
 }
 
+/// 把本轮的外部工具（MCP、Skill、ReloadConfig）并进工具清单。开轮和上下文
+/// 明细共用。
+///
+/// `[约束]` 撞名的外部工具**跳过并告警**，不能 panic —— 内置工具重名
+/// 是代码错误（注册表的 expect 管它），外部工具重名是**用户配置**引起
+/// 的（两个 MCP 服务器的 id 消毒后相同），配置错误不能把应用带崩。
+fn merge_extra_tools(tools: &mut Vec<Arc<dyn Tool>>, extra: Vec<Arc<dyn Tool>>) {
+    let mut names: std::collections::HashSet<String> = tools
+        .iter()
+        .flat_map(|t| {
+            std::iter::once(t.name().to_owned()).chain(t.aliases().iter().map(|a| (*a).to_owned()))
+        })
+        .collect();
+    for t in extra {
+        if names.insert(t.name().to_owned()) {
+            tools.push(t);
+        } else {
+            tracing::warn!(tool = %t.name(), "外部工具与已有工具重名，本轮跳过它");
+        }
+    }
+}
+
+/// Skill 工具的名字。技能清单写在它的描述里，明细把它单列成「技能」。
+const SKILL_TOOL: &str = "Skill";
+
+/// 一个工具定义折多少 token：名字 + 描述 + schema 的字节，走协议的统一折算。
+fn spec_tokens(spec: &riot_protocol::ToolSpec) -> u32 {
+    let schema = serde_json::to_string(&spec.input_schema).map_or(0, |s| s.len());
+    riot_protocol::provider::estimate_tokens(spec.name.len() + spec.description.len() + schema)
+}
+
+/// 历史里的记忆文件（首条消息或压缩后重注的那份）。
+fn memory_items(messages: &[Message]) -> Vec<riot_protocol::ContextItem> {
+    messages
+        .iter()
+        .filter_map(|m| match m {
+            Message::User { content, .. } => Some(content),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|c| match c {
+            UserContent::Attachment(a @ Attachment::Memory { path, .. }) => {
+                Some(riot_protocol::ContextItem {
+                    name: path.display().to_string(),
+                    tokens: riot_protocol::provider::estimate_tokens(
+                        a.model_text().map_or(0, |t| t.len()),
+                    ),
+                })
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn sum_items(items: &[riot_protocol::ContextItem]) -> u32 {
+    items.iter().map(|i| i.tokens).fold(0, u32::saturating_add)
+}
+
+/// 上下文明细的分类与对账（见 [`riot_protocol::context`] 的取舍）。
+///
+/// 固定部分（系统提示词、工具、记忆文件）按字节估；「消息」取服务方最近
+/// 一次报的真实占用减去固定部分，于是各项之和 = 真实占用 + 之后新增的估算。
+/// 没有 usage 时全部按内容估。`hidden` 是 ToolSearch 延迟着、没进请求的工具。
+fn breakdown_of(
+    system: &str,
+    rules_bytes: usize,
+    specs: &[riot_protocol::ToolSpec],
+    hidden: &[riot_protocol::ToolSpec],
+    history: &[Message],
+    provider: &dyn Provider,
+) -> riot_protocol::ContextBreakdown {
+    use riot_protocol::provider::estimate_tokens;
+
+    let custom_instructions = estimate_tokens(rules_bytes);
+    let system_prompt = estimate_tokens(system.len().saturating_sub(rules_bytes));
+
+    let mut system_tools = 0u32;
+    let mut skills = 0u32;
+    let mut mcp_tools = Vec::new();
+    for spec in specs {
+        let t = spec_tokens(spec);
+        if is_mcp_tool(&spec.name) {
+            mcp_tools.push(riot_protocol::ContextItem {
+                name: spec.name.clone(),
+                tokens: t,
+            });
+        } else if spec.name == SKILL_TOOL {
+            skills = skills.saturating_add(t);
+        } else {
+            system_tools = system_tools.saturating_add(t);
+        }
+    }
+    let mut deferred_system_tools = 0u32;
+    let mut deferred_mcp_tools = Vec::new();
+    for spec in hidden {
+        let t = spec_tokens(spec);
+        if is_mcp_tool(&spec.name) {
+            deferred_mcp_tools.push(riot_protocol::ContextItem {
+                name: spec.name.clone(),
+                tokens: t,
+            });
+        } else {
+            deferred_system_tools = deferred_system_tools.saturating_add(t);
+        }
+    }
+
+    // 以最近一次 usage 为界：之前的记忆文件已经被服务方数进了真实占用，
+    // 之后的还没有 —— 两段各自从对应那一侧扣掉。
+    let (split, reported) = riot_protocol::provider::last_usage_checkpoint(history);
+    let (before, after) = history.split_at(split);
+    let memory_before = memory_items(before);
+    let memory_after = memory_items(after);
+    let fixed = [system_prompt, custom_instructions, system_tools, skills]
+        .into_iter()
+        .chain(mcp_tools.iter().map(|i| i.tokens))
+        .fold(0, u32::saturating_add);
+
+    let (reported, messages, since_last_update) = if reported > 0 {
+        let messages = reported
+            .saturating_sub(fixed)
+            .saturating_sub(sum_items(&memory_before));
+        let since = provider
+            .estimate_tokens_of(after)
+            .saturating_sub(sum_items(&memory_after));
+        (Some(reported), messages, since)
+    } else {
+        let messages = provider
+            .estimate_tokens_of(history)
+            .saturating_sub(sum_items(&memory_after));
+        (None, messages, 0)
+    };
+
+    let mut memory_files = memory_before;
+    memory_files.extend(memory_after);
+    let total = [fixed, sum_items(&memory_files), messages, since_last_update]
+        .into_iter()
+        .fold(0, u32::saturating_add);
+    riot_protocol::ContextBreakdown {
+        reported,
+        system_prompt,
+        custom_instructions,
+        system_tools,
+        mcp_tools,
+        skills,
+        memory_files,
+        messages,
+        since_last_update,
+        deferred_system_tools,
+        deferred_mcp_tools,
+        total,
+    }
+}
+
 /// 新 MCP 工具续轮的开场通知：告诉模型哪些服务器的工具到了、接着干。
 ///
 /// 只列服务器不列工具：一个服务器几十个工具，全列出来就是把延迟加载
@@ -3701,6 +3854,160 @@ impl Session {
     /// 返回这一轮的终止原因（主循环发的那条 `Done`）。`None` = 没等到
     /// `Done` 就散场了（事件通道断开提前 break）。[`Self::run_locked`] 据此
     /// 决定残留的后台任务通知怎么处置。
+    /// 装配系统提示词的输入。开轮和上下文明细共用 —— 两边差一个字段，
+    /// 明细估出来的就是另一份提示词。
+    #[allow(clippy::too_many_arguments)]
+    fn prompt_input<'a>(
+        &'a self,
+        model: &'a str,
+        today: &'a str,
+        python_venv: Option<&'a str>,
+        extra: Option<&'a str>,
+        hooks: &crate::hooks::HookEngine,
+        digests_dir: Option<&'a std::path::Path>,
+        flavor: crate::prompt::Flavor,
+    ) -> crate::prompt::SystemPromptInput<'a> {
+        crate::prompt::SystemPromptInput {
+            cwd: &self.cwd,
+            model,
+            today,
+            python_venv,
+            extra,
+            has_hooks: hooks.has_pre_tool_use() || hooks.has_post_tool_use() || hooks.has_stop(),
+            digests_dir,
+            flavor,
+        }
+    }
+
+    /// 工具目录瘦身：延迟候选（MCP 工具、浏览器组）的定义总量超过阈值才
+    /// 启用 ToolSearch，并把它加进 `tools`。开轮和上下文明细共用。
+    fn defer_tools(
+        &self,
+        tools: &mut Vec<Arc<dyn Tool>>,
+        render_ctx: &PromptContext,
+    ) -> Option<Arc<riot_tools::tools::tool_search::DeferredPool>> {
+        let pool = riot_tools::tools::tool_search::DeferredPool::new(
+            tools,
+            render_ctx,
+            Arc::clone(&self.discovered_tools),
+        );
+        if pool.is_empty()
+            || pool.total_chars() < riot_tools::tools::tool_search::DEFER_THRESHOLD_CHARS
+        {
+            return None;
+        }
+        let pool = Arc::new(pool);
+        tools.push(Arc::new(riot_tools::tools::tool_search::ToolSearch::new(
+            Arc::clone(&pool),
+        )));
+        Some(pool)
+    }
+
+    /// 上下文明细：照开轮的同一套装配估出系统提示词和工具清单，再和历史
+    /// 里服务方报过的真实占用对账（见 [`riot_protocol::context`]）。
+    ///
+    /// 不开轮、不激活沙箱、不碰权限闸：只装出"这一轮如果现在开，请求里会有
+    /// 什么"。和真开轮的唯一差别是 Task 工具 —— 它要整套子 agent 依赖才
+    /// 造得出来，这里直接取它的描述和 schema（两者都不随依赖变）。
+    pub async fn context_breakdown(
+        &self,
+        model: &riot_protocol::ModelEndpoint,
+        extra_tools: Vec<Arc<dyn Tool>>,
+        python_venv: Option<&str>,
+        extra: Option<&str>,
+    ) -> Result<riot_protocol::ContextBreakdown, SessionError> {
+        #[cfg(test)]
+        let built = match self.test_provider.get() {
+            Some(p) => Ok(Arc::clone(p)),
+            None => crate::models::provider_from_endpoint(model),
+        };
+        #[cfg(not(test))]
+        let built = crate::models::provider_from_endpoint(model);
+        let provider = built.map_err(|e| SessionError::Invalid(e.into()))?;
+
+        self.hydrate().await;
+        let plugins = self.load_plugins().await;
+        let hook_engine = crate::hooks::HookEngine::load(&self.cwd, self.id.as_str(), &plugins);
+        let profile = crate::adapt::profile_for(model);
+        let clock = riot_providers::watchdog::TokioClock;
+        let today =
+            riot_tools::tools::web::date::year_month(riot_protocol::tool::Clock::now_ms(&clock));
+
+        let mut tools = riot_tools::tools::builtin();
+        tools.push(Arc::new(riot_tools::tools::schedule::ScheduleTool::new(
+            self.schedule_access(),
+        )));
+        merge_extra_tools(&mut tools, extra_tools);
+        let task = riot_protocol::ToolSpec {
+            name: riot_core::todo_nudge::TASK.to_owned(),
+            description: crate::subagent::task_prompt(),
+            input_schema: serde_json::to_value(crate::subagent::task_input_schema())
+                .unwrap_or_else(|_| serde_json::json!({ "type": "object" })),
+        };
+        let names = |tools: &[Arc<dyn Tool>]| -> Vec<String> {
+            tools
+                .iter()
+                .map(|t| t.name().to_owned())
+                .chain(std::iter::once(task.name.clone()))
+                .collect()
+        };
+        // 沙箱只看缓存的那份：激活很贵（见 active_sandbox），而它只影响
+        // Bash 描述里几句话。
+        let sandboxed = self.sandbox.lock().await.is_some();
+        let make_ctx = |sibling_tools: Vec<String>| PromptContext {
+            cwd: self.cwd.clone(),
+            platform: std::env::consts::OS.to_owned(),
+            sandboxed,
+            sibling_tools,
+            today: today.clone(),
+        };
+        let render_ctx = make_ctx(names(&tools));
+        let deferred = self.defer_tools(&mut tools, &render_ctx);
+        let prompt_ctx = make_ctx(names(&tools));
+        // 和 Registry::specs 同一份映射（注册表在开轮时已经证明过不撞名）。
+        let mut specs: Vec<riot_protocol::ToolSpec> = tools
+            .iter()
+            .map(|t| riot_protocol::ToolSpec {
+                name: t.name().to_owned(),
+                description: t.prompt(&prompt_ctx),
+                input_schema: serde_json::to_value(t.input_schema())
+                    .unwrap_or_else(|_| serde_json::json!({ "type": "object" })),
+            })
+            .collect();
+        let hidden: Vec<riot_protocol::ToolSpec> = match &deferred {
+            Some(pool) => {
+                let (hidden, shown) = specs.into_iter().partition(|s| pool.is_hidden(&s.name));
+                specs = shown;
+                hidden
+            }
+            None => Vec::new(),
+        };
+        specs.push(task);
+
+        let digests_dir = self.digests_dir();
+        let input = self.prompt_input(
+            &model.model,
+            &today,
+            python_venv,
+            extra,
+            &hook_engine,
+            digests_dir.as_deref(),
+            profile.flavor,
+        );
+        let system = crate::prompt::system_prompt(&input);
+        let rules = crate::prompt::rules_bytes(&input);
+
+        let history = self.history.lock().await.clone();
+        Ok(breakdown_of(
+            &system,
+            rules,
+            &specs,
+            &hidden,
+            &history,
+            provider.as_ref(),
+        ))
+    }
+
     async fn run_inner(
         self: &Arc<Self>,
         input: TurnStart,
@@ -3885,20 +4192,7 @@ impl Session {
         tools.push(Arc::new(riot_tools::tools::schedule::ScheduleTool::new(
             self.schedule_access(),
         )));
-        let mut names: std::collections::HashSet<String> = tools
-            .iter()
-            .flat_map(|t| {
-                std::iter::once(t.name().to_owned())
-                    .chain(t.aliases().iter().map(|a| (*a).to_owned()))
-            })
-            .collect();
-        for t in std::mem::take(&mut caps.extra_tools) {
-            if names.insert(t.name().to_owned()) {
-                tools.push(t);
-            } else {
-                tracing::warn!(tool = %t.name(), "外部工具与已有工具重名，本轮跳过它");
-            }
-        }
+        merge_extra_tools(&mut tools, std::mem::take(&mut caps.extra_tools));
 
         // 模型对"今天"没有概念，它的年份停在训练截止那天。不注入的话它
         // 搜"最新版本"会带上一个两年前的年份，然后拿着过期结果言之凿凿；
@@ -3927,26 +4221,13 @@ impl Session {
         // 只有几个工具时，省下的上下文抵不过多一跳 ToolSearch 的往返。
         // 已发现集合是会话级的，这一轮加载过的下一轮不用再加载。
         let render_ctx = make_ctx(tools.iter().map(|t| t.name().to_owned()).collect());
-        let pool = riot_tools::tools::tool_search::DeferredPool::new(
-            &tools,
-            &render_ctx,
-            Arc::clone(&self.discovered_tools),
-        );
-        let deferred = if !pool.is_empty()
-            && pool.total_chars() >= riot_tools::tools::tool_search::DEFER_THRESHOLD_CHARS
-        {
-            let pool = Arc::new(pool);
-            tools.push(Arc::new(riot_tools::tools::tool_search::ToolSearch::new(
-                Arc::clone(&pool),
-            )));
+        let deferred = self.defer_tools(&mut tools, &render_ctx);
+        if let Some(pool) = &deferred {
             tracing::info!(
                 chars = pool.total_chars(),
                 "延迟工具定义超过阈值，启用 ToolSearch"
             );
-            Some(pool)
-        } else {
-            None
-        };
+        }
 
         let prompt_ctx = make_ctx(tools.iter().map(|t| t.name().to_owned()).collect());
 
@@ -4014,18 +4295,16 @@ impl Session {
         // 压缩的总结请求要用**同一份**：同形状（system + tools 逐字节一致）
         // 的总结请求才能吃到 provider 的前缀缓存，~100k 的输入走 cache_read。
         let digests_dir = self.digests_dir();
-        let system = crate::prompt::system_prompt(&crate::prompt::SystemPromptInput {
-            cwd: &self.cwd,
-            model: &model.model,
-            today: &today,
-            python_venv: python_venv.as_deref(),
-            extra: self.system_prompt_extra().await.as_deref(),
-            has_hooks: hook_engine.has_pre_tool_use()
-                || hook_engine.has_post_tool_use()
-                || hook_engine.has_stop(),
-            digests_dir: digests_dir.as_deref(),
-            flavor: profile.flavor,
-        });
+        let extra = self.system_prompt_extra().await;
+        let system = crate::prompt::system_prompt(&self.prompt_input(
+            &model.model,
+            &today,
+            python_venv.as_deref(),
+            extra.as_deref(),
+            &hook_engine,
+            digests_dir.as_deref(),
+            profile.flavor,
+        ));
         // specs 取轮首快照。轮中 ToolSearch 发现新工具时主循环的 tools 会变
         //（那本来就会断缓存），总结形状不跟 —— 只影响命中率，不影响正确性。
         let summary_shape = riot_core::summarize::RequestShape {
@@ -9513,5 +9792,162 @@ mod tests {
         let mut main = gate_with_hooks(&s, serde_json::json!({}));
         main.suspendable = true;
         assert!(!main.for_subagents().suspendable);
+    }
+
+    // ---- 上下文明细 ----
+
+    fn spec(name: &str, description: &str) -> riot_protocol::ToolSpec {
+        riot_protocol::ToolSpec {
+            name: name.into(),
+            description: description.into(),
+            input_schema: serde_json::json!({ "type": "object" }),
+        }
+    }
+
+    fn memory_user(id: &str, path: &str, content: &str, text: &str) -> Message {
+        Message::User {
+            id: MessageId::from_raw(id),
+            content: vec![
+                UserContent::Attachment(Attachment::Memory {
+                    path: path.into(),
+                    content: content.into(),
+                }),
+                UserContent::Text { text: text.into() },
+            ],
+            meta: MessageMeta::default(),
+        }
+    }
+
+    fn usage_aware() -> UsageAware {
+        UsageAware(riot_core::testing::ScriptedProvider::new(Vec::new()))
+    }
+
+    /// 有 usage 时「消息」= 真实占用减固定部分，各项之和对得上真实占用 +
+    /// 之后新增的估算；工具按内置 / MCP / 技能分开，延迟着的不计入。
+    #[test]
+    fn 明细按类别拆开且加总对得上真实占用() {
+        let provider = usage_aware();
+        let system = format!(
+            "{}<user_rules>\n{}\n</user_rules>",
+            "s".repeat(4000),
+            "r".repeat(400)
+        );
+        let rules = "r".repeat(400).len() + "<user_rules>\n\n</user_rules>".len();
+        let specs = vec![
+            spec("Read", &"d".repeat(800)),
+            spec("Skill", &"k".repeat(400)),
+            spec("mcp__gh__issue", &"m".repeat(200)),
+        ];
+        let hidden = vec![
+            spec("BrowserClick", &"b".repeat(4000)),
+            spec("mcp__gh__pr", &"p".repeat(4000)),
+        ];
+        let history = vec![
+            memory_user("u1", "/p/AGENTS.md", &"a".repeat(2000), "第一问"),
+            hist_assistant_with_usage("a1", "第一答", 20_000),
+            hist_user("u2", "第二问，还没被服务方数过"),
+        ];
+        let b = breakdown_of(&system, rules, &specs, &hidden, &history, &provider);
+
+        assert_eq!(b.reported, Some(20_010), "input + output");
+        assert_eq!(
+            b.custom_instructions,
+            riot_protocol::provider::estimate_tokens(rules)
+        );
+        assert_eq!(
+            b.system_prompt,
+            riot_protocol::provider::estimate_tokens(system.len() - rules)
+        );
+        assert_eq!(b.mcp_tools.len(), 1);
+        assert_eq!(b.mcp_tools[0].name, "mcp__gh__issue");
+        assert!(b.skills > 100 && b.system_tools > 200, "{b:?}");
+        assert_eq!(b.memory_files.len(), 1);
+        assert_eq!(b.memory_files[0].name, "/p/AGENTS.md");
+        assert!(b.memory_files[0].tokens >= 500, "{b:?}");
+        assert!(
+            b.deferred_system_tools >= 1000,
+            "延迟的浏览器工具单列：{b:?}"
+        );
+        assert_eq!(b.deferred_mcp_tools.len(), 1);
+        assert_eq!(
+            b.since_last_update,
+            provider.estimate_tokens_of(&history[2..]),
+            "新增的只算最后一次 usage 之后的那段"
+        );
+        assert!(b.since_last_update > 0);
+
+        let counted = b.system_prompt
+            + b.custom_instructions
+            + b.system_tools
+            + b.skills
+            + b.mcp_tools.iter().map(|i| i.tokens).sum::<u32>()
+            + b.memory_files.iter().map(|i| i.tokens).sum::<u32>()
+            + b.messages;
+        assert_eq!(counted, 20_010, "到最后一次 usage 为止的各项正好是真实占用");
+        assert_eq!(b.total, 20_010 + b.since_last_update);
+    }
+
+    /// 没有 usage（新会话、刚压缩完）全部按内容估，记忆文件从消息里扣掉。
+    #[test]
+    fn 没有_usage_时消息按内容估() {
+        let provider = usage_aware();
+        let history = vec![
+            memory_user("u1", "/p/AGENTS.md", &"a".repeat(2000), "第一问"),
+            hist_assistant("a1", "第一答"),
+        ];
+        let b = breakdown_of("系统", 0, &[], &[], &history, &provider);
+        assert_eq!(b.reported, None);
+        assert_eq!(b.since_last_update, 0);
+        let memory = b.memory_files[0].tokens;
+        assert_eq!(b.messages, provider.estimate_tokens_of(&history) - memory);
+        assert_eq!(b.total, b.system_prompt + memory + b.messages);
+    }
+
+    /// 估出来的固定部分比真实占用还大时，「消息」夹到 0，不回绕成四十亿。
+    #[test]
+    fn 固定部分超过真实占用时消息夹到零() {
+        let provider = usage_aware();
+        let history = vec![
+            hist_user("u1", "问"),
+            hist_assistant_with_usage("a1", "答", 10),
+        ];
+        let b = breakdown_of(&"s".repeat(40_000), 0, &[], &[], &history, &provider);
+        assert_eq!(b.messages, 0);
+        assert_eq!(b.system_prompt, 10_000);
+    }
+
+    /// 整条装配：没开过轮的会话也能估，Task 和 Schedule 在内置工具里，
+    /// 自定义指令单独成项。
+    #[tokio::test]
+    async fn 会话明细走开轮的同一套装配() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let s = Session::new(SessionId::from_raw("s1"), dir.path().to_path_buf(), None);
+        assert!(
+            s.test_provider
+                .set(Arc::new(usage_aware()) as Arc<dyn Provider>)
+                .is_ok()
+        );
+        let plain = s
+            .context_breakdown(&test_model(), Vec::new(), None, None)
+            .await
+            .expect("明细");
+        assert_eq!(plain.custom_instructions, 0);
+        assert!(plain.system_prompt > 1000, "{plain:?}");
+        assert!(plain.system_tools > 1000, "{plain:?}");
+        assert!(plain.mcp_tools.is_empty() && plain.memory_files.is_empty());
+        assert_eq!(
+            plain.total,
+            plain.system_prompt + plain.system_tools + plain.messages
+        );
+
+        let with_rules = s
+            .context_breakdown(&test_model(), Vec::new(), None, Some("只用中文回答"))
+            .await
+            .expect("明细");
+        assert!(with_rules.custom_instructions > 0);
+        assert_eq!(
+            with_rules.system_prompt, plain.system_prompt,
+            "内置部分不变"
+        );
     }
 }

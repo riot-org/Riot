@@ -42,6 +42,8 @@ import type {
   AgentError,
   AgentEvent,
   ApiProtocol,
+  ContextBreakdown,
+  ContextItem,
   OpenaiApi as GeneratedOpenaiApi,
   BackgroundTaskStatus as GeneratedBackgroundTaskStatus,
   BackgroundTaskView as GeneratedBackgroundTaskView,
@@ -74,6 +76,8 @@ import type {
 
 export type {
   AgentEvent,
+  ContextBreakdown,
+  ContextItem,
   FileChange,
   GitChanges,
   Message,
@@ -872,6 +876,14 @@ export function sessionGitChanges(sessionId: string, base?: string): Promise<Git
     base ? { sessionId, base } : { sessionId },
     T_SLOW,
   );
+}
+
+/**
+ * 上下文明细（输入框右下角的浮层）：当前占用按系统提示词、工具、记忆文件、
+ * 消息等拆开。除服务方报的总数外都是估算，「消息」是总数减其它各项。
+ */
+export function sessionContextBreakdown(sessionId: string): Promise<ContextBreakdown> {
+  return invoke<ContextBreakdown>("session_context_breakdown", { sessionId });
 }
 
 /** 回应一个权限询问。askId 来自 PermissionRequest 事件。 */

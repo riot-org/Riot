@@ -2025,6 +2025,34 @@ impl AppState {
         Ok(())
     }
 
+    /// 上下文明细（输入框右下角的浮层）。和开轮同一份配置快照 —— 内核要
+    /// 照它装出系统提示词和工具清单，才估得出各自占多少。
+    pub async fn context_breakdown(
+        &self,
+        session_id: &str,
+    ) -> HostResult<riot_protocol::ContextBreakdown> {
+        self.ensure_hydrated(session_id).await?;
+        let (config, provider, model) = self.session_endpoint(session_id).await?;
+        let turn_config = self
+            .build_turn_config(&config, &provider, model, session_id)
+            .await?;
+        match self
+            .kernel_call(RpcRequest::SessionContextBreakdown {
+                session_id: sid(session_id),
+                config: Box::new(turn_config),
+            })
+            .await?
+        {
+            RpcResponse::ContextBreakdown(b) => Ok(b),
+            _ => Err(HostError::Kernel(crate::kernel::KernelError::Rpc(
+                riot_protocol::ui_error!(
+                    "host.kernel.unexpectedReply",
+                    method = "session.context_breakdown"
+                ),
+            ))),
+        }
+    }
+
     /// `@` 补全菜单的文件搜索。查询为空时给项目里的前几个文件。
     /// 纯 cwd 函数,库两边都链接 —— 宿主本地调,不走 RPC。
     pub async fn search_files(

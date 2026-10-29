@@ -417,6 +417,27 @@ impl SessionManager {
                 .map(|c| Arc::new(c) as Arc<dyn SafetyClassifier>)
                 .unwrap_or_else(|| Arc::new(riot_protocol::permission::NoClassifier));
 
+        let extra_tools = self.extra_tools(session).await;
+
+        let caps = TurnCapabilities {
+            web,
+            vision,
+            subagent_cheap: cheap,
+            classifier,
+            extra_tools,
+        };
+        let limits = TurnLimits {
+            ask_timeout_secs: config.limits.ask_timeout_secs,
+            max_turns: config.limits.max_turns,
+            compact_threshold_tokens: config.limits.compact_threshold_tokens,
+            sandbox: sandbox_mode(config.limits.sandbox),
+            sandbox_allow_read: config.limits.sandbox_allow_read.clone(),
+        };
+        (caps, limits)
+    }
+
+    /// 本轮的外部工具：MCP、ReloadConfig、Skill。开轮和上下文明细共用。
+    async fn extra_tools(&self, session: &Session) -> Vec<Arc<dyn riot_protocol::Tool>> {
         let mut extra_tools = self.mcp.tools().await;
         let known_mcp = extra_tools.iter().map(|t| t.name().to_owned()).collect();
         extra_tools.push(Arc::new(crate::reload_config::ReloadConfigTool::new(
@@ -434,21 +455,34 @@ impl SessionManager {
             )));
         }
 
-        let caps = TurnCapabilities {
-            web,
-            vision,
-            subagent_cheap: cheap,
-            classifier,
-            extra_tools,
-        };
-        let limits = TurnLimits {
-            ask_timeout_secs: config.limits.ask_timeout_secs,
-            max_turns: config.limits.max_turns,
-            compact_threshold_tokens: config.limits.compact_threshold_tokens,
-            sandbox: sandbox_mode(config.limits.sandbox),
-            sandbox_allow_read: config.limits.sandbox_allow_read.clone(),
-        };
-        (caps, limits)
+        extra_tools
+    }
+
+    /// 上下文明细（输入框右下角的浮层）。和开轮同一套外部工具与会话设置，
+    /// 但不改会话里的模式等状态 —— 只有插件清单要先对齐，技能和 hooks 都
+    /// 从它来，而还没开过轮的会话手里没有这份清单。
+    pub async fn context_breakdown(
+        &self,
+        session_id: &str,
+        config: TurnConfig,
+    ) -> Result<riot_protocol::ContextBreakdown, RpcError> {
+        let session = self.require(session_id).await?;
+        session.set_plugins(config.plugins.clone()).await;
+        let extra_tools = self.extra_tools(&session).await;
+        Ok(session
+            .context_breakdown(
+                &config.model,
+                extra_tools,
+                config
+                    .python_venv
+                    .as_deref()
+                    .filter(|v| !v.trim().is_empty()),
+                config
+                    .system_prompt_extra
+                    .as_deref()
+                    .filter(|p| !p.trim().is_empty()),
+            )
+            .await?)
     }
 
     /// 按 id 找活会话；不在就是一条 `SessionNotFound`。

@@ -105,6 +105,7 @@ const COMMANDS: &[&str] = &[
     "session_compact",
     "session_changes",
     "session_git_changes",
+    "session_context_breakdown",
     "slash_commands",
     "slash_expand",
     "hooks_list",

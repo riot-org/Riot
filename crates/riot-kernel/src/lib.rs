@@ -431,6 +431,12 @@ async fn dispatch(request: RpcRequest, manager: &manager::SessionManager) -> Rpc
                 .git_changes(session_id.as_str(), base.as_deref())
                 .await,
         },
+        Req::SessionContextBreakdown { session_id, config } => {
+            match manager.context_breakdown(session_id.as_str(), *config).await {
+                Ok(b) => RpcResponse::ContextBreakdown(b),
+                Err(error) => RpcResponse::Error { error },
+            }
+        }
         Req::SessionSetTitle { session_id, title } => {
             manager.set_title(session_id.as_str(), title).await;
             RpcResponse::Ok

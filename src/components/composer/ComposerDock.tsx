@@ -1681,6 +1681,7 @@ export function ComposerDock({
           <div className="composer-actions">
             {tokens.input + tokens.output > 0 ? (
               <ContextRing
+                sessionId={sessionId}
                 used={tokens.context}
                 threshold={compactAt}
                 totals={{ input: tokens.input, output: tokens.output }}

@@ -223,6 +223,9 @@ pub async fn dispatch(
         "session_git_changes" => {
             ok(crate::session_git_changes(st, a.take("sessionId")?, a.take("base")?).await)
         }
+        "session_context_breakdown" => {
+            ok(crate::session_context_breakdown(st, a.take("sessionId")?).await)
+        }
         "set_permission_mode" => {
             ok(crate::set_permission_mode(st, a.take("sessionId")?, a.take("mode")?).await)
         }

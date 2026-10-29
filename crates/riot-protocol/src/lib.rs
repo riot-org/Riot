@@ -9,6 +9,7 @@
 pub mod browser;
 pub mod changes;
 pub mod compact;
+pub mod context;
 pub mod env;
 pub mod event;
 pub mod hook;
@@ -40,6 +41,7 @@ pub use changes::{
     RestoreSkip,
 };
 pub use compact::{CompactBudget, CompactResult, Compactor};
+pub use context::{ContextBreakdown, ContextItem};
 pub use env::{BrowserGlance, EnvAlert, EnvProbe, EnvSnapshot, NoEnvProbe};
 pub use event::{
     AbortSource, AgentError, AgentEvent, CompactStrategy, ProgressPayload, StreamDelta,

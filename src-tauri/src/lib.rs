@@ -251,6 +251,15 @@ async fn session_compact(state: State<'_, AppState>, session_id: String) -> Host
     state.compact_session(&session_id).await
 }
 
+/// 上下文明细：当前占用按系统提示词、工具、记忆文件、消息等拆开（估算）。
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn session_context_breakdown(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> HostResult<riot_protocol::ContextBreakdown> {
+    state.context_breakdown(&session_id).await
+}
+
 /// 上下文编辑：替换一条历史消息的文本段（思考、工具调用、`@` 引用不动）。
 /// `images` 有值时用户提问的附图整表替换。
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -1898,6 +1907,7 @@ pub fn run() {
             interrupt,
             session_changes,
             session_git_changes,
+            session_context_breakdown,
             respond_permission,
             set_permission_mode,
             set_session_sampling,

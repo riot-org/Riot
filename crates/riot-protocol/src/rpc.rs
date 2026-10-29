@@ -168,6 +168,13 @@ pub enum RpcRequest {
         #[serde(default)]
         base: Option<String>,
     },
+    /// 上下文明细（输入框右下角的浮层）。带本轮配置 —— 工具清单和系统
+    /// 提示词要照开轮时的同一套装配估出来，而 MCP、技能、自定义指令都在配置里。
+    #[serde(rename = "session.context_breakdown")]
+    SessionContextBreakdown {
+        session_id: SessionId,
+        config: Box<TurnConfig>,
+    },
     /// 改会话标题。自定义标题会抑制自动起名。
     #[serde(rename = "session.set_title")]
     SessionSetTitle {
@@ -315,6 +322,7 @@ pub enum RpcResponse {
     GitChanges {
         git: GitChanges,
     },
+    ContextBreakdown(crate::context::ContextBreakdown),
     ScopeHosts {
         hosts: Vec<String>,
     },
