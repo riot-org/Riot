@@ -80,6 +80,8 @@ export default {
   "host.schedule.badWeekday": "星期要在 1（周一）到 7（周日）之间，收到 {weekday}。",
   "host.schedule.badDateTime": "时间「{time}」读不懂。用 YYYY-MM-DD HH:MM（例：2026-09-01 15:30）。",
   "host.schedule.dstGap": "时间「{time}」在本地时区不存在（夏令时跳过的区间），换一个时刻。",
+  "host.schedule.skipTooMany": "每个任务最多 {max} 段跳过时段。",
+  "host.schedule.skipAlways": "开始等于结束是全天；不限星期的话等于永远不跑。限定几个星期，或者直接暂停任务。",
   "host.schedule.run.sessionDeleted": "它要续跑的会话已被删除，任务已暂停。",
   "host.schedule.run.createSessionFailed": "建不了会话。",
   "host.schedule.run.turnFailed": "轮子没起来。",

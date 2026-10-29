@@ -78,6 +78,8 @@ export default {
   "host.schedule.badWeekday": "星期要在 1（週一）到 7（週日）之間，收到 {weekday}。",
   "host.schedule.badDateTime": "時間「{time}」讀不懂。用 YYYY-MM-DD HH:MM（例：2026-09-01 15:30）。",
   "host.schedule.dstGap": "時間「{time}」在本地時區不存在（日光節約時間跳過的區間），換一個時刻。",
+  "host.schedule.skipTooMany": "每個任務最多 {max} 段略過時段。",
+  "host.schedule.skipAlways": "開始等於結束代表全天；不限星期的話等於永遠不執行。限定幾個星期，或直接暫停任務。",
   "host.schedule.run.sessionDeleted": "它要接續執行的會話已被刪除，任務已暫停。",
   "host.schedule.run.createSessionFailed": "建立不了會話。",
   "host.schedule.run.turnFailed": "這一輪沒有啟動起來。",

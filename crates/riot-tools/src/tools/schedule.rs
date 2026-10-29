@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use riot_protocol::schedule::{ScheduleAccess, ScheduleSpec, ScheduledTask, WhenSpec};
+use riot_protocol::schedule::{ScheduleAccess, ScheduleSpec, ScheduledTask, SkipWindow, WhenSpec};
 use riot_protocol::text::UiText;
 use riot_protocol::tool::{PromptContext, Tool, ToolContext, ToolOutcome};
 use riot_protocol::ui_text;
@@ -46,6 +46,12 @@ struct ScheduleInput {
     /// 上下文都在；false = 每次运行新开一个会话。
     #[serde(default)]
     in_this_session: Option<bool>,
+    /// create 可选：跳过时段。周期任务到点时落在这些时段里就不跑（不开
+    /// 一轮、不补跑）。每段 {"start":"HH:MM","end":"HH:MM","weekdays":[1..7]}，
+    /// 本地时间；end 早于 start = 跨午夜；start 等于 end = 全天；weekdays
+    /// 省略 = 每天。
+    #[serde(default)]
+    skip_windows: Option<Vec<SkipWindow>>,
     /// pause / resume / delete 必填：任务 id（list 或创建时返回的）。
     #[serde(default)]
     id: Option<String>,
@@ -111,6 +117,16 @@ impl Tool for ScheduleTool {
            不把一个会话越堆越长。\n\
          - 分钟级的 every（喝水提醒、盯一个状态）**用 true**：每次新开会话\
            的话，侧栏一天会多出上百个同名会话。\n\
+         \n\
+         **有固定空档的周期任务用 skip_windows，别靠 prompt 里写「午休就跳过」。**\
+         盯盘这类任务在午休、收盘后、周末没事可做；写进 prompt 的话每次到点\
+         照样跑一整轮、只回一句「跳过」，白烧 token。skip_windows 由调度器在\
+         到点时判断，命中就根本不开这一轮。每段 `{\"start\":\"11:30\",\"end\":\"13:00\"}`\
+         （本地时间，含开始、不含结束）；end 早于 start 是跨午夜（`15:00`→`09:30`\
+         = 收盘到次日开盘）；start 等于 end 是全天；`\"weekdays\":[6,7]` 限定星期\
+         （1=周一 … 7=周日，按此刻所在那天算），省略 = 每天。A 股盯盘的常见\
+         组合：午休 11:30–13:00、工作日 15:00–09:30、周末 00:00–00:00 配 [6,7]。\
+         只对周期任务生效；跳过的那次不补跑，间隔任务从时段结束那一刻接着跑。\n\
          \n\
          prompt 要自带全部背景：新会话里没有现在的上下文，写清楚做什么、\
          看哪里、产出什么。续跑的任务可以短一些，但也要点明是接着什么说。\
@@ -200,6 +216,7 @@ impl ScheduleTool {
             prompt: prompt.to_owned(),
             when,
             in_this_session: input.in_this_session.unwrap_or(false),
+            skip_windows: input.skip_windows.unwrap_or_default(),
         };
         match self.access.create(spec).await {
             Ok(task) => ToolOutcome::ok_text(format!(
@@ -273,7 +290,25 @@ fn render_line(t: &ScheduledTask) -> String {
         Some(_) => "在原会话续跑",
         None => "每次新开会话",
     };
-    format!("{repeat}，{next}，{target}。")
+    if t.skip_windows.is_empty() {
+        return format!("{repeat}，{next}，{target}。");
+    }
+    let skips: Vec<String> = t.skip_windows.iter().map(skip_text).collect();
+    format!("{repeat}，{next}，{target}，跳过 {}。", skips.join("、"))
+}
+
+/// 一段跳过时段的说法："11:30–13:00" / "周六周日 全天"。
+fn skip_text(w: &SkipWindow) -> String {
+    let span = if w.start == w.end {
+        "全天".to_owned()
+    } else {
+        format!("{}–{}", w.start, w.end)
+    };
+    if w.weekdays.is_empty() {
+        return span;
+    }
+    let days: String = w.weekdays.iter().map(|d| weekday_name(*d)).collect();
+    format!("{days} {span}")
 }
 
 /// "每 N 分钟"：整小时 / 整天的说成小时 / 天，念着顺。
@@ -333,6 +368,7 @@ mod tests {
             last_run_local: None,
             last_session_id: None,
             created_at_ms: 1,
+            skip_windows: Vec::new(),
             runs: Vec::new(),
         }
     }
@@ -406,6 +442,66 @@ mod tests {
         let created = access.created.lock().expect("锁");
         assert_eq!(created.len(), 1);
         assert!(!created[0].in_this_session, "没说就是新会话");
+        assert!(created[0].skip_windows.is_empty(), "没说就是不跳过");
+    }
+
+    #[tokio::test]
+    async fn 创建时带上跳过时段() {
+        let access = Arc::new(FakeAccess::default());
+        let tool = ScheduleTool::new(Arc::clone(&access) as Arc<dyn ScheduleAccess>);
+        let out = tool
+            .call(
+                serde_json::json!({
+                    "action": "create",
+                    "name": "盯盘",
+                    "prompt": "看一眼 560770",
+                    "when": {"kind": "every", "minutes": 5},
+                    "in_this_session": true,
+                    "skip_windows": [
+                        {"start": "11:30", "end": "13:00"},
+                        {"start": "00:00", "end": "00:00", "weekdays": [6, 7]},
+                    ],
+                }),
+                ctx(),
+            )
+            .await;
+        assert!(matches!(out, ToolOutcome::Ok { .. }), "该成功：{out:?}");
+        let created = access.created.lock().expect("锁");
+        assert_eq!(created[0].skip_windows.len(), 2);
+        assert_eq!(created[0].skip_windows[1].weekdays, vec![6, 7]);
+    }
+
+    #[test]
+    fn 列表行带上跳过时段() {
+        let mut t = task("t1", "盯盘");
+        t.skip_windows = vec![
+            SkipWindow {
+                start: "11:30".into(),
+                end: "13:00".into(),
+                weekdays: Vec::new(),
+            },
+            SkipWindow {
+                start: "00:00".into(),
+                end: "00:00".into(),
+                weekdays: vec![6, 7],
+            },
+        ];
+        let line = render_line(&t);
+        assert!(line.contains("跳过 11:30–13:00、周六周日 全天"), "{line}");
+    }
+
+    #[test]
+    fn 描述里教用跳过时段而不是在_prompt_里写跳过() {
+        let tool = ScheduleTool::new(Arc::new(FakeAccess::default()));
+        let p = tool.prompt(&PromptContext {
+            cwd: "/w".into(),
+            platform: "test".into(),
+            sandboxed: false,
+            sibling_tools: Vec::new(),
+            today: "2026年9月".into(),
+        });
+        assert!(p.contains("skip_windows"), "{p}");
+        assert!(p.contains("跨午夜"), "{p}");
     }
 
     /// 工具描述要教"有终点的盯梢把判据和截止写进 prompt"。

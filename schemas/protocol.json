@@ -4577,6 +4577,13 @@
         "prompt": {
           "type": "string"
         },
+        "skipWindows": {
+          "description": "跳过时段。空 = 不跳过。",
+          "items": {
+            "$ref": "#/$defs/SkipWindow"
+          },
+          "type": "array"
+        },
         "target": {
           "$ref": "#/$defs/RunTargetSpec"
         },
@@ -4630,6 +4637,16 @@
         "prompt": {
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "skipWindows": {
+          "description": "整组替换跳过时段。Some(空) = 清空。",
+          "items": {
+            "$ref": "#/$defs/SkipWindow"
+          },
+          "type": [
+            "array",
             "null"
           ]
         },
@@ -4738,6 +4755,10 @@
             "null"
           ]
         },
+        "skipped": {
+          "description": "true = 到点落在跳过时段里，没开对话（没有会话、不算失败）。",
+          "type": "boolean"
+        },
         "startedAtLocal": {
           "description": "`started_at_ms` 的本地时间文字（宿主现算）。",
           "type": "string"
@@ -4843,6 +4864,13 @@
             "string",
             "null"
           ]
+        },
+        "skipWindows": {
+          "description": "跳过时段。空 = 不跳过（老任务没有这个字段）。",
+          "items": {
+            "$ref": "#/$defs/SkipWindow"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -4906,6 +4934,34 @@
         "cwd",
         "updated_at_ms",
         "message_count"
+      ],
+      "type": "object"
+    },
+    "SkipWindow": {
+      "description": "跳过时段：周期任务到点时落在这里就不跑（不开对话、不补跑）。\n\n典型用途是盯盘任务避开午休、收盘后和周末 —— 不设的话，到点照样把\n长提示词发给模型，模型只回一句\"午休，跳过\"，白烧 token。\n\n语义（本地墙钟，宿主判定，见宿主 `schedule::in_skip_window`）：\n- 区间左闭右开：`start` 那一刻算在内，`end` 那一刻不算（11:30–13:00\n  里 11:30 跳过、13:00 照跑）。\n- `start > end` 是跨午夜：15:00–09:30 = 当天 15:00 之后 + 当天 09:30 之前。\n- `start == end` 是全天（00:00–00:00 配周六日 = 周末全天）。\n- `weekdays` 按**此刻所在的那一天**判，不按时段起点那天：15:00–09:30\n  配周一到周五，周五 15:00 后跳过，周六凌晨不归它管。空 = 每天。\n- 只管周期任务；一次性任务跳过就等于丢了，宿主不对它生效。",
+      "properties": {
+        "end": {
+          "description": "结束，本地时间 \"HH:MM\"（不含）。比 start 早 = 跨午夜；相等 = 全天。",
+          "type": "string"
+        },
+        "start": {
+          "description": "开始，本地时间 \"HH:MM\"（含）。",
+          "type": "string"
+        },
+        "weekdays": {
+          "description": "只在这些星期生效（1=周一 … 7=周日）。空 = 每天。",
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "start",
+        "end"
       ],
       "type": "object"
     },

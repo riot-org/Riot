@@ -45,6 +45,31 @@ pub enum Repeat {
     Weekly { weekday: u8, time: String },
 }
 
+/// 跳过时段：周期任务到点时落在这里就不跑（不开对话、不补跑）。
+///
+/// 典型用途是盯盘任务避开午休、收盘后和周末 —— 不设的话，到点照样把
+/// 长提示词发给模型，模型只回一句"午休，跳过"，白烧 token。
+///
+/// 语义（本地墙钟，宿主判定，见宿主 `schedule::in_skip_window`）：
+/// - 区间左闭右开：`start` 那一刻算在内，`end` 那一刻不算（11:30–13:00
+///   里 11:30 跳过、13:00 照跑）。
+/// - `start > end` 是跨午夜：15:00–09:30 = 当天 15:00 之后 + 当天 09:30 之前。
+/// - `start == end` 是全天（00:00–00:00 配周六日 = 周末全天）。
+/// - `weekdays` 按**此刻所在的那一天**判，不按时段起点那天：15:00–09:30
+///   配周一到周五，周五 15:00 后跳过，周六凌晨不归它管。空 = 每天。
+/// - 只管周期任务；一次性任务跳过就等于丢了，宿主不对它生效。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SkipWindow {
+    /// 开始，本地时间 "HH:MM"（含）。
+    pub start: String,
+    /// 结束，本地时间 "HH:MM"（不含）。比 start 早 = 跨午夜；相等 = 全天。
+    pub end: String,
+    /// 只在这些星期生效（1=周一 … 7=周日）。空 = 每天。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub weekdays: Vec<u8>,
+}
+
 /// 创建任务时对时间的说法。解析与计算在宿主。
 ///
 /// `After` 存在的理由：模型对"现在几点"没有可靠感知，"90 分钟后"这种
@@ -80,6 +105,9 @@ pub struct ScheduleSpec {
     /// true = 到点在**发起创建的会话**里续跑（上下文都在，适合"下午
     /// 再扫一次"）；false = 每次运行新开一个会话（适合周期简报）。
     pub in_this_session: bool,
+    /// 跳过时段（见 [`SkipWindow`]）。空 = 不跳过。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skip_windows: Vec<SkipWindow>,
 }
 
 /// 运行目标（编辑面板的"运行于"）。
@@ -118,6 +146,9 @@ pub struct ScheduleDraft {
     /// 新开会话用的模型。None = 没选，到点用模型列表第一个。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<ScheduleModel>,
+    /// 跳过时段。空 = 不跳过。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skip_windows: Vec<SkipWindow>,
 }
 
 /// 编辑任务的补丁（前端详情面板保存时用）。None = 那一项不动。
@@ -135,6 +166,9 @@ pub struct SchedulePatch {
     pub target: Option<RunTargetSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<ScheduleModel>,
+    /// 整组替换跳过时段。Some(空) = 清空。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skip_windows: Option<Vec<SkipWindow>>,
 }
 
 /// 一个定时任务的视图。宿主是唯一生产者。
@@ -169,6 +203,9 @@ pub struct ScheduledTask {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_session_id: Option<String>,
     pub created_at_ms: u64,
+    /// 跳过时段。空 = 不跳过（老任务没有这个字段）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skip_windows: Vec<SkipWindow>,
     /// 运行历史，新的在前。宿主只留最近若干条（见宿主的上限）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runs: Vec<ScheduleRunRecord>,
@@ -197,6 +234,9 @@ pub struct ScheduleRunRecord {
         deserialize_with = "crate::text::deserialize_lenient_ui_error"
     )]
     pub error: Option<crate::text::UiError>,
+    /// true = 到点落在跳过时段里，没开对话（没有会话、不算失败）。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub skipped: bool,
 }
 
 /// 启动时发现的错过运行（上次 App 没开着，到点没跑成）。
@@ -327,6 +367,23 @@ mod tests {
         assert!(t.session_id.is_none());
         assert!(t.next_run_ms.is_none());
         assert!(t.runs.is_empty(), "老 JSON 没有 runs 字段，得当空历史");
+        assert!(
+            t.skip_windows.is_empty(),
+            "老 JSON 没有跳过时段，得当不跳过"
+        );
+    }
+
+    #[test]
+    fn 跳过时段_空星期不落盘_往返不变() {
+        let w = SkipWindow {
+            start: "11:30".into(),
+            end: "13:00".into(),
+            weekdays: Vec::new(),
+        };
+        let v = serde_json::to_value(&w).expect("序列化");
+        assert!(v.get("weekdays").is_none(), "空星期 = 每天，不写出去：{v}");
+        let back: SkipWindow = serde_json::from_value(v).expect("往返");
+        assert_eq!(back, w);
     }
 
     #[test]

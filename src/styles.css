@@ -12751,6 +12751,77 @@ button.fold-head:hover,
   flex: 1;
 }
 
+/* ── 跳过时段 ─────────────────────────────── */
+
+/* 一段一行：上面是「开始 至 结束 … 删除」，下面一排星期开关。 */
+.sp-skip-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.sp-skip-span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sp-skip-span .sp-d-field {
+  max-width: none;
+}
+
+.sp-skip-to,
+.sp-skip-note {
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.sp-skip-days {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.sp-skip-day {
+  min-width: 34px;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.sp-skip-day:hover {
+  border-color: var(--border-strong);
+}
+
+.sp-skip-day.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.sp-skip-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.sp-skip-add:hover {
+  color: var(--text);
+}
+
+.sp-skip-hint {
+  margin-top: -2px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+
 .sp-d-save {
   box-sizing: border-box;
   height: 28px;
@@ -13093,6 +13164,12 @@ button.fold-head:hover,
 
 .sp-run-dot.failed {
   background: var(--danger);
+}
+
+/* 落在跳过时段：没跑，空心圈，和"跑过"的实心点区分开。 */
+.sp-run-dot.skipped {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--text-faint);
 }
 
 .sp-run-text {

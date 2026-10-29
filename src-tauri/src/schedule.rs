@@ -15,13 +15,17 @@
 //! - 只在 **App 运行时**调度（v1 拍板）。错过的到点在启动时收进
 //!   [`MissedRun`] 清单，交给用户决定补跑还是算了 —— 静默补跑一堆
 //!   积压任务会在开机瞬间并发烧一堆模型调用。
+//! - **跳过时段**（[`SkipWindow`]）：周期任务到点时此刻落在某个时段里，
+//!   这次直接丢掉 —— 不开对话、不补跑，只在运行历史里记一条"已跳过"。
+//!   下一次怎么算见 [`next_after_skip`]。一次性任务不受它影响（跳过就等于
+//!   丢了），「立即运行」也不受（用户亲手点的）。
 
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use riot_protocol::schedule::{
-    MissedRun, Repeat, ScheduleModel, ScheduleRunRecord, ScheduledTask, WhenSpec,
+    MissedRun, Repeat, ScheduleModel, ScheduleRunRecord, ScheduledTask, SkipWindow, WhenSpec,
 };
 use riot_protocol::{UiError, ui_error};
 
@@ -32,6 +36,10 @@ pub const MAX_RUNS: usize = 50;
 /// 间隔重复的最小间隔（分钟）。tick 周期是 20 秒，1 分钟能准时到点；
 /// 更密就是在烧模型调用，而且列表里的"下次运行"永远显示"1 分钟内"。
 pub const MIN_EVERY_MINUTES: u32 = 1;
+
+/// 每个任务最多几段跳过时段。午休 + 收盘后 + 周末三段就够盯盘用；
+/// 再多多半是在拿它拼一张课表。
+pub const MAX_SKIP_WINDOWS: usize = 8;
 
 /// 一次执行的存储记录。字段全 `default`，和 [`PersistedTask`] 同一条
 /// 向后兼容约束。
@@ -50,6 +58,9 @@ pub struct PersistedRun {
         deserialize_with = "riot_protocol::text::deserialize_lenient_ui_error"
     )]
     pub error: Option<UiError>,
+    /// 到点落在跳过时段里，没开对话。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub skipped: bool,
 }
 
 impl PersistedRun {
@@ -60,6 +71,7 @@ impl PersistedRun {
             session_id: self.session_id.clone(),
             finished_at_ms: self.finished_at_ms,
             error: self.error.clone(),
+            skipped: self.skipped,
         }
     }
 }
@@ -97,6 +109,9 @@ pub struct PersistedTask {
     /// （见 [`Self::spent_agent_once`]）。老数据没有这个字段，按用户建的算。
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub by_agent: bool,
+    /// 跳过时段。老数据没有这个字段 = 不跳过。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skip_windows: Vec<SkipWindow>,
 }
 
 impl PersistedTask {
@@ -134,6 +149,28 @@ impl PersistedTask {
                 session_id,
                 finished_at_ms: error.is_some().then_some(started_at_ms),
                 error,
+                skipped: false,
+            },
+        );
+        self.runs.truncate(MAX_RUNS);
+    }
+
+    /// 此刻到点要不要跳过：周期任务、此刻落在某个跳过时段里。
+    pub fn skips_at(&self, at_ms: u64) -> bool {
+        self.repeat != Repeat::Once && in_skip_window(&self.skip_windows, at_ms)
+    }
+
+    /// 记一次"到点但在跳过时段里"。不动 `last_run_ms` / `last_session_id`
+    /// —— 它们说的是"上次真跑是什么时候、结果在哪个会话"，跳过不算跑。
+    pub fn push_skipped(&mut self, at_ms: u64) {
+        self.runs.insert(
+            0,
+            PersistedRun {
+                started_at_ms: at_ms,
+                session_id: None,
+                finished_at_ms: Some(at_ms),
+                error: None,
+                skipped: true,
             },
         );
         self.runs.truncate(MAX_RUNS);
@@ -168,6 +205,7 @@ impl PersistedTask {
             last_run_local: self.last_run_ms.map(local_text),
             last_session_id: self.last_session_id.clone(),
             created_at_ms: self.created_at_ms,
+            skip_windows: self.skip_windows.clone(),
             runs: self.runs.iter().map(PersistedRun::to_view).collect(),
         }
     }
@@ -385,6 +423,15 @@ const MODEL_TEXT: &[(&str, &str)] = &[
         "Could not parse time \"{time}\". Use YYYY-MM-DD HH:MM (e.g. 2026-09-01 15:30).",
     ),
     (
+        "host.schedule.skipTooMany",
+        "At most {max} skip windows per task.",
+    ),
+    (
+        "host.schedule.skipAlways",
+        "A skip window whose start equals its end covers the whole day; with no weekdays \
+         it would skip every run. Limit it to some weekdays, or pause the task instead.",
+    ),
+    (
         "host.schedule.dstGap",
         "Time \"{time}\" does not exist in the local time zone (skipped by daylight saving); \
          pick another time.",
@@ -440,6 +487,139 @@ pub fn next_run(repeat: &Repeat, after_ms: u64) -> Option<u64> {
         day = day.checked_add_signed(Duration::days(1))?;
     }
     None
+}
+
+/// 校验并规整一组跳过时段：时刻写成两位 "HH:MM"，星期去重排序。
+///
+/// "全天 + 每天"拒掉 —— 那等于任务永远不跑，用户要的是暂停。
+pub fn normalize_skip_windows(windows: &[SkipWindow]) -> Result<Vec<SkipWindow>, UiError> {
+    if windows.len() > MAX_SKIP_WINDOWS {
+        return Err(ui_error!(
+            "host.schedule.skipTooMany",
+            max = MAX_SKIP_WINDOWS
+        ));
+    }
+    windows
+        .iter()
+        .map(|w| {
+            let (sh, sm) = parse_hhmm(&w.start).ok_or_else(|| bad_time(&w.start))?;
+            let (eh, em) = parse_hhmm(&w.end).ok_or_else(|| bad_time(&w.end))?;
+            if let Some(d) = w.weekdays.iter().find(|d| !(1..=7).contains(*d)) {
+                return Err(ui_error!("host.schedule.badWeekday", weekday = d));
+            }
+            let mut weekdays = w.weekdays.clone();
+            weekdays.sort_unstable();
+            weekdays.dedup();
+            // 七天全选和不选是一回事，存成空，免得两种写法各算各的。
+            if weekdays.len() == 7 {
+                weekdays.clear();
+            }
+            if (sh, sm) == (eh, em) && weekdays.is_empty() {
+                return Err(ui_error!("host.schedule.skipAlways"));
+            }
+            Ok(SkipWindow {
+                start: format!("{sh:02}:{sm:02}"),
+                end: format!("{eh:02}:{em:02}"),
+                weekdays,
+            })
+        })
+        .collect()
+}
+
+/// 一段跳过时段盖不盖得住"星期 `weekday`（1=周一）当天的第 `secs` 秒"。
+///
+/// 纯函数，不碰时区 —— 判定规则全在这里，单测直接喂星期和秒数。
+/// 规则见 [`SkipWindow`]：左闭右开；start > end 跨午夜（当天 start 之后
+/// 或 end 之前）；相等是全天；星期按此刻所在那天判。时刻坏了的时段
+/// 当它不存在（入库时已校验，这里只是不 panic）。
+pub fn window_covers(w: &SkipWindow, weekday: u8, secs: u32) -> bool {
+    if !w.weekdays.is_empty() && !w.weekdays.contains(&weekday) {
+        return false;
+    }
+    let (Some((sh, sm)), Some((eh, em))) = (parse_hhmm(&w.start), parse_hhmm(&w.end)) else {
+        return false;
+    };
+    let start = sh * 3600 + sm * 60;
+    let end = eh * 3600 + em * 60;
+    if start < end {
+        start <= secs && secs < end
+    } else {
+        // 跨午夜；相等时两半拼起来就是全天。
+        secs >= start || secs < end
+    }
+}
+
+/// 本地时刻 `at_ms` 落不落在任何一段跳过时段里。
+pub fn in_skip_window(windows: &[SkipWindow], at_ms: u64) -> bool {
+    use chrono::{Datelike, Local, TimeZone, Timelike};
+    if windows.is_empty() {
+        return false;
+    }
+    let Some(at) = Local.timestamp_millis_opt(at_ms as i64).single() else {
+        return false;
+    };
+    let weekday = at.weekday().number_from_monday() as u8;
+    let secs = at.num_seconds_from_midnight();
+    windows.iter().any(|w| window_covers(w, weekday, secs))
+}
+
+/// 从 `at_ms` 起第一个不在任何跳过时段里的时刻。本身不在时段里就是它。
+///
+/// 一段一段往后跳：盖住此刻的时段，这一段在当天结束于 `end`（同日段、
+/// 跨午夜段的凌晨那半），或者当天午夜（跨午夜段的晚上那半、全天）。
+/// 跳到午夜后若第二天还在时段里（周五收盘后接周末），下一圈接着跳。
+/// 绕不出来（数据坏了）返回 None。
+pub fn skip_window_end(windows: &[SkipWindow], at_ms: u64) -> Option<u64> {
+    use chrono::{Datelike, Local, TimeZone, Timelike};
+    let mut t = at_ms;
+    // 一周最多也就十来段；64 圈绕不出来就是数据坏了。
+    for _ in 0..64 {
+        if !in_skip_window(windows, t) {
+            return Some(t);
+        }
+        let at = Local.timestamp_millis_opt(t as i64).single()?;
+        let weekday = at.weekday().number_from_monday() as u8;
+        let secs = at.num_seconds_from_midnight();
+        let today = at.date_naive();
+        let midnight = local_at(today.succ_opt()?, 0, 0)?;
+        let mut until = t;
+        for w in windows.iter().filter(|w| window_covers(w, weekday, secs)) {
+            let (Some((sh, sm)), Some((eh, em))) = (parse_hhmm(&w.start), parse_hhmm(&w.end))
+            else {
+                continue;
+            };
+            let end = eh * 3600 + em * 60;
+            let piece_end = if (sh, sm) < (eh, em) || secs < end {
+                // 同日段，或跨午夜段的凌晨那半：今天的 end。
+                local_at(today, eh, em)?
+            } else {
+                midnight
+            };
+            until = until.max(piece_end);
+        }
+        if until <= t {
+            return None;
+        }
+        t = until;
+    }
+    None
+}
+
+/// 到点那次因跳过时段被丢掉之后，下一次运行的时刻。
+///
+/// - 先按重复规则正常往后算一次（固定时刻的任务就是下一个该跑的时刻；
+///   那一刻若还在时段里，到时再跳过一次、再记一条）。
+/// - **间隔任务**算出来的下一次若还在时段里，推到时段结束那一刻，之后
+///   从那里接着按间隔数。否则"每 5 分钟"在 90 分钟午休里要空转 18 次、
+///   记 18 条跳过；推到 13:00 正好赶上开盘，且整段午休只记一条。
+/// - 不补跑：被丢掉的那次不会挪到时段结束后再跑一遍（间隔任务的"推到
+///   结束"是新的一次，不是补那一次）。
+pub fn next_after_skip(repeat: &Repeat, windows: &[SkipWindow], now_ms: u64) -> Option<u64> {
+    let next = next_run(repeat, now_ms)?;
+    if matches!(repeat, Repeat::Every { .. }) && in_skip_window(windows, next) {
+        return Some(skip_window_end(windows, next).unwrap_or(next));
+    }
+    Some(next)
 }
 
 /// 某个本地日期的 HH:MM 对应的 Unix 毫秒。
@@ -561,22 +741,31 @@ pub fn reconcile_on_start(tasks: &mut [PersistedTask], now_ms: u64) -> (Vec<Miss
             continue;
         }
         // 数一下错过了几次（关机三天的每日任务 = 3 次），封顶别空转。
-        let mut count: u32 = 1;
-        let mut last = due;
-        while let Some(next) = next_run(&t.repeat, last) {
-            if next + MISS_GRACE_MS > now_ms || count >= 60 {
-                break;
+        // 落在跳过时段里的到点本来就不会跑，不算错过：周末关机的盯盘
+        // 任务开机时不该报"错过 600 次"。步数另封顶 —— 每分钟一次的任务
+        // 关了一个周末，几千个到点大半在时段里，计数封顶管不住循环。
+        let mut count: u32 = 0;
+        let mut last = None;
+        let mut at = due;
+        for _ in 0..10_000 {
+            if !t.skips_at(at) {
+                count += 1;
+                last = Some(at);
             }
-            last = next;
-            count += 1;
+            match next_run(&t.repeat, at) {
+                Some(next) if next + MISS_GRACE_MS <= now_ms && count < 60 => at = next,
+                _ => break,
+            }
         }
-        missed.push(MissedRun {
-            task_id: t.id.clone(),
-            name: t.name.clone(),
-            count,
-            last_ms: last,
-            last_local: local_text(last),
-        });
+        if let Some(last) = last {
+            missed.push(MissedRun {
+                task_id: t.id.clone(),
+                name: t.name.clone(),
+                count,
+                last_ms: last,
+                last_local: local_text(last),
+            });
+        }
         dirty = true;
         match next_run(&t.repeat, now_ms) {
             Some(next) => t.next_run_ms = Some(next),
@@ -802,6 +991,11 @@ mod tests {
                 created_at_ms: 1,
                 runs: Vec::new(),
                 by_agent: false,
+                skip_windows: vec![SkipWindow {
+                    start: "11:30".into(),
+                    end: "13:00".into(),
+                    weekdays: vec![1, 2, 3, 4, 5],
+                }],
             }],
         };
         save(dir.path(), &book).expect("保存");
@@ -876,6 +1070,7 @@ mod tests {
             created_at_ms: 1,
             runs: Vec::new(),
             by_agent: false,
+            skip_windows: Vec::new(),
         }
     }
 
@@ -1042,5 +1237,216 @@ mod tests {
         let (missed, dirty) = reconcile_on_start(&mut tasks, now);
         assert!(missed.is_empty(), "用户自己暂停的，不该拿来烦他");
         assert!(!dirty);
+    }
+
+    // ── 跳过时段 ─────────────────────────────────────────
+
+    fn win(start: &str, end: &str, weekdays: &[u8]) -> SkipWindow {
+        SkipWindow {
+            start: start.into(),
+            end: end.into(),
+            weekdays: weekdays.to_vec(),
+        }
+    }
+
+    /// HH:MM:SS → 当天秒数。
+    fn secs(h: u32, m: u32, s: u32) -> u32 {
+        h * 3600 + m * 60 + s
+    }
+
+    #[test]
+    fn 跳过时段_同日段左闭右开() {
+        let lunch = win("11:30", "13:00", &[]);
+        assert!(!window_covers(&lunch, 3, secs(11, 29, 59)));
+        assert!(
+            window_covers(&lunch, 3, secs(11, 30, 0)),
+            "开始那一刻要跳过"
+        );
+        assert!(window_covers(&lunch, 3, secs(12, 59, 59)));
+        assert!(!window_covers(&lunch, 3, secs(13, 0, 0)), "结束那一刻照跑");
+        assert!(window_covers(&lunch, 7, secs(12, 0, 0)), "不限星期 = 每天");
+    }
+
+    #[test]
+    fn 跳过时段_跨午夜两半都算() {
+        let night = win("15:00", "09:30", &[]);
+        assert!(window_covers(&night, 2, secs(15, 0, 0)));
+        assert!(window_covers(&night, 2, secs(23, 59, 59)));
+        assert!(window_covers(&night, 2, secs(0, 0, 0)));
+        assert!(window_covers(&night, 2, secs(9, 29, 59)));
+        assert!(!window_covers(&night, 2, secs(9, 30, 0)), "结束那一刻照跑");
+        assert!(!window_covers(&night, 2, secs(14, 59, 59)));
+        assert!(!window_covers(&night, 2, secs(12, 0, 0)));
+    }
+
+    #[test]
+    fn 跳过时段_开始等于结束是全天() {
+        let weekend = win("00:00", "00:00", &[6, 7]);
+        assert!(window_covers(&weekend, 6, secs(0, 0, 0)));
+        assert!(window_covers(&weekend, 7, secs(23, 59, 59)));
+        assert!(!window_covers(&weekend, 5, secs(23, 59, 59)));
+        assert!(!window_covers(&weekend, 1, secs(0, 0, 0)));
+    }
+
+    #[test]
+    fn 跳过时段_星期按此刻所在那天判() {
+        // 工作日收盘后：周五 15:00 后跳，周六凌晨不归它管；周一凌晨归它管。
+        let after_close = win("15:00", "09:30", &[1, 2, 3, 4, 5]);
+        assert!(window_covers(&after_close, 5, secs(16, 0, 0)));
+        assert!(!window_covers(&after_close, 6, secs(1, 0, 0)));
+        assert!(window_covers(&after_close, 1, secs(8, 0, 0)));
+        assert!(!window_covers(&after_close, 7, secs(16, 0, 0)));
+        let lunch_wd = win("11:30", "13:00", &[1, 2, 3, 4, 5]);
+        assert!(window_covers(&lunch_wd, 3, secs(12, 0, 0)));
+        assert!(
+            !window_covers(&lunch_wd, 6, secs(12, 0, 0)),
+            "周六不在星期里"
+        );
+    }
+
+    #[test]
+    fn 跳过时段_按本地时刻判() {
+        // 2026-09-02 周三，2026-09-05 周六。
+        let ws = vec![
+            win("11:30", "13:00", &[1, 2, 3, 4, 5]),
+            win("00:00", "00:00", &[6, 7]),
+        ];
+        assert!(in_skip_window(&ws, ms(2026, 9, 2, 11, 30)));
+        assert!(!in_skip_window(&ws, ms(2026, 9, 2, 13, 0)));
+        assert!(!in_skip_window(&ws, ms(2026, 9, 2, 10, 0)));
+        assert!(in_skip_window(&ws, ms(2026, 9, 5, 10, 0)));
+        assert!(!in_skip_window(&[], ms(2026, 9, 2, 12, 0)), "没设 = 不跳过");
+    }
+
+    #[test]
+    fn 跳过时段_结束时刻_能接着跳过相邻时段() {
+        let lunch = vec![win("11:30", "13:00", &[])];
+        assert_eq!(
+            skip_window_end(&lunch, ms(2026, 9, 2, 11, 35)),
+            Some(ms(2026, 9, 2, 13, 0))
+        );
+        assert_eq!(
+            skip_window_end(&lunch, ms(2026, 9, 2, 10, 0)),
+            Some(ms(2026, 9, 2, 10, 0)),
+            "不在时段里就是它自己"
+        );
+        // A 股：收盘后（工作日）+ 周末全天。周五 16:00 一路跳到周一 09:30。
+        let market = vec![
+            win("15:00", "09:30", &[1, 2, 3, 4, 5]),
+            win("00:00", "00:00", &[6, 7]),
+        ];
+        // 2026-09-04 周五，2026-09-07 周一。
+        assert_eq!(
+            skip_window_end(&market, ms(2026, 9, 4, 16, 0)),
+            Some(ms(2026, 9, 7, 9, 30))
+        );
+    }
+
+    #[test]
+    fn 跳过后下一次_间隔任务推到时段结束_定时任务按原规则() {
+        let lunch = vec![win("11:30", "13:00", &[])];
+        let every5 = Repeat::Every { minutes: 5 };
+        // 11:32 到点被跳过：11:37 还在午休里，推到 13:00。
+        assert_eq!(
+            next_after_skip(&every5, &lunch, ms(2026, 9, 2, 11, 32)),
+            Some(ms(2026, 9, 2, 13, 0))
+        );
+        // 间隔比时段长：正常往后数已经出了时段，不动。
+        let every2h = Repeat::Every { minutes: 120 };
+        assert_eq!(
+            next_after_skip(&every2h, &lunch, ms(2026, 9, 2, 11, 32)),
+            Some(ms(2026, 9, 2, 13, 32))
+        );
+        // 每天 12:00 撞上午休：跳过今天，下一次就是明天 12:00（到时再跳），不挪时刻。
+        let daily = Repeat::Daily {
+            time: "12:00".into(),
+        };
+        assert_eq!(
+            next_after_skip(&daily, &lunch, ms(2026, 9, 2, 12, 0)),
+            Some(ms(2026, 9, 3, 12, 0))
+        );
+    }
+
+    #[test]
+    fn 跳过时段_一次性任务不受影响() {
+        let mut t = task(Repeat::Once, Some(ms(2026, 9, 2, 12, 0)));
+        t.skip_windows = vec![win("11:30", "13:00", &[])];
+        assert!(
+            !t.skips_at(ms(2026, 9, 2, 12, 0)),
+            "一次性任务跳过就丢了，不生效"
+        );
+        t.repeat = Repeat::Every { minutes: 5 };
+        assert!(t.skips_at(ms(2026, 9, 2, 12, 0)));
+    }
+
+    #[test]
+    fn 跳过记录不算真跑() {
+        let mut t = task(Repeat::Every { minutes: 5 }, None);
+        t.push_run(10, Some("s1".into()), None);
+        t.push_skipped(20);
+        assert_eq!(t.last_run_ms, Some(10), "跳过不改上次运行");
+        assert_eq!(t.last_session_id.as_deref(), Some("s1"));
+        let head = &t.runs[0];
+        assert!(head.skipped && head.session_id.is_none() && head.error.is_none());
+        assert_eq!(head.finished_at_ms, Some(20), "跳过记录当场就结束了");
+        assert!(t.to_view().runs[0].skipped, "视图要带上跳过标记");
+    }
+
+    #[test]
+    fn 跳过时段_校验并规整() {
+        let out = normalize_skip_windows(&[win("9:5", "13:00", &[3, 1, 3])]).expect("合法");
+        assert_eq!(out, vec![win("09:05", "13:00", &[1, 3])]);
+        let all = normalize_skip_windows(&[win("00:00", "00:00", &[1, 2, 3, 4, 5, 6, 7])]);
+        assert_eq!(
+            all.expect_err("全天且七天全选 = 永不运行").key(),
+            "host.schedule.skipAlways"
+        );
+        assert_eq!(
+            normalize_skip_windows(&[win("25:00", "13:00", &[])])
+                .expect_err("坏时刻")
+                .key(),
+            "host.schedule.badTime"
+        );
+        assert_eq!(
+            normalize_skip_windows(&[win("11:30", "13:00", &[8])])
+                .expect_err("坏星期")
+                .key(),
+            "host.schedule.badWeekday"
+        );
+        let many = vec![win("01:00", "02:00", &[]); MAX_SKIP_WINDOWS + 1];
+        assert_eq!(
+            normalize_skip_windows(&many).expect_err("太多").key(),
+            "host.schedule.skipTooMany"
+        );
+        // 全天配星期是合法的（周末全天）。
+        assert!(normalize_skip_windows(&[win("00:00", "00:00", &[6, 7])]).is_ok());
+    }
+
+    #[test]
+    fn 启动对账_落在跳过时段的到点不算错过() {
+        // 周五 15:00 关机、周一 09:00 开机，每小时一次的任务；收盘后 + 周末全跳。
+        let mut t = task(Repeat::Every { minutes: 60 }, Some(ms(2026, 9, 4, 15, 30)));
+        t.skip_windows = vec![
+            win("15:00", "09:30", &[1, 2, 3, 4, 5]),
+            win("00:00", "00:00", &[6, 7]),
+        ];
+        let now = ms(2026, 9, 7, 9, 0);
+        let mut tasks = vec![t];
+        let (missed, dirty) = reconcile_on_start(&mut tasks, now);
+        assert!(missed.is_empty(), "全在时段里，不该报错过：{missed:?}");
+        assert!(dirty, "next_run 还是要推进到未来");
+        assert!(tasks[0].next_run_ms.is_some_and(|n| n > now));
+
+        // 只有部分在时段里：周五 14:00 起，14:00 那次算错过，15:00 之后的不算。
+        let mut t = task(Repeat::Every { minutes: 60 }, Some(ms(2026, 9, 4, 14, 0)));
+        t.skip_windows = vec![
+            win("15:00", "09:30", &[1, 2, 3, 4, 5]),
+            win("00:00", "00:00", &[6, 7]),
+        ];
+        let mut tasks = vec![t];
+        let (missed, _) = reconcile_on_start(&mut tasks, now);
+        assert_eq!(missed.len(), 1);
+        assert_eq!(missed[0].count, 1);
+        assert_eq!(missed[0].last_ms, ms(2026, 9, 4, 14, 0));
     }
 }

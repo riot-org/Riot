@@ -78,6 +78,8 @@ export default {
   "host.schedule.badWeekday": "Weekday must be between 1 (Monday) and 7 (Sunday); got {weekday}.",
   "host.schedule.badDateTime": "Could not parse time “{time}”. Use YYYY-MM-DD HH:MM (e.g. 2026-09-01 15:30).",
   "host.schedule.dstGap": "Time “{time}” does not exist in the local time zone (skipped by daylight saving); pick another time.",
+  "host.schedule.skipTooMany": "A task can have at most {max} skip windows.",
+  "host.schedule.skipAlways": "A window whose start equals its end covers the whole day; on every day it would skip every run. Limit it to some weekdays, or pause the task instead.",
   "host.schedule.run.sessionDeleted": "The session it was supposed to continue has been deleted; the task is paused.",
   "host.schedule.run.createSessionFailed": "Could not create a session.",
   "host.schedule.run.turnFailed": "The turn failed to start.",

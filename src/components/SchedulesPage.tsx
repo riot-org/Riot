@@ -6,6 +6,9 @@
  *   现有会话 + 会话选择器）、频率（重复 / 时间）都可编辑，有改动时
  *   顶部出现「保存」，失败变「重试保存」。
  *
+ * 频率下面是「跳过时段」（[`SkipWindowsEditor`]）：到点时落在这些时段里，
+ * 宿主直接不开这一轮（盯盘任务避开午休 / 收盘后 / 周末）。只对周期任务显示。
+ *
  * 创建有两条路，「创建」按钮弹菜单让用户选：**手动创建**在右侧栏（详情
  * 面板的位置）展开一张表单（[`ScheduleCreatePanel`]，字段和详情同一套）；
  * **让 Riot 创建**把开头替用户写好、送回输入框，由对话里的 agent 接手。
@@ -27,9 +30,11 @@ import {
   scheduleSetEnabled,
   scheduleUpdate,
   type SessionInfo,
+  type SkipWindow,
   type WhenSpec,
 } from "../bridge";
 import { type MessageKey, dateTimeFormat, t, tn, useT } from "../i18n";
+import { newSkipWindow, sameSkipWindows, skipWindowShape, toggleSkipWeekday } from "../lib/skipWindows";
 import { basename } from "../pathDisplay";
 import { Chevron } from "./Chevron";
 import { FieldSelect } from "./FieldSelect";
@@ -273,6 +278,9 @@ export function SchedulesPage({
                         <span className="sp-row-meta">
                           {repeatText(task)} · {nextText(task)}
                           {task.sessionId ? ` · ${t("schedules.row.continueInSession")}` : ""}
+                          {task.repeat.kind !== "once" && task.skipWindows?.length
+                            ? ` · ${tn("schedules.row.skips", task.skipWindows.length)}`
+                            : ""}
                         </span>
                       </span>
                     </button>
@@ -523,6 +531,8 @@ export function ScheduleDetail({
   const [time, setTime] = useState(() => timeOf(task));
   const [every, setEvery] = useState<Interval>(() => intervalOf(task));
   const [onceAt, setOnceAt] = useState(task.nextRunLocal ?? "");
+  const [skips, setSkips] = useState<SkipWindow[]>(task.skipWindows ?? []);
+  const skipsChanged = !sameSkipWindows(skips, task.skipWindows ?? []);
   const [saving, setSaving] = useState(false);
   const [saveFailed, setSaveFailed] = useState(false);
   const { t } = useT();
@@ -550,8 +560,9 @@ export function ScheduleDetail({
     if (runIn === "session" && sessionId !== (task.sessionId ?? null)) return true;
     if (runIn === "new" && root !== task.root) return true;
     if (runIn === "new" && modelChanged) return true;
+    if (skipsChanged) return true;
     return whenChanged;
-  }, [task, name, prompt, runIn, sessionId, root, modelChanged, whenChanged]);
+  }, [task, name, prompt, runIn, sessionId, root, modelChanged, skipsChanged, whenChanged]);
 
   const save = async () => {
     const patch: SchedulePatch = {};
@@ -580,6 +591,8 @@ export function ScheduleDetail({
       }
       patch.when = when;
     }
+    // 整组替换：空数组 = 清空。
+    if (skipsChanged) patch.skipWindows = skips;
 
     setSaving(true);
     try {
@@ -720,6 +733,8 @@ export function ScheduleDetail({
         )}
       </div>
 
+      {choice !== "once" ? <SkipWindowsEditor value={skips} onChange={setSkips} /> : null}
+
       <RunHistory runs={task.runs ?? []} sessions={sessions} onOpenSession={onOpenSession} />
     </div>
   );
@@ -748,13 +763,20 @@ function RunHistory({
       <div className="sp-d-caption">{t("schedules.runs.title")}</div>
       <div className="sp-d-group sp-runs">
         {runs.map((r) => {
-          const state = r.error ? "failed" : r.finishedAtMs ? "ok" : "running";
+          const state = r.skipped ? "skipped" : r.error ? "failed" : r.finishedAtMs ? "ok" : "running";
           const session = r.sessionId ? sessions.find((s) => s.id === r.sessionId) : undefined;
           // 会话还在就能点过去；已删（或开跑就失败没会话）只展示。
           const canOpen = Boolean(session);
           const errorText = r.error ? renderUiError(r.error) : null;
           const title =
-            errorText ?? t(state === "running" ? "schedules.runs.running" : "schedules.status.done");
+            errorText ??
+            t(
+              state === "skipped"
+                ? "schedules.runs.skipped"
+                : state === "running"
+                  ? "schedules.runs.running"
+                  : "schedules.status.done",
+            );
           return (
             <button
               key={`${r.startedAtMs}:${r.sessionId ?? ""}`}
@@ -770,6 +792,8 @@ function RunHistory({
                   <span className="sp-run-session">{session.title ?? t("schedules.newSession")}</span>
                 ) : errorText ? (
                   <span className="sp-run-session err">{errorText}</span>
+                ) : state === "skipped" ? (
+                  <span className="sp-run-session">{t("schedules.runs.skippedShort")}</span>
                 ) : null}
               </span>
               <span className="sp-run-ago">{agoText(r.startedAtMs)}</span>
@@ -789,6 +813,78 @@ function agoText(ms: number): string {
   if (d < 86_400_000) return tn("common.hoursAgo", Math.round(d / 3_600_000));
   if (d < 30 * 86_400_000) return tn("common.daysAgo", Math.round(d / 86_400_000));
   return dateTimeFormat({ year: "numeric", month: "numeric", day: "numeric" }).format(new Date(ms));
+}
+
+/** 星期短名（周一 / Mon / 月），按当前界面语言。 */
+function weekdayShort(weekday: number): string {
+  return dateTimeFormat({ weekday: "short" }).format(new Date(2024, 0, weekday));
+}
+
+/**
+ * 跳过时段编辑器：每段一行（开始 至 结束 + 星期开关 + 删除），底下加一段。
+ * 详情和手动创建共用。判定规则在宿主（riot_protocol::schedule::SkipWindow），
+ * 这里只把"跨午夜 / 全天"标出来，免得用户以为 15:00 至 09:30 填反了。
+ */
+function SkipWindowsEditor({ value, onChange }: { value: SkipWindow[]; onChange: (v: SkipWindow[]) => void }) {
+  const { t } = useT();
+  const set = (i: number, w: SkipWindow) => onChange(value.map((x, j) => (j === i ? w : x)));
+  return (
+    <>
+      <div className="sp-d-caption">{t("schedules.section.skip")}</div>
+      <div className="sp-d-group">
+        {value.map((w, i) => {
+          const shape = skipWindowShape(w);
+          return (
+            // 时段没有 id，位置就是身份：增删只在这个列表里发生。
+            <div className="sp-d-row sp-skip-row" key={i}>
+              <span className="sp-skip-span">
+                <TimePicker className="sp-d-field" value={w.start} onChange={(v) => set(i, { ...w, start: v })} />
+                <span className="sp-skip-to">{t("schedules.skip.to")}</span>
+                <TimePicker className="sp-d-field" value={w.end} onChange={(v) => set(i, { ...w, end: v })} />
+                {shape === "overnight" ? (
+                  <span className="sp-skip-note">{t("schedules.skip.nextDay")}</span>
+                ) : shape === "allDay" ? (
+                  <span className="sp-skip-note">{t("schedules.skip.allDay")}</span>
+                ) : null}
+                <span className="sp-d-space" />
+                <button
+                  className="row-btn"
+                  onClick={() => onChange(value.filter((_, j) => j !== i))}
+                  title={t("schedules.skip.remove")}
+                  aria-label={t("schedules.skip.remove")}
+                >
+                  <CloseIcon />
+                </button>
+              </span>
+              <span className="sp-skip-days" role="group" aria-label={t("schedules.skip.weekdays")}>
+                {[1, 2, 3, 4, 5, 6, 7].map((d) => {
+                  const on = w.weekdays?.includes(d) ?? false;
+                  return (
+                    <button
+                      key={d}
+                      className={on ? "sp-skip-day on" : "sp-skip-day"}
+                      aria-pressed={on}
+                      title={weekdayName(d)}
+                      onClick={() => set(i, toggleSkipWeekday(w, d))}
+                    >
+                      {weekdayShort(d)}
+                    </button>
+                  );
+                })}
+              </span>
+            </div>
+          );
+        })}
+        <div className="sp-d-row">
+          <button className="sp-skip-add" onClick={() => onChange([...value, newSkipWindow()])}>
+            <PlusIcon />
+            {t("schedules.skip.add")}
+          </button>
+        </div>
+      </div>
+      <div className="sp-skip-hint">{t("schedules.skip.hint")}</div>
+    </>
+  );
 }
 
 /** 表单选择 → 协议的时间说法。间隔非法时返回 null，调用方提示。 */
@@ -852,6 +948,7 @@ export function ScheduleCreatePanel({
   const [time, setTime] = useState("09:00");
   const [every, setEvery] = useState<Interval>({ n: "30", unit: "min" });
   const [onceAt, setOnceAt] = useState("");
+  const [skips, setSkips] = useState<SkipWindow[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { t } = useT();
@@ -880,6 +977,8 @@ export function ScheduleCreatePanel({
         target,
         // 续跑型用的是那个会话自己的模型，这里不带。
         ...(runIn === "new" && model ? { model } : {}),
+        // 一次性任务不受跳过时段管，表单里也不显示，别带过去。
+        ...(choice !== "once" && skips.length > 0 ? { skipWindows: skips } : {}),
       });
       onCreated(created);
     } catch (e) {
@@ -985,6 +1084,8 @@ export function ScheduleCreatePanel({
           </div>
         )}
       </div>
+
+      {choice !== "once" ? <SkipWindowsEditor value={skips} onChange={setSkips} /> : null}
 
       {error ? (
         <div className="sp-d-error" role="alert">

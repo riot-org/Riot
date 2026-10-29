@@ -2028,6 +2028,10 @@ export interface ScheduleDraft {
   model?: ScheduleModel | null;
   name: string;
   prompt: string;
+  /**
+   * 跳过时段。空 = 不跳过。
+   */
+  skipWindows?: SkipWindow[];
   target: RunTargetSpec;
   when: WhenSpec;
 }
@@ -2043,12 +2047,45 @@ export interface ScheduleModel {
   provider: string;
 }
 /**
+ * 跳过时段：周期任务到点时落在这里就不跑（不开对话、不补跑）。
+ *
+ * 典型用途是盯盘任务避开午休、收盘后和周末 —— 不设的话，到点照样把
+ * 长提示词发给模型，模型只回一句"午休，跳过"，白烧 token。
+ *
+ * 语义（本地墙钟，宿主判定，见宿主 `schedule::in_skip_window`）：
+ * - 区间左闭右开：`start` 那一刻算在内，`end` 那一刻不算（11:30–13:00
+ *   里 11:30 跳过、13:00 照跑）。
+ * - `start > end` 是跨午夜：15:00–09:30 = 当天 15:00 之后 + 当天 09:30 之前。
+ * - `start == end` 是全天（00:00–00:00 配周六日 = 周末全天）。
+ * - `weekdays` 按**此刻所在的那一天**判，不按时段起点那天：15:00–09:30
+ *   配周一到周五，周五 15:00 后跳过，周六凌晨不归它管。空 = 每天。
+ * - 只管周期任务；一次性任务跳过就等于丢了，宿主不对它生效。
+ */
+export interface SkipWindow {
+  /**
+   * 结束，本地时间 "HH:MM"（不含）。比 start 早 = 跨午夜；相等 = 全天。
+   */
+  end: string;
+  /**
+   * 开始，本地时间 "HH:MM"（含）。
+   */
+  start: string;
+  /**
+   * 只在这些星期生效（1=周一 … 7=周日）。空 = 每天。
+   */
+  weekdays?: number[];
+}
+/**
  * 编辑任务的补丁（前端详情面板保存时用）。None = 那一项不动。
  */
 export interface SchedulePatch {
   model?: ScheduleModel | null;
   name?: string | null;
   prompt?: string | null;
+  /**
+   * 整组替换跳过时段。Some(空) = 清空。
+   */
+  skipWindows?: SkipWindow[] | null;
   target?: RunTargetSpec | null;
   /**
    * 重设时间。宿主重算下次运行；已跑完的一次性任务借此复活。
@@ -2113,6 +2150,10 @@ export interface ScheduledTask {
    * Some = 到点在这个会话里续跑；None = 每次新开会话。
    */
   sessionId?: string | null;
+  /**
+   * 跳过时段。空 = 不跳过（老任务没有这个字段）。
+   */
+  skipWindows?: SkipWindow[];
 }
 /**
  * 运行历史里的一条：这个任务的某一次执行。
@@ -2133,6 +2174,10 @@ export interface ScheduleRunRecord {
    * 这次跑在哪个会话里。开跑就失败（建不了会话）时没有。
    */
   sessionId?: string | null;
+  /**
+   * true = 到点落在跳过时段里，没开对话（没有会话、不算失败）。
+   */
+  skipped?: boolean;
   /**
    * `started_at_ms` 的本地时间文字（宿主现算）。
    */

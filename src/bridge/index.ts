@@ -66,6 +66,7 @@ import type {
   ScheduleRun,
   ScheduleRunRecord,
   ScheduledTask,
+  SkipWindow,
   ThinkingEffort,
   ThinkingPolicy as GeneratedThinkingPolicy,
   WhenSpec,
@@ -90,6 +91,7 @@ export type {
   ScheduleRun,
   ScheduleRunRecord,
   ScheduledTask,
+  SkipWindow,
   WhenSpec,
 };
 

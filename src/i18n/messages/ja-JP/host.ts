@@ -78,6 +78,8 @@ export default {
   "host.schedule.badWeekday": "曜日は 1（月曜）から 7（日曜）の範囲で指定してください。受け取った値：{weekday}。",
   "host.schedule.badDateTime": "時刻「{time}」を解釈できません。YYYY-MM-DD HH:MM 形式で指定してください（例：2026-09-01 15:30）。",
   "host.schedule.dstGap": "時刻「{time}」はローカルタイムゾーンに存在しません（夏時間でスキップされる区間）。別の時刻を指定してください。",
+  "host.schedule.skipTooMany": "スキップ時間帯は 1 タスクにつき最大 {max} 個です。",
+  "host.schedule.skipAlways": "開始と終了が同じだと終日になります。曜日を限定しないと一度も実行されません。曜日を絞るか、タスクを一時停止してください。",
   "host.schedule.run.sessionDeleted": "続きを実行するはずのセッションが削除されたため、タスクを一時停止しました。",
   "host.schedule.run.createSessionFailed": "セッションを作成できませんでした。",
   "host.schedule.run.turnFailed": "ターンを開始できませんでした。",

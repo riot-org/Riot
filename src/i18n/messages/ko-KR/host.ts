@@ -78,6 +78,8 @@ export default {
   "host.schedule.badWeekday": "요일은 1(월요일)에서 7(일요일) 사이여야 하는데 {weekday}(을)를 받았습니다.",
   "host.schedule.badDateTime": "시간 「{time}」을(를) 해석할 수 없습니다. YYYY-MM-DD HH:MM 형식을 사용하세요(예: 2026-09-01 15:30).",
   "host.schedule.dstGap": "시간 「{time}」은(는) 현지 시간대에 존재하지 않습니다(일광 절약 시간으로 건너뛰는 구간). 다른 시각을 지정하세요.",
+  "host.schedule.skipTooMany": "건너뛰기 시간대는 작업당 최대 {max}개입니다.",
+  "host.schedule.skipAlways": "시작과 끝이 같으면 하루 종일입니다. 요일을 정하지 않으면 한 번도 실행되지 않습니다. 요일을 지정하거나 작업을 일시 중지하세요.",
   "host.schedule.run.sessionDeleted": "이어서 실행할 세션이 삭제되어 작업을 일시 중지했습니다.",
   "host.schedule.run.createSessionFailed": "세션을 만들 수 없습니다.",
   "host.schedule.run.turnFailed": "턴을 시작할 수 없습니다.",

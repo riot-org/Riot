@@ -52,6 +52,8 @@ struct NewSchedule {
     root: String,
     model: Option<riot_protocol::ScheduleModel>,
     by_agent: bool,
+    /// 跳过时段，未校验（[`AppState::insert_schedule`] 里规整）。
+    skip_windows: Vec<riot_protocol::SkipWindow>,
 }
 
 /// 切回一个会话时前端要的东西。
@@ -2889,6 +2891,7 @@ impl AppState {
                 root: root.display().to_string(),
                 model,
                 by_agent: true,
+                skip_windows: spec.skip_windows,
             },
         )
         .await
@@ -2955,6 +2958,7 @@ impl AppState {
                 root,
                 model: draft.model,
                 by_agent: false,
+                skip_windows: draft.skip_windows,
             },
         )
         .await
@@ -2973,9 +2977,11 @@ impl AppState {
             root,
             model,
             by_agent,
+            skip_windows,
         } = new;
         let now = crate::schedule::now_ms();
         let (repeat, first_run) = crate::schedule::resolve_spec(when, now)?;
+        let skip_windows = crate::schedule::normalize_skip_windows(&skip_windows)?;
 
         let task = crate::schedule::PersistedTask {
             id: NanoIdGenerator.next_id("sch"),
@@ -2992,6 +2998,7 @@ impl AppState {
             created_at_ms: now,
             runs: Vec::new(),
             by_agent,
+            skip_windows,
         };
 
         {
@@ -3079,6 +3086,10 @@ impl AppState {
             .when
             .map(|w| crate::schedule::resolve_spec(&w, crate::schedule::now_ms()))
             .transpose()?;
+        let skip_windows = patch
+            .skip_windows
+            .map(|ws| crate::schedule::normalize_skip_windows(&ws))
+            .transpose()?;
 
         let view = {
             let mut g = self.0.schedules.lock().await;
@@ -3113,6 +3124,11 @@ impl AppState {
             }
             if let Some(model) = patch.model {
                 t.model = Some(model);
+            }
+            // 改跳过时段不重算 next_run：判定在到点那一刻做，下一次到点
+            // 自然按新时段判。
+            if let Some(ws) = skip_windows {
+                t.skip_windows = ws;
             }
             let view = t.to_view();
             self.persist_schedules(&g);
@@ -3167,13 +3183,34 @@ impl AppState {
 
     /// 一次调度检查：到期的任务推进 next_run 并逐个开跑。
     /// 由宿主的 tick 循环（[`crate::schedule::spawn_ticker`]）周期调用。
+    ///
+    /// 到期时此刻落在跳过时段里的：不开跑、不补跑，记一条"已跳过"，下一次
+    /// 按 [`crate::schedule::next_after_skip`] 算。判的是**此刻**而不是
+    /// 到期时刻 —— 电脑睡了一觉、醒来正在午休里，同样不该开对话。
     pub async fn schedule_tick(&self) {
         let now = crate::schedule::now_ms();
-        let due: Vec<crate::schedule::PersistedTask> = {
+        let (due, skipped) = {
             let mut g = self.0.schedules.lock().await;
-            let mut due = Vec::new();
+            let mut due: Vec<crate::schedule::PersistedTask> = Vec::new();
+            let mut skipped = false;
             for t in g.tasks.iter_mut() {
                 if !t.enabled || t.next_run_ms.is_none_or(|ts| ts > now) {
+                    continue;
+                }
+                if t.skips_at(now) {
+                    let next = crate::schedule::next_after_skip(&t.repeat, &t.skip_windows, now);
+                    tracing::info!(
+                        task = %t.id,
+                        name = %t.name,
+                        next = ?next.map(crate::schedule::local_text),
+                        "scheduled task due inside a skip window; skipped without starting a turn"
+                    );
+                    t.push_skipped(now);
+                    t.next_run_ms = next;
+                    if next.is_none() {
+                        t.enabled = false;
+                    }
+                    skipped = true;
                     continue;
                 }
                 due.push(t.clone());
@@ -3187,11 +3224,15 @@ impl AppState {
                     }
                 }
             }
-            if !due.is_empty() {
+            if !due.is_empty() || skipped {
                 self.persist_schedules(&g);
             }
-            due
+            (due, skipped)
         };
+        // 跳过不发 ScheduleRun（前端会拿它发系统通知），只让任务面板刷新。
+        if skipped {
+            self.emit_schedule_changed();
+        }
         for task in due {
             let state = self.clone();
             crate::ipc::spawn(async move {
@@ -4526,6 +4567,7 @@ mod tests {
             prompt: "到点了，把该做的做了".into(),
             when: riot_protocol::WhenSpec::After { minutes: 60 },
             in_this_session,
+            skip_windows: Vec::new(),
         }
     }
 
@@ -4649,6 +4691,92 @@ mod tests {
         assert!(listed[0].enabled);
     }
 
+    /// 到点时落在跳过时段里：不开会话、不调模型，只记一条"已跳过"，
+    /// 下一次推到时段结束。时段外的照常开跑（由其它测试覆盖）。
+    #[tokio::test]
+    async fn 定时任务_跳过时段内到点不开对话() {
+        let state = state().await;
+        let s = state
+            .create_session(&temp_ws("sched-skip"))
+            .await
+            .expect("会话");
+        let mut spec = after_60min("盯盘", false);
+        spec.when = riot_protocol::WhenSpec::Every { minutes: 5 };
+        // 全天跳过、只限今天这个星期 —— 测试跑在哪一刻都命中。
+        let today = {
+            use chrono::Datelike;
+            chrono::Local::now().weekday().number_from_monday() as u8
+        };
+        spec.skip_windows = vec![riot_protocol::SkipWindow {
+            start: "00:00".into(),
+            end: "00:00".into(),
+            weekdays: vec![today],
+        }];
+        let t = state.schedule_create(&s.id, spec).await.expect("创建");
+        assert_eq!(t.skip_windows.len(), 1, "视图要带回跳过时段");
+        let sessions_before = state.list_sessions().await.len();
+
+        // 拨到已到期。
+        let now = crate::schedule::now_ms();
+        {
+            let mut g = state.0.schedules.lock().await;
+            let task = g.tasks.iter_mut().find(|x| x.id == t.id).expect("在表里");
+            task.next_run_ms = Some(now - 1_000);
+        }
+        state.schedule_tick().await;
+
+        let after = state
+            .schedule_list()
+            .await
+            .into_iter()
+            .find(|x| x.id == t.id)
+            .expect("还在");
+        assert_eq!(after.runs.len(), 1, "记一条跳过：{:?}", after.runs);
+        assert!(after.runs[0].skipped);
+        assert!(after.runs[0].session_id.is_none(), "跳过不开会话");
+        assert!(after.last_run_ms.is_none(), "跳过不算跑过");
+        assert!(after.enabled);
+        assert!(
+            after.next_run_ms.is_some_and(|n| n > now),
+            "下一次推到时段结束之后"
+        );
+        assert_eq!(
+            state.list_sessions().await.len(),
+            sessions_before,
+            "不该新建会话"
+        );
+
+        // 清掉时段后可以保存（Some(空) = 清空）。
+        let cleared = state
+            .schedule_update(
+                &t.id,
+                riot_protocol::SchedulePatch {
+                    skip_windows: Some(Vec::new()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("清空");
+        assert!(cleared.skip_windows.is_empty());
+
+        // 坏时段被拒，原样不动。
+        let err = state
+            .schedule_update(
+                &t.id,
+                riot_protocol::SchedulePatch {
+                    skip_windows: Some(vec![riot_protocol::SkipWindow {
+                        start: "00:00".into(),
+                        end: "00:00".into(),
+                        weekdays: Vec::new(),
+                    }]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect_err("全天且每天 = 永不运行");
+        assert_eq!(err.key(), "host.schedule.skipAlways");
+    }
+
     #[tokio::test]
     async fn 定时任务_编辑改名改时间_已跑完的借改时间复活() {
         let state = state().await;
@@ -4751,6 +4879,7 @@ mod tests {
                 when: riot_protocol::WhenSpec::After { minutes: 60 },
                 target,
                 model: None,
+                skip_windows: Vec::new(),
             }
         };
         let new_in = |root: &str| riot_protocol::RunTargetSpec::NewSession { root: root.into() };
