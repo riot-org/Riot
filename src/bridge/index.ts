@@ -1787,20 +1787,6 @@ export async function revealInFinder(path: string): Promise<void> {
   await revealItemInDir(path);
 }
 
-/**
- * 用系统默认应用打开这个文件 —— 对源码文件通常就是用户的编辑器。
- *
- * 打不开（路径不存在、没有关联应用）时静默失败：这是点一下代码引用
- * 的顺手操作，弹一个错误对话框比没反应更烦人。
- */
-export async function openInDefaultApp(path: string): Promise<void> {
-  try {
-    await openPath(path);
-  } catch (e) {
-    console.warn("Failed to open file", path, e);
-  }
-}
-
 /** 用系统默认应用打开路径。失败会抛，调用方自己决定怎么告诉用户。 */
 export async function openPath(path: string): Promise<"opened" | "revealed"> {
   if (!host.openLocal) throw new Error(t("errors.webNoLocalOpen"));

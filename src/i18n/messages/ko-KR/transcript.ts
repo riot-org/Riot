@@ -271,7 +271,7 @@ export default {
   "transcript.md.sessionDeleted": "해당 세션이 삭제되었습니다",
   "transcript.md.openSubagent": "하위 agent {id}의 세션 열기",
   "transcript.md.switchSession": "이 세션으로 전환",
-  "transcript.md.openWithDefault": "기본 앱으로 {path} 열기",
+  "transcript.md.previewRef": "{path} 미리보기",
   "transcript.md.copyFailed": "복사 실패",
   "transcript.md.imageUnavailable": "이미지를 불러올 수 없습니다",
   "transcript.md.videoUnavailable": "동영상을 불러올 수 없습니다",

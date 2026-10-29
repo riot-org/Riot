@@ -274,7 +274,7 @@ export default {
   "transcript.md.sessionDeleted": "That session was deleted",
   "transcript.md.openSubagent": "Open subagent {id}'s session",
   "transcript.md.switchSession": "Switch to this session",
-  "transcript.md.openWithDefault": "Open {path} in the default app",
+  "transcript.md.previewRef": "Preview {path}",
   "transcript.md.copyFailed": "Copy failed",
   "transcript.md.imageUnavailable": "Image unavailable",
   "transcript.md.videoUnavailable": "Video unavailable",

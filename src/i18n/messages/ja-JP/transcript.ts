@@ -253,7 +253,7 @@ export default {
   "transcript.md.sessionDeleted": "そのセッションは削除されました",
   "transcript.md.openSubagent": "サブエージェント {id} のセッションを開く",
   "transcript.md.switchSession": "このセッションに切り替え",
-  "transcript.md.openWithDefault": "{path} をデフォルトのアプリで開く",
+  "transcript.md.previewRef": "{path} をプレビュー",
   "transcript.md.copyFailed": "コピーに失敗しました",
   "transcript.md.imageUnavailable": "画像を読み込めません",
   "transcript.md.videoUnavailable": "動画を読み込めません",

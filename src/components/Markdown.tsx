@@ -13,7 +13,7 @@ import remarkGfm from "remark-gfm";
 import remarkCjkFriendly from "remark-cjk-friendly";
 import remarkCjkFriendlyGfmStrikethrough from "remark-cjk-friendly-gfm-strikethrough";
 
-import { openInBrowser, openPath, readFileBytes, revealInFinder } from "../bridge";
+import { openInBrowser, readFileBytes, revealInFinder } from "../bridge";
 import { useTimedFlag } from "../hooks/useTimedFlag";
 import { t, useT } from "../i18n";
 import { openSession, sessionIdFromHref } from "../lib/sessionLink";
@@ -641,7 +641,9 @@ function resolveMdLink(href: string | undefined, label: string, root: string): M
     }
   }
 
-  if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) {
+  // Windows 盘符 `D:/…` 长得像"单字母协议 + 冒号"，得先排除 —— 否则当成
+  // 网址交给系统 opener，被它的协议白名单拒掉，点了只报"打不开"。
+  if (/^[a-z][a-z0-9+.-]*:/i.test(raw) && !looksAbsPath(tryDecodePath(raw))) {
     return { kind: "url", value: raw, href: raw, title: raw };
   }
 
@@ -1237,7 +1239,6 @@ function CodeBlock({
 }: React.HTMLAttributes<HTMLPreElement> & { node?: unknown }) {
   const { t } = useT();
   const [copied, flashCopied] = useTimedFlag<"idle" | "ok" | "fail">("idle", 1500);
-  const [refErr, flashRefErr] = useTimedFlag(false, 2000);
   const root = useContext(ProjectRootContext);
 
   const child = props.children as React.ReactElement<
@@ -1266,13 +1267,14 @@ function CodeBlock({
     );
   };
 
-  // 不走 bridge 的 openInDefaultApp —— 它把失败吞掉了（那是给"静默降级"
-  // 场景用的），这里要拿到失败才能在界面上说"打不开"。
+  // 和聊天里其它文件引用一样进应用内预览（openFilePreview 按类型分流），
+  // 不直接交给系统默认应用 —— xml 这类在 Windows 上没有关联应用，点一下
+  // 弹出系统的"选择应用"框。读不到的错误由预览面板报。
   const openRef = () => {
     // 绝对路径认盘符和 UNC（`D:/…`、`\\server\…`），不能只看 `/` 开头 ——
     // 否则 Windows 上 `D:/…` 被拼到项目根后面，成了不存在的路径。
     const full = looksAbsPath(refPath) || !root ? refPath : joinRoot(root, refPath);
-    openPath(full).catch(() => flashRefErr(true));
+    openFilePreview(full);
   };
 
   const lines = refStart === refEnd ? `${refStart}` : `${refStart}-${refEnd}`;
@@ -1292,16 +1294,11 @@ function CodeBlock({
               className="codeblock-ref"
               // 相对路径以项目根为基准。模型偶尔会写绝对路径，那时直接用。
               onClick={openRef}
-              title={t("transcript.md.openWithDefault", { path: refPath })}
+              title={t("transcript.md.previewRef", { path: refPath })}
             >
               <span className="codeblock-ref-path">{refPath}</span>
               <span className="codeblock-ref-lines">:{lines}</span>
             </button>
-            {refErr ? (
-              <span className="codeblock-ref-err" role="status">
-                {t("transcript.md.cantOpen")}
-              </span>
-            ) : null}
           </>
         ) : (
           <span className="codeblock-lang">{lang}</span>

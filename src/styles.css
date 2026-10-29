@@ -12080,13 +12080,6 @@ button.fold-head:hover,
   color: var(--text-faint);
 }
 
-/* 代码引用打开失败的就地提示 —— 静默失败会被当成"点了没反应" */
-.codeblock-ref-err {
-  flex-shrink: 0;
-  font-size: 11px;
-  color: var(--danger);
-}
-
 /* mermaid 退回源码时的"这本来是张图"标记 */
 .codeblock-fail {
   margin-left: 8px;

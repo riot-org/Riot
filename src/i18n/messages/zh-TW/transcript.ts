@@ -251,7 +251,7 @@ export default {
   "transcript.md.sessionDeleted": "該會話已刪除",
   "transcript.md.openSubagent": "開啟子 agent {id} 的會話",
   "transcript.md.switchSession": "切到這個會話",
-  "transcript.md.openWithDefault": "用預設應用程式開啟 {path}",
+  "transcript.md.previewRef": "預覽 {path}",
   "transcript.md.copyFailed": "複製失敗",
   "transcript.md.imageUnavailable": "圖片讀不到",
   "transcript.md.videoUnavailable": "影片讀不到",

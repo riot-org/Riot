@@ -272,7 +272,7 @@ export default {
   "transcript.md.sessionDeleted": "该会话已删除",
   "transcript.md.openSubagent": "打开子 agent {id} 的会话",
   "transcript.md.switchSession": "切到这个会话",
-  "transcript.md.openWithDefault": "用默认应用打开 {path}",
+  "transcript.md.previewRef": "预览 {path}",
   "transcript.md.copyFailed": "复制失败",
   "transcript.md.imageUnavailable": "图片读不到",
   "transcript.md.videoUnavailable": "视频读不到",
