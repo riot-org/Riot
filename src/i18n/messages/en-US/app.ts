@@ -162,7 +162,6 @@ export default {
   "app.ctx.total": "Session total",
   "app.ctx.note": "Auto-compacts at {threshold}.",
   "app.ctx.loading": "Estimating breakdown…",
-  "app.ctx.estimated": "Categories are byte-based estimates; Messages is the total minus everything else.",
   "app.ctx.deferred": "Deferred (not counted)",
   "app.ctx.cat.systemPrompt": "System prompt",
   "app.ctx.cat.systemTools": "System tools",

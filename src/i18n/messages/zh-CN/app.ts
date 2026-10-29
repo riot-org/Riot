@@ -157,7 +157,6 @@ export default {
   "app.ctx.total": "本会话累计",
   "app.ctx.note": "到 {threshold} 会自动摘要压缩。",
   "app.ctx.loading": "正在估算明细…",
-  "app.ctx.estimated": "分类按字节估算；「消息」是总占用减去其它各项。",
   "app.ctx.deferred": "延迟加载（不计入）",
   "app.ctx.cat.systemPrompt": "系统提示词",
   "app.ctx.cat.systemTools": "内置工具",

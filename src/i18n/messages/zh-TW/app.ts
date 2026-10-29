@@ -156,7 +156,6 @@ export default {
   "app.ctx.total": "本會話累計",
   "app.ctx.note": "到 {threshold} 會自動摘要壓縮。",
   "app.ctx.loading": "正在估算明細…",
-  "app.ctx.estimated": "分類按位元組估算；「訊息」是總佔用減去其他各項。",
   "app.ctx.deferred": "延遲載入（不計入）",
   "app.ctx.cat.systemPrompt": "系統提示詞",
   "app.ctx.cat.systemTools": "內建工具",

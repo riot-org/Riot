@@ -234,10 +234,6 @@ export function ContextRing({
               ) : null}
             </>
           ) : null}
-          <p className="ctx-note">
-            {t("app.ctx.note", { threshold: fmtTokens(threshold) })}
-            {layout ? ` ${t("app.ctx.estimated")}` : null}
-          </p>
         </div>
       ) : null}
     </div>

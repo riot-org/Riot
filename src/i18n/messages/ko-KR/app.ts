@@ -156,7 +156,6 @@ export default {
   "app.ctx.total": "이 세션 누계",
   "app.ctx.note": "{threshold}에 도달하면 자동으로 요약 압축됩니다.",
   "app.ctx.loading": "세부 내역을 추정하는 중…",
-  "app.ctx.estimated": "항목은 바이트 기준 추정치이며, ‘메시지’는 전체에서 나머지 항목을 뺀 값입니다.",
   "app.ctx.deferred": "지연 로드(집계 제외)",
   "app.ctx.cat.systemPrompt": "시스템 프롬프트",
   "app.ctx.cat.systemTools": "기본 도구",

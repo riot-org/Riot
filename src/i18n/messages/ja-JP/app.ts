@@ -156,7 +156,6 @@ export default {
   "app.ctx.total": "このセッションの累計",
   "app.ctx.note": "{threshold} に達すると自動で要約・圧縮されます。",
   "app.ctx.loading": "内訳を見積もり中…",
-  "app.ctx.estimated": "内訳はバイト数からの見積もりです。「メッセージ」は合計から他の項目を引いた値です。",
   "app.ctx.deferred": "遅延読み込み（計上しない）",
   "app.ctx.cat.systemPrompt": "システムプロンプト",
   "app.ctx.cat.systemTools": "組み込みツール",

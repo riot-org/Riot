@@ -11665,15 +11665,6 @@ button.ctx-cat-line:focus-visible {
   color: var(--text-faint);
 }
 
-.ctx-note {
-  margin: 9px 0 0;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
-  font-size: 10.5px;
-  line-height: 1.5;
-  color: var(--text-faint);
-}
-
 /* 窄列（开抽屉或窗口本身窄）按对话列宽度收，不看窗口 ——
    量的是 .chat-col（lib/chatColWidth 挂的 data-narrow / data-tight），
    不是输入框。服务方和模型藏掉：剩下 + / 权限 / 发送，一行放得下。
