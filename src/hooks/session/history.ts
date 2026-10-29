@@ -15,6 +15,19 @@ import {
 } from "./items";
 import type { HistorySnap, Item, SessionState, TextItem, UserItem } from "./types";
 
+/**
+ * 快照里的用量。累计算上归档（压缩前花掉的也是这个会话花的），当前占用
+ * 只看活历史。
+ *
+ * `[约束]` 不能从归档里取当前占用：压缩后、下一条回复之前，活历史里没有
+ * usage，从全部消息里取就拿到压缩前最后那次的数 —— 压完一对账，环又
+ * 跳回压缩前的大小。这时报 0 表示"不知道"，环自己去向内核要估算（见
+ * `ContextRing`）。
+ */
+function snapTokens(archived: Message[], messages: Message[]): SessionState["tokens"] {
+  return { ...sumUsage([...archived, ...messages]), context: sumUsage(messages).context };
+}
+
 /** 刚发送的那几秒不要用快照盖界面：乐观气泡还没进宿主历史。 */
 export const SEND_GRACE_MS = 8_000;
 
@@ -35,7 +48,7 @@ export function rebuildFromSnap(s: SessionState, hist: HistorySnap): SessionStat
     busy: hist.busy,
     compacting: hist.compacting,
     items: [...historyToItems(messages, archived, false), ...lastErrorItem(hist)],
-    tokens: sumUsage([...archived, ...messages]),
+    tokens: snapTokens(archived, messages),
     streaming: "",
     thinking: "",
     streamingPlan: null,
@@ -148,7 +161,7 @@ export function applyHistorySnap(s: SessionState, hist: HistorySnap): SessionSta
     ...mergeLiveTools(mergeOptimisticUser(fromHist, current), current),
     ...lastErrorItem(hist),
   ];
-  const tokens = sumUsage([...archived, ...messages]);
+  const tokens = snapTokens(archived, messages);
   if (busy) {
     return {
       ...s,

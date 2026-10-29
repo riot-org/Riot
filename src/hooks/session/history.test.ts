@@ -135,6 +135,17 @@ describe("rebuildFromSnap", () => {
     const s = state({ items: [{ kind: "user", id: "local-1", text: "gone", at: 1 }] });
     expect(rebuildFromSnap(s, snap()).items).toEqual([]);
   });
+
+  it("压缩后还没回复时当前占用报 0（未知），不拿归档里压缩前的数", () => {
+    const tokens = rebuildFromSnap(state(), snap({ archived: turn })).tokens;
+    expect(tokens.context).toBe(0);
+    expect(tokens.input).toBe(10);
+    expect(tokens.output).toBe(3);
+  });
+
+  it("活历史里有 usage 时当前占用取它", () => {
+    expect(rebuildFromSnap(state(), snap({ messages: turn })).tokens.context).toBe(13);
+  });
 });
 
 describe("phantomBubbles", () => {

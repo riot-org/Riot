@@ -112,6 +112,20 @@ export function ContextRing({
     };
   }, [open, sessionId]);
 
+  // 占用未知（压缩后还没有回复，快照里报 0）时不等用户点开，后台先要一次
+  // 估算 —— 不然环在压缩后要么空着、要么停在压缩前，点开才变。
+  useEffect(() => {
+    if (reported !== 0) return;
+    let live = true;
+    sessionContextBreakdown(sessionId).then(
+      (b) => live && setFresh({ sessionId, base: 0, total: b.total }),
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, [reported, sessionId]);
+
   const used =
     fresh && fresh.sessionId === sessionId && fresh.base === reported ? fresh.total : reported;
   const cap = contextWindow && contextWindow > threshold ? contextWindow : threshold;
