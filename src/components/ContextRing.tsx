@@ -260,7 +260,7 @@ function CategoryRow({
       <span className={deferred ? "ctx-dot none" : `ctx-dot ctx-c-${row.key}`} aria-hidden />
       <span className="ctx-cat-name">{label}</span>
       <span className="ctx-cat-num">{fmtTokens(row.tokens)}</span>
-      <span className="ctx-cat-pct">{deferred ? "" : fmtPct(row.pct)}</span>
+      {deferred ? null : <span className="ctx-cat-pct">{fmtPct(row.pct)}</span>}
     </>
   );
   if (!row.items) {

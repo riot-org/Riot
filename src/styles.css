@@ -11662,7 +11662,14 @@ button.ctx-cat-line:focus-visible {
 }
 
 .ctx-deferred .ctx-cat-line {
+  /* 不计入的行没有占比，那一列整个收掉，数字贴到右边 —— 留着空列，
+     数字和展开箭头之间会空出一大块。 */
+  grid-template-columns: 8px 1fr auto 10px;
   color: var(--text-faint);
+}
+
+.ctx-deferred .ctx-item-row {
+  padding-right: 16px;
 }
 
 /* 窄列（开抽屉或窗口本身窄）按对话列宽度收，不看窗口 ——
