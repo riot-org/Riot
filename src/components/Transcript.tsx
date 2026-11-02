@@ -18,10 +18,9 @@
  */
 
 import {
-  Fragment,
   memo,
-  type ReactNode,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -40,15 +39,11 @@ import {
   type RestorePreview,
 } from "../bridge";
 import { useImeGuard } from "../hooks/useImeGuard";
+import { useInlineSlashNames } from "../hooks/useSlashNames";
 import type { Item, TextItem } from "../hooks/useSession";
 import { useTimedFlag } from "../hooks/useTimedFlag";
 import { dateTimeFormat, type MessageKey, useT } from "../i18n";
-import {
-  SLASH_HEAD_RE,
-  extractElemSpans,
-  extractMentionSpans,
-  mentionCovers,
-} from "../lib/promptText";
+import { promptToSegs } from "../lib/promptText";
 import { findHits, findTextRanges } from "../lib/findHits";
 import { type LiveTextStore, useLiveText } from "../lib/liveText";
 import { editorOwnsKey, isModKey, shortcut, terminalOwnsKey } from "../lib/keys";
@@ -60,7 +55,7 @@ import { Chip, FileChip } from "./Chip";
 import { Composer } from "./Composer";
 import { ConfirmDialog, type ConfirmRequest } from "./ConfirmDialog";
 import { PlanModeIcon } from "./icons";
-import { HYDRATE_EVENT, LazyMarkdown, Markdown } from "./Markdown";
+import { HYDRATE_EVENT, LazyMarkdown, Markdown, ProjectRootContext } from "./Markdown";
 import { AskChoiceCard, EnvVarsCard, ModeSwitchCard, PermissionCard } from "./PermissionDialog";
 import {
   type Block,
@@ -2666,72 +2661,34 @@ function UserBody({ text, files }: { text: string; files?: string[] }) {
   );
 }
 
+const NO_FILES: string[] = [];
+
 /**
- * 用户消息的正文：把 `@路径` 标记画成引用块，其余原样。
+ * 用户消息的正文：块在原位留下的标记画回块，其余原样。
  *
  * 用户在输入框里看到的是一行"分别打开 [a] [b]"，气泡里就该是同一行 ——
- * 把块抽出来堆到文字下面，等于把他写的句子拆了。
+ * 把块抽出来堆到文字下面，等于把他写的句子拆了。哪些标记算块由
+ * [`promptToSegs`] 一处说了算，撤回放回输入框走的也是它。
  */
-function UserText({ text, files = [] }: { text: string; files?: string[] }) {
-  const lead = SLASH_HEAD_RE.exec(text);
-  const cmdName = lead?.[1];
-  const body = lead ? text.slice(lead[0].length).replace(/^\s/, "") : text;
-
-  const fileNodes = (src: string): ReactNode => {
-    const spans = extractMentionSpans(src);
-    if (spans.length === 0 && files.length === 0) return src;
-    const out: React.ReactNode[] = [];
-    const seen = new Set<string>();
-    let last = 0;
-    for (const s of spans) {
-      if (s.index > last) out.push(src.slice(last, s.index));
-      out.push(<FileChip key={`${s.path}-${s.index}`} path={s.path} preview />);
-      seen.add(s.path);
-      last = s.index + s.length;
-    }
-    if (last < src.length) out.push(src.slice(last));
-    const orphans = files.filter((f) => !mentionCovers(seen, f));
-    return (
-      <>
-        {out}
-        {orphans.map((p) => (
-          <FileChip key={`orphan-${p}`} path={p} preview />
-        ))}
-      </>
-    );
-  };
-
-  // 先把"页面元素"标记切出来画成绿色色块（和输入框里一致），标记之间的
-  // 普通文本再交给 fileNodes 处理 `@文件` 引用。两层不会互相吞：元素标记
-  // 用【】+反引号，文件用 `@`。
-  const bodyNodes = (src: string): ReactNode => {
-    const marks = extractElemSpans(src);
-    if (marks.length === 0) return fileNodes(src);
-    const out: React.ReactNode[] = [];
-    let last = 0;
-    marks.forEach((e, i) => {
-      if (e.index > last) {
-        out.push(<Fragment key={`t-${i}`}>{fileNodes(src.slice(last, e.index))}</Fragment>);
-      }
-      out.push(
-        <Chip key={`el-${i}`} seg={{ kind: "elem", value: e.selector, label: e.label }} />,
-      );
-      last = e.index + e.length;
-    });
-    if (last < src.length) {
-      out.push(<Fragment key="t-end">{fileNodes(src.slice(last))}</Fragment>);
-    }
-    return <>{out}</>;
-  };
-
-  if (!cmdName) {
-    return <>{bodyNodes(body)}</>;
-  }
-
+function UserText({ text, files = NO_FILES }: { text: string; files?: string[] }) {
+  const slashNames = useInlineSlashNames(useContext(ProjectRootContext) || null);
+  const segs = useMemo(
+    () => promptToSegs(text, { refs: files, slashNames }),
+    [text, files, slashNames],
+  );
   return (
     <>
-      <Chip seg={{ kind: "cmd", value: cmdName }} />
-      {body || files.length > 0 ? <> {bodyNodes(body)}</> : null}
+      {segs.map((s, i) => {
+        switch (s.kind) {
+          case "text":
+          case "paste":
+            return s.value;
+          case "ref":
+            return <FileChip key={i} path={s.value} preview />;
+          default:
+            return <Chip key={i} seg={s} />;
+        }
+      })}
     </>
   );
 }

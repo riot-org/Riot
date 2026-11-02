@@ -30,7 +30,28 @@ export type Seg =
 export const SLASH_CH = String.raw`[\w\p{L}\p{N}:-]`;
 export const SLASH_LEAD_RE = new RegExp(`^/(${SLASH_CH}+)(\\s)([\\s\\S]*)$`, "u");
 export const SLASH_SUBMIT_RE = new RegExp(`^/(${SLASH_CH}+)\\s*([\\s\\S]*)$`, "u");
-export const SLASH_HEAD_RE = new RegExp(`^/(${SLASH_CH}+)(?=\\s|$)`, "u");
+
+/**
+ * 正文里的 `/名字` 标记：技能块发出去就是这样（见 [`segsToPrompt`]），
+ * 句首句中一个规则。只认 `names` 里的名字，前面是行首或空白、后面是
+ * 空白或结尾 —— `/tmp`、`a/b`、`/usr/bin` 都不算。`index`/`length` 覆盖
+ * `/名字` 本身，不含前面那个空白。
+ */
+export function extractSlashSpans(
+  text: string,
+  names: ReadonlySet<string>,
+): { name: string; index: number; length: number }[] {
+  if (names.size === 0) return [];
+  const re = new RegExp(`(^|\\s)/(${SLASH_CH}+)(?=\\s|$)`, "gu");
+  const out: { name: string; index: number; length: number }[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const name = m[2] ?? "";
+    if (!names.has(name)) continue;
+    out.push({ name, index: m.index + (m[1] ?? "").length, length: name.length + 1 });
+  }
+  return out;
+}
 
 /** 粘贴这么多就收成一个粘贴块（见 Seg 的 `paste`）：20 行或 2000 字。 */
 export function isLongPaste(text: string): boolean {
@@ -54,24 +75,35 @@ export function segsText(segs: Seg[]): string {
  * 这些标记把块画回原来的位置。
  */
 export function segsToPrompt(segs: Seg[]): string {
-  return segs
-    .map((s, i) => {
-      if (s.kind === "text") return s.value;
-      if (s.kind === "cmd") return `/${s.value}`;
-      if (s.kind === "paste") return s.value;
-      // 元素色块:发出去带一个可回认的标记 —— 气泡里据此重新画成同一个
-      // 绿色色块（见 Transcript 的 ELEM_MARK_RE）。选择器用反引号裹（选择器
-      // 里不会有反引号，最稳），友好描述用【】裹（先滤掉【】和反引号免得
-      // 打架）。模型看到的是"【描述】`选择器`"，一眼能懂是哪个元素、选择器多少。
-      if (s.kind === "elem") {
-        const label = s.label.replace(/[【】`]/g, "").trim();
-        // eslint-disable-next-line no-restricted-syntax -- 发给模型的文本，不随界面语言
-        return `【${label}】\`${s.value}\``;
-      }
-      const next = segs[i + 1];
-      return mentionToken(s.value, next?.kind === "text" ? next.value : "");
-    })
-    .join("");
+  let out = "";
+  segs.forEach((s, i) => {
+    out += segToken(s, i, segs, out);
+  });
+  return out;
+}
+
+function segToken(s: Seg, i: number, segs: Seg[], before: string): string {
+  if (s.kind === "text") return s.value;
+  // 命令/技能块两侧必须是空白，否则认不回来（见 [`extractSlashSpans`]）：
+  // 用户删掉块后面那个空格接着打字，发出去就是 `/技能创建`。缺哪边补哪边。
+  if (s.kind === "cmd") {
+    const next = segs[i + 1];
+    const padL = before && !/\s$/.test(before) ? " " : "";
+    const padR = next && !(next.kind === "text" && /^\s/.test(next.value)) ? " " : "";
+    return `${padL}/${s.value}${padR}`;
+  }
+  if (s.kind === "paste") return s.value;
+  // 元素色块:发出去带一个可回认的标记 —— 气泡里据此重新画成同一个
+  // 绿色色块（见 Transcript 的 ELEM_MARK_RE）。选择器用反引号裹（选择器
+  // 里不会有反引号，最稳），友好描述用【】裹（先滤掉【】和反引号免得
+  // 打架）。模型看到的是"【描述】`选择器`"，一眼能懂是哪个元素、选择器多少。
+  if (s.kind === "elem") {
+    const label = s.label.replace(/[【】`]/g, "").trim();
+    // eslint-disable-next-line no-restricted-syntax -- 发给模型的文本，不随界面语言
+    return `【${label}】\`${s.value}\``;
+  }
+  const next = segs[i + 1];
+  return mentionToken(s.value, next?.kind === "text" ? next.value : "");
 }
 
 /**
@@ -212,13 +244,6 @@ export function extractMentionSpans(text: string): MentionSpan[] {
   return spans;
 }
 
-/**
- * 发出去的正文 → 输入框里的段落：`@路径` 标记原位还原成引用块。
- *
- * 放回输入框的是**发出去的那一份文本**，块在原位留下了 `@路径`（见
- * `segsToPrompt`）。不还原的话，用户看到的是一句夹着裸路径的话，而且
- * 再发一次会连块带标记发出两份同样的引用。
- */
 /** 正文里一段"页面元素"标记 `【描述】\`选择器\``（见 [`segsToPrompt`]）。 */
 export interface ElemSpan {
   label: string;
@@ -252,24 +277,56 @@ export function extractElemSpans(text: string): ElemSpan[] {
   return out;
 }
 
-export function promptToSegs(text: string, refs: string[] = [], skip: string[] = []): Seg[] {
+/**
+ * 发出去的正文 → 段落：块在原位留下的标记（见 [`segsToPrompt`]）还原成块。
+ *
+ * `[约束]` 文本 → 块只有这一个入口。气泡渲染（Transcript 的 UserText）、
+ * 放回输入框（撤回、改排队项）、改已发消息都走这里 —— 三处各认各的，
+ * 结果是同一条消息气泡里是块、撤回回来变裸文字，或者反过来（都真出过）。
+ *
+ * - 元素标记最先切：选择器里可能有 `@`、`/`，不能让后两层吃进去。
+ * - `/名字` 只认 `slashNames` 里的（可以出现在正文里的技能，见
+ *   hooks/useSlashNames），句首句中一个规则。可执行的命令不在名单里：
+ *   它们发出去的是展开结果，正文里不会留下 `/名字`。
+ * - `@路径` 按 [`extractMentionSpans`]。
+ * - `refs` 里正文没留下标记的引用（老消息、用户把标记删了）补在末尾 ——
+ *   丢掉的话模型就看不到那个文件了。`skip` 里的不补（放回输入框时草稿
+ *   里已经有的）。
+ *
+ * 粘贴块不还原：发出去就是原文，认不回边界。
+ */
+export function promptToSegs(
+  text: string,
+  opts: { refs?: string[]; skip?: string[]; slashNames?: ReadonlySet<string> } = {},
+): Seg[] {
+  const { refs = [], skip = [], slashNames = new Set<string>() } = opts;
   const segs: Seg[] = [];
   const seen = new Set<string>();
 
-  // 一段普通文本 → text/ref 段（`@路径` 原位还原成引用块）。
   const pushText = (src: string) => {
+    const spans = [
+      ...extractSlashSpans(src, slashNames).map((m) => ({
+        index: m.index,
+        length: m.length,
+        seg: { kind: "cmd", value: m.name } as Seg,
+      })),
+      ...extractMentionSpans(src).map((m) => ({
+        index: m.index,
+        length: m.length,
+        seg: { kind: "ref", value: m.path } as Seg,
+      })),
+    ].sort((a, b) => a.index - b.index);
     let last = 0;
-    for (const s of extractMentionSpans(src)) {
-      if (s.index > last) segs.push({ kind: "text", value: src.slice(last, s.index) });
-      segs.push({ kind: "ref", value: s.path });
-      seen.add(s.path);
-      last = s.index + s.length;
+    for (const m of spans) {
+      if (m.index < last) continue;
+      if (m.index > last) segs.push({ kind: "text", value: src.slice(last, m.index) });
+      segs.push(m.seg);
+      if (m.seg.kind === "ref") seen.add(m.seg.value);
+      last = m.index + m.length;
     }
     if (last < src.length) segs.push({ kind: "text", value: src.slice(last) });
   };
 
-  // 先切出元素标记:撤回、改排队项这些"把发出去的文本放回输入框"的路径
-  // 都走这里，不还原的话色块会变成一串带【】和反引号的裸文字。
   let last = 0;
   for (const e of extractElemSpans(text)) {
     if (e.index > last) pushText(text.slice(last, e.index));
@@ -278,8 +335,6 @@ export function promptToSegs(text: string, refs: string[] = [], skip: string[] =
   }
   if (last < text.length) pushText(text.slice(last));
 
-  // 正文里没留下标记的引用（老消息、用户把标记删了）补在末尾 ——
-  // 丢掉的话模型就看不到那个文件了。
   for (const r of refs) {
     if (!mentionCovers(seen, r) && !skip.includes(r)) segs.push({ kind: "ref", value: r });
   }

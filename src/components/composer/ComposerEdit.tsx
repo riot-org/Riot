@@ -8,6 +8,7 @@ import {
   pickFiles,
   readImage,
 } from "../../bridge";
+import { useInlineSlashNames } from "../../hooks/useSlashNames";
 import { useT } from "../../i18n";
 import { promptToSegs, segsToPrompt } from "../../lib/promptText";
 import { registerFileDrop } from "../../lib/fileDrag";
@@ -76,6 +77,7 @@ export function ComposerEdit({
 }: ComposerEditProps) {
   const { t } = useT();
   const workspace = useContext(ProjectRootContext);
+  const slashNames = useInlineSlashNames(workspace || null);
   const [saving, setSaving] = useState<"save" | "resend" | null>(null);
   /** 发送前确认框还开着：别让 Esc / 取消把编辑框拆掉。 */
   const [gating, setGating] = useState(false);
@@ -185,7 +187,7 @@ export function ComposerEdit({
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    writeEditor(el, parseChips ? promptToSegs(initial) : [{ kind: "text", value: initial }]);
+    writeEditor(el, parseChips ? promptToSegs(initial, { slashNames }) : [{ kind: "text", value: initial }]);
     el.focus();
     caretToEnd(el);
     // 只在挂载时灌一次：编辑区是非受控的，内容住在 DOM 里。

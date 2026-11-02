@@ -32,6 +32,7 @@ import {
   turnNudge,
 } from "../../bridge";
 import { type QueuedItem, type WithdrawnPrompt } from "../../hooks/useSession";
+import { isRunnableSlash, rememberSlashCommands, useInlineSlashNames } from "../../hooks/useSlashNames";
 import { t, useT } from "../../i18n";
 import {
   SLASH_SUBMIT_RE,
@@ -304,6 +305,8 @@ export function ComposerDock({
   }, [hostMode, sessionId]);
   /** 这个会话可用的斜杠命令 + 技能。每次挂载拉一次（用户加了 .md 切一下会话就有）。 */
   const [commands, setCommands] = useState<SlashCommand[]>([]);
+  /** 正文里能认回块的 `/名字`（放回输入框时用，和气泡同一份名单）。 */
+  const slashNames = useInlineSlashNames(workspace);
   /** 补全菜单里高亮到第几条。 */
   const [slashPick, setSlashPick] = useState(0);
   /** `@` 引用的候选文件。 */
@@ -365,8 +368,7 @@ export function ComposerDock({
    * 受这个限制 —— 它只是把 `/名字` 原样放进正文让模型按需加载，一句话里
    * 点名几个技能、放在哪里都成立，和文件引用一样是自由的块。
    */
-  const runnable = (c: SlashCommand | undefined): boolean =>
-    c !== undefined && (c.source === "builtin" || c.expandInline);
+  const runnable = isRunnableSlash;
   const runnableName = (name: string) => runnable(commands.find((c) => c.name === name));
   const cmdName = chips.find((s) => s.kind === "cmd" && runnableName(s.value))?.value ?? null;
   /** 编辑区里有东西吗。占位提示看它 —— 图在编辑区外面，不算。 */
@@ -500,7 +502,9 @@ export function ComposerDock({
     let alive = true;
     void slashCommands(workspace)
       .then((cmds) => {
-        if (alive) setCommands(cmds);
+        if (!alive) return;
+        setCommands(cmds);
+        rememberSlashCommands(workspace, cmds);
       })
       .catch(() => {});
     return () => {
@@ -868,7 +872,7 @@ export function ComposerDock({
     const cur = ref.current ? readEditor(ref.current) : [];
     const held = cur.flatMap((s) => (s.kind === "ref" ? [s.value] : []));
     const gap: Seg[] = segsText(cur).trim() ? [{ kind: "text", value: "\n" }] : [];
-    setContent([...promptToSegs(input.text, input.refs, held), ...gap, ...cur]);
+    setContent([...promptToSegs(input.text, { refs: input.refs, skip: held, slashNames }), ...gap, ...cur]);
     if (input.images.length > 0) {
       setShots((prev) => [
         ...prev,
