@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { handleChipKey } from "./chipEditor";
+import { guardChipDeletes, handleChipKey, readEditor, writeEditor } from "./chipEditor";
 
 const key = (k: string) => ({ key: k, altKey: false, metaKey: false, ctrlKey: false });
 
@@ -38,6 +38,37 @@ describe("handleChipKey 顶墙判断", () => {
     document.body.append(root);
     caretAt(root.querySelector("div")!.firstChild!, 3);
     expect(handleChipKey(key("Delete"), root)).toBe(false);
+    root.remove();
+  });
+});
+
+describe("guardChipDeletes 选区删除", () => {
+  it("全选后退格连块带字整段删掉", () => {
+    const root = document.createElement("div");
+    root.contentEditable = "true";
+    document.body.append(root);
+    writeEditor(root, [
+      { kind: "cmd", value: "create-plugin" },
+      { kind: "text", value: " 创建" },
+    ]);
+    const r = document.createRange();
+    r.selectNodeContents(root);
+    const sel = window.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(r);
+    let changed = 0;
+    const off = guardChipDeletes(root, () => false, () => changed++);
+    const e = new InputEvent("beforeinput", {
+      inputType: "deleteContentBackward",
+      cancelable: true,
+    });
+    // jsdom 不给目标区间；WebKit 给的就是整个选区。
+    Object.defineProperty(e, "getTargetRanges", { value: () => [r.cloneRange()] });
+    root.dispatchEvent(e);
+    expect(e.defaultPrevented).toBe(true);
+    expect(readEditor(root)).toEqual([]);
+    expect(changed).toBe(1);
+    off();
     root.remove();
   });
 });

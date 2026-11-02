@@ -529,6 +529,16 @@ export function guardChipDeletes(
     const chip = chipInTargetRanges(e, root) ?? adjacentChip(root, side);
     if (!chip) return;
     e.preventDefault();
+    // 用户拉出的选区（⌘A、拖选一段带块的文字）整段删掉。只删块的话，
+    // 选中的文字原样留着：全选退格之后正文还在，光标跑到句首。
+    const sel = window.getSelection();
+    const range = sel && sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
+    if (range && !range.collapsed && root.contains(range.commonAncestorContainer)) {
+      range.deleteContents();
+      normalizePads(root);
+      onChange();
+      return;
+    }
     if (imeActive()) return;
     removeChip(chip);
     onChange();
