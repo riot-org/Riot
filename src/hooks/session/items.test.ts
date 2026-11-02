@@ -4,6 +4,7 @@ import type { AgentEvent, BackgroundTaskView } from "../../bridge";
 import {
   MAX_TOOL_LINES,
   appendToolOutput,
+  applyCompacted,
   applyDone,
   applyMessage,
   applyResolved,
@@ -93,6 +94,21 @@ describe("applyMessage", () => {
     expect(out.items).toHaveLength(1);
     expect(out.items[0]).toMatchObject({ input: { command: "ls" }, output: ["line"], status: "running" });
     expect(out.tokens).toEqual({ input: 130, output: 12, context: 127 });
+  });
+});
+
+describe("applyCompacted", () => {
+  it("drops context usage to the post-compaction size right away, keeping session totals", () => {
+    const s = state({ compacting: true, tokens: { input: 74_300_000, output: 177_200, context: 360_600 } });
+    const out = applyCompacted(s, 42_000, "compact-1");
+    expect(out.compacting).toBe(false);
+    expect(out.tokens).toEqual({ input: 74_300_000, output: 177_200, context: 42_000 });
+    expect(out.items.at(-1)).toEqual({ kind: "compact", id: "compact-1" });
+  });
+
+  it("keeps the old figure when the kernel reports no size", () => {
+    const s = state({ tokens: { input: 10, output: 5, context: 15 } });
+    expect(applyCompacted(s, 0, "c").tokens.context).toBe(15);
   });
 });
 

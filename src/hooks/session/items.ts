@@ -373,6 +373,24 @@ export function appendToolOutput(items: Item[], lines: { id: string; text: strin
   return out;
 }
 
+/**
+ * 压缩完成：收起"正在压缩"、在对话流里划分割线，并把上下文占用改成压缩后
+ * 的规模。
+ *
+ * 占用平时取自服务方随回复报的 usage（[`contextOf`]），压缩不产生回复 ——
+ * 不在这里改的话，手动 /compact 之后圈上还是压缩前的数，看着像没压成。
+ * `afterTokens` 是压缩器的估算，下一条回复带来服务方的准数时自然被盖掉。
+ * 报 0 当没给（老内核 / 异常），保留原值。
+ */
+export function applyCompacted(s: SessionState, afterTokens: number, id: string): SessionState {
+  return {
+    ...s,
+    compacting: false,
+    items: [...s.items, { kind: "compact", id }],
+    tokens: afterTokens > 0 ? { ...s.tokens, context: afterTokens } : s.tokens,
+  };
+}
+
 export function applyDone(s: SessionState, event: Extract<AgentEvent, { type: "done" }>): SessionState {
   const items = [...s.items];
   const r = event.reason;

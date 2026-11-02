@@ -42,6 +42,7 @@ import {
 } from "./session/history";
 import {
   appendToolOutput,
+  applyCompacted,
   applyDone,
   applyMessage,
   applyResolved,
@@ -664,11 +665,7 @@ export function useSession(
           if (!busyRef.current) waitStartAt.delete(sessionId);
           // 旧消息还在界面上，划一条线就够了。再出一块提示等于把记录盖住。
           flush();
-          setState((s) => ({
-            ...s,
-            compacting: false,
-            items: [...s.items, { kind: "compact", id: `compact-${Date.now()}` }],
-          }));
+          setState((s) => applyCompacted(s, event.after_tokens, `compact-${Date.now()}`));
           // 和宿主对一次账。长压缩（>12s 静默）期间看门狗拉过快照，把
           // running 被占的 busy=true 吸了进来 —— 而手动压缩结束没有 Done，
           // 这个 busy 没有别的事件会来清，状态行卡在假的"正在生成"直到下
