@@ -403,6 +403,66 @@ impl BackgroundTasks {
         self.lock().iter().map(|e| e.view.clone()).collect()
     }
 
+    /// 分叉：把 `calls` 这些 Task 调用开出的子 agent（连同它们再派的）复制
+    /// 到另一个会话的子 agent目录 `dst`。transcript 逐个拷贝，登记表快照按
+    /// 同一集合过滤后写一份。返回复制了几个。
+    ///
+    /// 还在跑的照样复制，状态留着"运行中"：新会话水合时 [`Self::restore`]
+    /// 会把它标成已中断。它往后的进展和完成通知只属于原会话。拷贝是此刻
+    /// 盘上的样子 —— 正在收尾的那个可能少最后几条。
+    pub async fn copy_for_fork(
+        &self,
+        dst: &riot_store::Transcripts,
+        calls: &std::collections::HashSet<&riot_protocol::id::ToolUseId>,
+    ) -> usize {
+        let Some(p) = &self.persist else {
+            return 0;
+        };
+        let all = self.snapshot();
+        // 主 agent 派的按调用挑；再往下的跟着父 agent 走（派它的调用在父
+        // agent 的 transcript 里，不在会话历史里）。
+        let mut keep: Vec<BackgroundTaskView> = Vec::new();
+        loop {
+            let before = keep.len();
+            for v in &all {
+                if keep.iter().any(|k| k.id == v.id) {
+                    continue;
+                }
+                let wanted = match &v.parent {
+                    None => calls.contains(&v.tool_use_id),
+                    Some(parent) => keep.iter().any(|k| &k.id == parent),
+                };
+                if wanted {
+                    keep.push(v.clone());
+                }
+            }
+            if keep.len() == before {
+                break;
+            }
+        }
+        if keep.is_empty() {
+            return 0;
+        }
+        if let Err(e) = tokio::fs::create_dir_all(dst.dir()).await {
+            tracing::warn!(error = %e, dir = %dst.dir().display(), "分叉的子 agent 目录建不出来");
+            return 0;
+        }
+        for v in &keep {
+            let name = format!("{}.jsonl", v.id.as_str());
+            if let Err(e) =
+                tokio::fs::copy(p.transcripts.dir().join(&name), dst.dir().join(&name)).await
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::warn!(error = %e, agent = %v.id.as_str(), "子 agent 的记录没拷过去，分叉里点开会是空的");
+            }
+        }
+        let n = keep.len();
+        let index = dst.task_index();
+        index.save(keep);
+        index.flush().await;
+        n
+    }
+
     /// 续接：拿到某个子 agent 的类型和历史。
     ///
     /// 历史不在内存（重启后恢复的、太久被瘦身掉的）就读它的 transcript ——
@@ -1065,6 +1125,52 @@ mod tests {
         assert_eq!(h.messages.len(), 2, "内存里没了就读盘");
         let src = t.resume_source("t0").await.expect("读盘后可续");
         assert_eq!(src.messages[1].id().as_str(), "r0");
+    }
+
+    /// 分叉只带留下的历史里那些调用开出的子 agent，再派的跟着父 agent 走。
+    #[tokio::test]
+    async fn 分叉只复制留下的调用开出的子agent() {
+        let d = tempfile::tempdir().expect("临时目录");
+        let store = Arc::new(riot_store::Transcripts::new(d.path().join("src")));
+        let t = BackgroundTasks::persisted(SessionSink::default(), Arc::clone(&store));
+        for id in ["keep", "child", "drop"] {
+            let log = store.open(riot_store::TranscriptMeta {
+                id: SessionId::from_raw(id),
+                root: d.path().to_path_buf(),
+                created_at_ms: 0,
+            });
+            log.append(&msg(&format!("q-{id}")));
+            log.flush().await;
+        }
+        start(&t, "keep", false, CancellationToken::new());
+        let mut child = view("child", false);
+        child.parent = Some(AgentId::from_raw("keep"));
+        t.start(
+            child,
+            Kind::Explore,
+            CancellationToken::new(),
+            Vec::new(),
+            0,
+        );
+        start(&t, "drop", false, CancellationToken::new());
+
+        let dst = riot_store::Transcripts::new(d.path().join("dst"));
+        let call = riot_protocol::id::ToolUseId::from_raw("tu_keep");
+        let calls = std::collections::HashSet::from([&call]);
+        assert_eq!(t.copy_for_fork(&dst, &calls).await, 2);
+
+        let mut ids: Vec<String> = dst
+            .task_index()
+            .load()
+            .await
+            .into_iter()
+            .map(|v| v.id.as_str().to_owned())
+            .collect();
+        ids.sort();
+        assert_eq!(ids, ["child", "keep"]);
+        let (_, msgs) = dst.load(&SessionId::from_raw("keep")).await;
+        assert_eq!(msgs, vec![msg("q-keep")]);
+        assert!(dst.load(&SessionId::from_raw("drop")).await.0.is_none());
     }
 
     /// 重启：快照读回来 → 登记表照旧；上个进程里还在跑的标成已中断；

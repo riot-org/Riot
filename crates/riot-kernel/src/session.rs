@@ -179,11 +179,64 @@ impl From<SessionError> for RpcError {
     }
 }
 
+/// 把目录 `src` 整棵复制到 `dst`：文件先试硬链接，不行再拷贝。分叉复制
+/// 工件目录用 —— 截图原图动辄几 MB，而它们写下之后不再改。
+/// `Ok(false)` = `src` 不存在，没东西可带。
+#[allow(clippy::disallowed_methods)]
+fn link_tree(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<bool> {
+    let rd = match std::fs::read_dir(src) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    std::fs::create_dir_all(dst)?;
+    for entry in rd {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            link_tree(&from, &to)?;
+        } else if std::fs::hard_link(&from, &to).is_err() {
+            std::fs::copy(&from, &to)?;
+        }
+    }
+    Ok(true)
+}
+
 /// `cut_history_to` 的产物：锚点还在，尾巴留给 Redo。
 struct HistoryCut {
     keep_id: String,
     discarded_live: Vec<Message>,
     discarded_archived: Vec<Message>,
+}
+
+/// [`Session::fork_into`] 的结果。
+#[derive(Debug, Clone, PartialEq)]
+pub struct Forked {
+    /// 实际的分叉点：新会话历史的最后一条。
+    pub end: String,
+    /// 进 worktree 时文件落到分叉点的结果。
+    pub files: Option<riot_protocol::ForkFiles>,
+}
+
+/// 分叉点算出来的样子（见 `Session::fork_point`）。
+struct ForkPoint {
+    archived: Vec<Message>,
+    kept: Vec<Message>,
+    /// 分叉点后面那条提问：它的切片就是分叉点那一刻的文件。最新一轮没有。
+    next_prompt: Option<String>,
+    /// 分叉点就是原会话的最新一轮。
+    latest: bool,
+}
+
+impl ForkPoint {
+    /// 新会话历史的最后一条。
+    fn end_id(&self) -> String {
+        self.kept
+            .last()
+            .map(|m| m.id().as_str().to_owned())
+            .unwrap_or_default()
+    }
 }
 
 /// 排队中的一条待注入消息。
@@ -673,6 +726,10 @@ pub struct Session {
     mcp_refresh: McpRefresh,
     /// 本轮的分叉种子。见 [`ForkSeed`]。
     fork_seed: Mutex<Option<ForkSeed>>,
+    /// 这个会话是分叉出来的、分叉之后还没说过话：下一轮开工时提醒模型
+    /// 它现在是另一个会话（见 [`Self::fork_note`]）。水合时从 transcript
+    /// 认出来，用掉就清。std Mutex：锁内只有 take。
+    fork_note_pending: std::sync::Mutex<Option<riot_store::ForkOrigin>>,
     /// 还没送进历史的完成通知：到达时会话还没跑过任何一轮（没有配置可
     /// 沿用），或者上一轮被中断、通知卡在队列里没到安全点。下一轮开工时
     /// 一并注入。std Mutex：锁内只有 Vec 操作。
@@ -1083,6 +1140,7 @@ impl Session {
             last_turn: Mutex::new(None),
             mcp_refresh: Arc::default(),
             fork_seed: Mutex::new(None),
+            fork_note_pending: std::sync::Mutex::new(None),
             pending_notices: std::sync::Mutex::new(Vec::new()),
             closing: AtomicBool::new(false),
             multitask: AtomicBool::new(false),
@@ -1150,6 +1208,7 @@ impl Session {
             last_turn: Mutex::new(None),
             mcp_refresh: Arc::default(),
             fork_seed: Mutex::new(None),
+            fork_note_pending: std::sync::Mutex::new(None),
             pending_notices: std::sync::Mutex::new(Vec::new()),
             closing: AtomicBool::new(false),
             multitask: AtomicBool::new(false),
@@ -1263,6 +1322,19 @@ impl Session {
                 }
                 self.restore_baselines(&parts.archived, &parts.live);
                 self.restore_tasks(&parts.archived, &parts.live).await;
+                // 分叉出来、还停在分叉点：历史的最后一条正是来源记下的那条。
+                // 分叉后说过话就不提了 —— 那一轮已经带着提醒进了历史。
+                if let Some(o) = parts.forked_from.as_ref().filter(|o| {
+                    parts
+                        .live
+                        .last()
+                        .is_some_and(|m| m.id().as_str() == o.message)
+                }) {
+                    *self
+                        .fork_note_pending
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner()) = Some(o.clone());
+                }
                 *self.ui_archive.lock().await = parts.archived;
                 // 上次停在等用户决定：卡片和已收到的答案原样还原，补答完照样续跑。
                 *self.suspended.lock().await = parts.suspended.unwrap_or_default();
@@ -1683,7 +1755,8 @@ impl Session {
         if self.cancel_turn(true).await {
             return true;
         }
-        // 没有轮在跑，但停在等用户决定：停止键就是"这些都不做了"。
+        // 没有轮在跑，但停在等用户决定：停止键就是"这些都不做了"。收掉
+        // 挂起照样回 false —— 那一轮早就以 Done 收过场，不会再有 Done 来。
         let now = riot_protocol::tool::Clock::now_ms(&riot_providers::watchdog::TokioClock);
         self.close_suspension(
             &self.sink(),
@@ -1691,7 +1764,8 @@ impl Session {
             "The user stopped the task before answering; this call was not run.",
             "The user stopped the task; this call was not run.",
         )
-        .await
+        .await;
+        false
     }
 
     /// 关会话 / 退应用时取消本轮，**连同全部后台子 agent**。
@@ -1838,6 +1912,7 @@ impl Session {
                 input.clone(),
                 caps.vision.as_ref(),
                 self.mention_ctx(),
+                &CancellationToken::new(),
             )
             .await;
             // 按钮消息极少排队（「构建」只在闲时出现），但排上了指示也不能丢：
@@ -2210,6 +2285,272 @@ impl Session {
         .await
     }
 
+    /// 算分叉点：新会话要带的 (归档, 活历史)，以及分叉点后面那条提问。
+    ///
+    /// 不要求空闲：分叉点必须是已经结束的一轮，而跑轮期间历史只往后长，
+    /// 前面那段是稳定的。正在跑、停在等用户决定的那一轮不行 —— 它还没有
+    /// 结尾。
+    async fn fork_point(&self, message_id: &str) -> Result<ForkPoint, SessionError> {
+        self.hydrate().await;
+        // 先看有没有轮在跑，再锁历史：别的路径是先 running 后 history，
+        // 两把一起拿的话顺序要一致。这中间开了新一轮也无妨 —— 新提问只会
+        // 让下面算出的结尾更早落定。
+        let turn_open =
+            self.running.lock().await.is_some() || self.suspended.lock().await.suspension.is_some();
+        let live = self.history.lock().await;
+        let Some(i) = live.iter().position(|m| m.id().as_str() == message_id) else {
+            drop(live);
+            let compacted = self
+                .ui_archive
+                .lock()
+                .await
+                .iter()
+                .any(|m| m.id().as_str() == message_id);
+            return Err(SessionError::invalid(if compacted {
+                ui_error!("kernel.fork.compacted")
+            } else {
+                ui_error!("kernel.history.notInContext")
+            }));
+        };
+        // 这一轮的结尾：下一条提问之前的最后一条。
+        let next = live[i + 1..]
+            .iter()
+            .position(|m| m.is_user_prompt())
+            .map(|k| i + 1 + k);
+        if next.is_none() && turn_open {
+            return Err(SessionError::invalid(ui_error!("kernel.fork.turnOpen")));
+        }
+        let end = next.map_or(live.len() - 1, |n| n - 1);
+        let kept = live[..=end].to_vec();
+        let next_prompt = next.map(|n| live[n].id().as_str().to_owned());
+        drop(live);
+        let archived = self.ui_archive.lock().await.clone();
+        Ok(ForkPoint {
+            archived,
+            kept,
+            latest: next_prompt.is_none(),
+            next_prompt,
+        })
+    }
+
+    /// 分叉确认框要的数字（见 [`riot_protocol::ForkPreview`]）。只读，不占 `running`。
+    pub async fn fork_preview(
+        &self,
+        message_id: &str,
+    ) -> Result<riot_protocol::ForkPreview, SessionError> {
+        let point = self.fork_point(message_id).await?;
+        let turns = point
+            .archived
+            .iter()
+            .chain(&point.kept)
+            .filter(|m| m.is_user_prompt())
+            .count();
+        let slice = match (&point.next_prompt, self.checkpoints_dir()) {
+            (Some(id), Some(dir)) => {
+                crate::checkpoint::load_snapshot(&crate::checkpoint::slice_path(&dir, id))
+            }
+            _ => None,
+        };
+        let changed_after = match (&slice, &point.next_prompt) {
+            (Some(snap), Some(id)) => {
+                crate::checkpoint::preview(id, snap, &self.file_state.baselines(), None, &self.cwd)
+                    .await
+                    .files
+            }
+            _ => 0,
+        };
+        Ok(riot_protocol::ForkPreview {
+            message_id: point.end_id(),
+            turns,
+            latest: point.latest,
+            changed_after,
+            has_slice: point.latest || slice.is_some(),
+        })
+    }
+
+    /// 把到分叉点为止的对话复制成会话 `target`（见 docs/FORK_DESIGN.md）。
+    ///
+    /// 原会话一个字节都不动。新会话的东西全是复制出来的（transcript、切片、
+    /// 基线、子 agent、工件），不引用原会话的任何文件：原会话删了它照样能用。
+    /// transcript 最后写 —— 它在盘上就等于会话存在，前面哪步没做成都还能
+    /// 收拾干净。
+    ///
+    /// `worktree` 有值时宿主已经把 worktree 建好、带上了原工作区的未提交
+    /// 状态；这里把会话动过的文件落回分叉点那一刻（和回退同一套写回），
+    /// 切片和基线里的路径搬到 worktree 下。仓库之外的路径不搬也不写。
+    pub async fn fork_into(
+        &self,
+        message_id: &str,
+        target: &SessionId,
+        worktree: Option<&riot_protocol::ForkWorktree>,
+    ) -> Result<Forked, SessionError> {
+        let Some(p) = &self.persist else {
+            return Err(SessionError::Internal(ui_error!("kernel.fork.failed")));
+        };
+        let point = self.fork_point(message_id).await?;
+        let end_id = point.end_id();
+        let ForkPoint {
+            archived,
+            kept,
+            next_prompt,
+            latest,
+        } = point;
+        if p.store.path_of(target).exists() {
+            return Err(SessionError::Internal(ui_error!("kernel.fork.failed")));
+        }
+        let relocate = |path: &std::path::Path| match worktree {
+            Some(w) => w.relocate(path),
+            None => path.to_path_buf(),
+        };
+        let root = relocate(&self.cwd);
+
+        // 切片：只带留下的那些提问的。head 对新会话自己的基线重拍（见下）。
+        let src_ckpt = crate::checkpoint::dir_of(p.store.dir(), self.id.as_str());
+        let dst_ckpt = crate::checkpoint::dir_of(p.store.dir(), target.as_str());
+        let prompt_ids: Vec<String> = kept
+            .iter()
+            .filter(|m| m.is_user_prompt())
+            .map(|m| m.id().as_str().to_owned())
+            .collect();
+        crate::checkpoint::copy_slices(&src_ckpt, &dst_ckpt, &prompt_ids, relocate);
+
+        // 分叉点后面那条提问发出时拍的切片 = 分叉点那一刻的文件。它列的也正是
+        // 那一刻的基线集合。
+        let slice = next_prompt.as_deref().and_then(|id| {
+            crate::checkpoint::load_snapshot(&crate::checkpoint::slice_path(&src_ckpt, id))
+        });
+        let all_baselines = self.file_state.baselines();
+
+        // worktree 里的文件落回分叉点：切片里的写回去，分叉点之后才动的回到
+        // v0（或删掉）—— 和回退一样。最新一轮不用落，此刻的就是那一刻的。
+        let files = match worktree {
+            None => None,
+            Some(w) => Some(match (&slice, latest) {
+                (_, true) => riot_protocol::ForkFiles::default(),
+                (Some(snap), false) => {
+                    let snap = snap.relocated(|path| w.covers(path).then(|| w.relocate(path)));
+                    let current: Vec<(std::path::PathBuf, Option<String>)> = all_baselines
+                        .iter()
+                        .filter(|(path, _)| w.covers(path))
+                        .map(|(path, v0)| (w.relocate(path), v0.clone()))
+                        .collect();
+                    // 新会话还没有文件状态缓存（它还没开张），写回要失效的缓存给个空的。
+                    let cache = riot_runtime::MemoryFileState::shared();
+                    let r =
+                        crate::checkpoint::apply(&src_ckpt, &snap, &current, cache.as_ref(), &root)
+                            .await;
+                    riot_protocol::ForkFiles {
+                        restored: r.restored,
+                        deleted: r.deleted,
+                        skipped: r.skipped,
+                        failed: r.failed,
+                        stale: false,
+                    }
+                }
+                (None, false) => riot_protocol::ForkFiles {
+                    stale: true,
+                    ..Default::default()
+                },
+            }),
+        };
+
+        // 改动基线：只带分叉点之前已经登记过的文件。分叉点就是最新一轮时全带。
+        // 切片缺了也全带 —— 多显示几个文件，好过漏掉。
+        let mut baselines = all_baselines;
+        if let Some(snap) = &slice {
+            let known: std::collections::HashSet<&std::path::Path> = snap.paths().collect();
+            baselines.retain(|(path, _)| known.contains(path.as_path()));
+        }
+        let baselines: Vec<(std::path::PathBuf, Option<String>)> = baselines
+            .into_iter()
+            .map(|(path, v0)| (relocate(&path), v0))
+            .collect();
+        if !baselines.is_empty() {
+            let path = crate::changes::baselines_path(p.store.dir(), target.as_str());
+            if let Err(e) = crate::changes::save_baselines(&path, &baselines) {
+                tracing::warn!(error = %e, "分叉的改动基线没写上，新会话的改动栏会是空的");
+            }
+        }
+        // head 是脏检查的对照：新会话"上一轮结束后"看到的磁盘就是此刻的磁盘
+        // （进 worktree 的话，是刚落回分叉点的那份）。
+        let head_paths: Vec<std::path::PathBuf> =
+            baselines.iter().map(|(path, _)| path.clone()).collect();
+        let head = crate::checkpoint::capture(&dst_ckpt, head_paths).await;
+        if let Err(e) =
+            crate::checkpoint::save_snapshot(&crate::checkpoint::head_path(&dst_ckpt), &head)
+        {
+            tracing::warn!(error = %e, "分叉的 head 检查点没写上");
+        }
+
+        // 子 agent：只带留下的历史里那些 Task 调用开出来的。
+        let calls: std::collections::HashSet<&riot_protocol::id::ToolUseId> = archived
+            .iter()
+            .chain(&kept)
+            .flat_map(|m| m.tool_use_ids())
+            .collect();
+        let dst_subagents = p.store.subagents_of(target);
+        self.tasks.copy_for_fork(&dst_subagents, &calls).await;
+
+        // 工件：消息里按绝对路径引用原会话的工件目录。整个目录链接过去，
+        // 写 transcript 时把路径前缀换成新会话的。
+        let src_art = p.artifacts_root.join(self.id.as_str());
+        let dst_art = p.artifacts_root.join(target.as_str());
+        let rewrite = match link_tree(&src_art, &dst_art) {
+            Ok(true) => Some((
+                src_art.to_string_lossy().into_owned(),
+                dst_art.to_string_lossy().into_owned(),
+            )),
+            Ok(false) => None,
+            Err(e) => {
+                tracing::warn!(error = %e, "分叉的工件没带过去，新会话里截图和大结果的路径指向原会话");
+                None
+            }
+        };
+
+        let clock: Arc<dyn riot_protocol::tool::Clock> =
+            Arc::new(riot_providers::watchdog::TokioClock);
+        let meta = riot_store::TranscriptMeta {
+            id: target.clone(),
+            root,
+            created_at_ms: clock.now_ms(),
+        };
+        let origin = riot_store::ForkOrigin {
+            session: self.id.clone(),
+            message: end_id.clone(),
+            worktree: worktree.cloned(),
+        };
+        let written = p
+            .store
+            .write_fork(
+                &meta,
+                &origin,
+                &archived,
+                &kept,
+                rewrite.as_ref().map(|(a, b)| (a.as_str(), b.as_str())),
+            )
+            .await;
+        if let Err(e) = written {
+            tracing::error!(error = %e, "分叉的 transcript 没写上");
+            crate::checkpoint::remove_all(&dst_ckpt);
+            crate::changes::remove_baselines(&crate::changes::baselines_path(
+                p.store.dir(),
+                target.as_str(),
+            ));
+            let _ = p.store.remove_subagents(target).await;
+            #[allow(clippy::disallowed_methods)]
+            let _ = std::fs::remove_dir_all(&dst_art);
+            return Err(SessionError::Internal(ui_error!("kernel.fork.failed")));
+        }
+        tracing::info!(
+            from = %self.id.as_str(),
+            to = %target.as_str(),
+            turns = prompt_ids.len(),
+            worktree = worktree.is_some(),
+            "分叉了一个会话"
+        );
+        Ok(Forked { end: end_id, files })
+    }
+
     /// 截断内存历史到 `keep_id`（含）。不落盘、不做善后。
     async fn cut_history_to(&self, keep_id: &str) -> Result<HistoryCut, SessionError> {
         let mut live = self.history.lock().await;
@@ -2500,13 +2841,13 @@ impl Session {
                 "kernel.history.resendNotPrompt"
             )));
         }
-        live.truncate(at + 1);
         let applied = apply_message_edit(&mut live[at], text, images).map_err(|e| {
             SessionError::invalid(match e {
                 ApplyEditError::Empty => ui_error!("kernel.history.emptyText"),
                 ApplyEditError::NoText => ui_error!("kernel.history.noText"),
             })
         })?;
+        live.truncate(at + 1);
         // 重发是一次新的发送：气泡上的时刻跟这次走，不能沿用第一次。
         // 时钟和 run_inner 同源（注入的 Clock trait，不直接碰 SystemTime）。
         let clock: Arc<dyn riot_protocol::tool::Clock> =
@@ -2842,7 +3183,7 @@ impl Session {
             }
         };
 
-        let wake = self.settle_turn(&result).await;
+        let wake = self.settle_turn(&result, &sink).await;
         // 唤醒轮放在摘录写完之后再起：它开工就要读历史，别和写摘录抢锁。
         // running 已经是它的令牌，这期间到的用户消息会照常排队。
         if let Some(wake) = wake {
@@ -2893,9 +3234,16 @@ impl Session {
     /// `[约束]` "唤不唤"的判定和 running 的接管在同一次锁里（和 `submit` /
     /// `deliver_task_notice` 同一条约束）：分开的话，用户恰好这时发的一句
     /// 会和唤醒轮抢开轮，一个开成、一个报"上一轮还在进行中"。
+    ///
+    /// `[约束]` 本轮的 Done 也在这把锁里发，不随事件流早发。前端收到 Done
+    /// 立刻接力发出排队面板里的插话；早发的话（收尾还在写检查点），那条
+    /// 插话撞上还占着的 running，进了这里刚清空过的队列 —— 宿主以为前端
+    /// 接管，前端以为它在排队，谁都不发，界面转圈到看门狗兜底。锁里发
+    /// 还保证它排在唤醒轮、以及锁一放就可能开起来的下一轮的任何事件之前。
     async fn settle_turn(
         &self,
         result: &Result<Option<riot_protocol::event::TerminalReason>, UiError>,
+        sink: &SessionSink,
     ) -> Option<Wake> {
         // 轮中重载出了新 MCP 工具：槽无论如何都清掉（中断 / 出错的轮次
         // 不续，理由同 leftover_notices_wake —— 用户刚按了停止，冒出一轮
@@ -2940,6 +3288,11 @@ impl Session {
                     notices: wake_notices,
                     last,
                     cancel,
+                });
+            }
+            if let Ok(Some(reason)) = result {
+                let _ = sink.send(AgentEvent::Done {
+                    reason: reason.clone(),
                 });
             }
             wake
@@ -3065,6 +3418,50 @@ impl Session {
                 self.id.as_str()
             ),
         })
+    }
+
+    /// 分叉出来之后的第一轮：告诉模型它现在是另一个会话。
+    ///
+    /// 历史是从原会话原样抄来的：里面可能有一句"你是会话 X"（回忆开着时
+    /// 首条消息带的），也有对文件的旧印象。两件事都要说 —— 身份换了；
+    /// 工作区和原会话共用时，分叉点之后原会话可能又改过文件；进了 worktree
+    /// 时，历史里的路径都还指着原工作区。只说一次。
+    fn fork_note(&self) -> Option<UserContent> {
+        let origin = self
+            .fork_note_pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()?;
+        let mut text = String::from(
+            "This conversation was forked from another session at the point where the history \
+             above ends. It is now a separate conversation; the original one goes on by itself.",
+        );
+        if self.digests_dir().is_some() {
+            text.push_str(&format!(
+                " You are now session `{}`, forked from `{}`; earlier mentions of a session id \
+                 refer to the original.",
+                self.id.as_str(),
+                origin.session.as_str()
+            ));
+        }
+        match &origin.worktree {
+            // 历史里的路径都指着原工作区。改写消息正文会把工具调用的原文也改掉，
+            // 不如明说一句对应关系。
+            Some(w) => text.push_str(&format!(
+                " Your working directory is now `{}`, a separate git worktree on branch `{}`. \
+                 Paths under `{}` in earlier messages refer to the same files here; do not edit \
+                 `{}`.",
+                self.cwd.display(),
+                w.branch,
+                w.repo_root.display(),
+                w.repo_root.display()
+            )),
+            None => text.push_str(
+                " Both sessions work in the same workspace, so files may have changed after the \
+                 fork point. Read a file again before you edit it.",
+            ),
+        }
+        Some(UserContent::Attachment(Attachment::SystemReminder { text }))
     }
 
     /// 环境感知的轮首注入（docs/ENV_DESIGN.md §3）：时钟行 + 间隔警示 +
@@ -4502,8 +4899,13 @@ impl Session {
                 // 准则在前、指示在后读起来才顺。
                 let nudge = input.nudge;
                 let scheduled = input.scheduled.clone();
-                let mut content =
-                    crate::content::user_content(input, vision.as_ref(), self.mention_ctx()).await;
+                let mut content = crate::content::user_content(
+                    input,
+                    vision.as_ref(),
+                    self.mention_ctx(),
+                    &cancel,
+                )
+                .await;
                 // 记忆注入：会话的**第一条**用户消息前置 AGENTS.md（全局 + 项目）。
                 // 只注入一次 —— 它随消息进历史和 transcript，往后每轮自然带着；
                 // 每轮都注的话，同一份内容会在上下文里堆出 N 份。
@@ -4534,6 +4936,7 @@ impl Session {
                     )
                     .await,
                 );
+                prelude.extend(self.fork_note());
                 if !prelude.is_empty() {
                     prelude.append(&mut content);
                     content = prelude;
@@ -4700,6 +5103,10 @@ impl Session {
             // 半截流缓冲：切回会话的快照要能带上正在生成的正文/思考，
             // 否则界面只能从 0 重新攒（历史只收完整消息）。
             fold_live(&mut *self.live_stream.lock().await, &ev);
+            // Done 扣下，由 settle_turn 在释放 running 的同一把锁里发。
+            if matches!(ev, AgentEvent::Done { .. }) {
+                continue;
+            }
             // 发送失败说明前端窗口没了。继续跑完只会白烧 API 额度。
             if sink.send(ev).is_err() {
                 tracing::warn!("事件通道已断开，中止本轮");
@@ -7591,7 +7998,7 @@ mod tests {
         });
 
         let wake = s
-            .settle_turn(&Ok(Some(TerminalReason::Completed)))
+            .settle_turn(&Ok(Some(TerminalReason::Completed)), &test_sink())
             .await
             .expect("正常说完且有残留通知，要唤醒");
         assert_eq!(wake.notices.len(), 1);
@@ -7638,9 +8045,12 @@ mod tests {
         });
 
         let wake = s
-            .settle_turn(&Ok(Some(TerminalReason::Aborted {
-                by: AbortSource::User,
-            })))
+            .settle_turn(
+                &Ok(Some(TerminalReason::Aborted {
+                    by: AbortSource::User,
+                })),
+                &test_sink(),
+            )
             .await;
         assert!(wake.is_none(), "用户刚按了停止，不该冒出一轮来抢话");
         assert!(s.running.lock().await.is_none());
@@ -7668,7 +8078,9 @@ mod tests {
             kind: QueuedKind::TaskNotice,
             msg: notice("agt_1"),
         });
-        let wake = s.settle_turn(&Ok(Some(TerminalReason::Completed))).await;
+        let wake = s
+            .settle_turn(&Ok(Some(TerminalReason::Completed)), &test_sink())
+            .await;
         assert!(wake.is_none());
         assert!(s.running.lock().await.is_none());
     }
@@ -7728,10 +8140,16 @@ mod tests {
         ]);
 
         let wake = s
-            .settle_turn(&Ok(Some(TerminalReason::Completed)))
+            .settle_turn(&Ok(Some(TerminalReason::Completed)), &test_sink())
             .await
             .expect("重载出新工具且正常说完，要续轮");
-        let names: Vec<&str> = wake.last.caps.extra_tools.iter().map(|t| t.name()).collect();
+        let names: Vec<&str> = wake
+            .last
+            .caps
+            .extra_tools
+            .iter()
+            .map(|t| t.name())
+            .collect();
         assert_eq!(
             names,
             [
@@ -7773,13 +8191,80 @@ mod tests {
         *s.running.lock().await = Some(CancellationToken::new());
         *s.mcp_refresh().lock().unwrap() = Some(vec![Arc::new(NamedTool("mcp__a__x"))]);
         let wake = s
-            .settle_turn(&Ok(Some(TerminalReason::Aborted {
-                by: AbortSource::User,
-            })))
+            .settle_turn(
+                &Ok(Some(TerminalReason::Aborted {
+                    by: AbortSource::User,
+                })),
+                &test_sink(),
+            )
             .await;
         assert!(wake.is_none());
         assert!(s.running.lock().await.is_none());
         assert!(s.mcp_refresh().lock().unwrap().is_none());
+    }
+
+    /// 前端收到 Done 就接力发出排队面板里的插话，那一刻这一轮必须已经
+    /// 放掉 running。Done 在释放 running 的同一把锁里发：到达时锁要么还被
+    /// 收尾握着，要么已经空闲；锁空着却仍是 Some，就是 Done 发早了。
+    #[tokio::test]
+    async fn done_到达时这一轮已经放掉running() {
+        use riot_protocol::provider::ProviderEvent;
+
+        struct Probe {
+            session: Arc<Session>,
+            done: Arc<AtomicBool>,
+            early: Arc<AtomicBool>,
+        }
+        impl EventSink for Probe {
+            fn send(&self, event: AgentEvent) -> Result<(), SinkClosed> {
+                if matches!(event, AgentEvent::Done { .. }) {
+                    self.done.store(true, Ordering::Relaxed);
+                    if self.session.running.try_lock().is_ok_and(|g| g.is_some()) {
+                        self.early.store(true, Ordering::Relaxed);
+                    }
+                }
+                Ok(())
+            }
+        }
+
+        let dir = tempfile::tempdir().expect("临时目录");
+        let s = Arc::new(Session::new(
+            SessionId::from_raw("s1"),
+            dir.path().to_path_buf(),
+            None,
+        ));
+        let scripted = Arc::new(riot_core::testing::ScriptedProvider::new(vec![vec![
+            ProviderEvent::Message(hist_assistant("a1", "答")),
+        ]]));
+        assert!(s.test_provider.set(scripted as Arc<dyn Provider>).is_ok());
+        let (done, early) = (
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let sink = SessionSink::default();
+        sink.attach(Arc::new(Probe {
+            session: Arc::clone(&s),
+            done: Arc::clone(&done),
+            early: Arc::clone(&early),
+        }));
+        s.run_turn(
+            TurnInput {
+                text: "问".into(),
+                ..Default::default()
+            },
+            test_model(),
+            test_caps(),
+            sink,
+            test_limits(),
+        )
+        .await
+        .expect("这一轮要跑完");
+
+        assert!(done.load(Ordering::Relaxed), "这一轮要发 Done");
+        assert!(
+            !early.load(Ordering::Relaxed),
+            "Done 发出时 running 还被这一轮占着，接力的插话会被吞掉"
+        );
     }
 
     /// 用户按停止只停前台，后台任务不受影响。
@@ -9770,8 +10255,11 @@ mod tests {
         );
         ask_turn(&s).await;
 
-        assert!(s.interrupt().await, "停止键要收掉挂起");
-        assert!(s.suspended_asks().await.is_empty());
+        assert!(
+            !s.interrupt().await,
+            "没有轮在跑，不会再有 Done：回 false 让界面当场收掉忙碌"
+        );
+        assert!(s.suspended_asks().await.is_empty(), "停止键要收掉挂起");
         let last = s.history().await.last().cloned().expect("有历史");
         assert_eq!(
             last.tool_result_ids(),
@@ -9949,5 +10437,362 @@ mod tests {
             with_rules.system_prompt, plain.system_prompt,
             "内置部分不变"
         );
+    }
+
+    /// 在 `compact_session` 的同一个存储目录里开另一个会话（分叉的目标）。
+    fn sibling(of: &Session, id: &str) -> Session {
+        let p = of.persist.as_ref().expect("持久化会话");
+        let id = SessionId::from_raw(id);
+        let log = p.store.open(riot_store::TranscriptMeta {
+            id: id.clone(),
+            root: of.cwd.clone(),
+            created_at_ms: 0,
+        });
+        Session::new(
+            id,
+            of.cwd.clone(),
+            Some(SessionPersist {
+                store: Arc::clone(&p.store),
+                log,
+                artifacts_root: p.artifacts_root.clone(),
+            }),
+        )
+    }
+
+    /// 共用工作区、分叉在那一轮结尾（回答上的分叉键）。
+    async fn fork(s: &Session, at: &str, target: &str) -> Result<String, SessionError> {
+        s.fork_into(at, &SessionId::from_raw(target), None)
+            .await
+            .map(|f| f.end)
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn 分叉_带到那一轮结尾_切片和基线只带分叉点之前的() {
+        let (s, dir) = compact_session();
+        let a = dir.path().join("a.rs");
+        let late = dir.path().join("late.rs");
+        tokio::fs::write(&a, "turn1\n").await.unwrap();
+        s.file_state.note_baseline(a.clone(), Some("v0\n".into()));
+        if let Some(p) = &s.persist {
+            p.log.append(&hist_user("u1", "一"));
+            p.log.append(&hist_assistant("a1", "答一"));
+            p.log.append(&hist_assistant("a1b", "答一补充"));
+            p.log.append(&hist_user("u2", "二"));
+            p.log.append(&hist_assistant("a2", "答二"));
+            p.log.flush().await;
+        }
+        s.capture_checkpoint("u1").await;
+        s.capture_checkpoint("u2").await;
+        // 分叉点之后原会话才碰到的文件
+        tokio::fs::write(&late, "x\n").await.unwrap();
+        s.file_state.note_baseline(late.clone(), None);
+        let before = s.history().await;
+
+        let end = fork(&s, "a1", "f1").await.expect("分叉");
+        assert_eq!(end, "a1b", "分叉点是那一轮的结尾，不是点的那条");
+        assert_eq!(s.history().await, before, "原会话不动");
+
+        let f = sibling(&s, "f1");
+        let ids: Vec<String> = f
+            .history()
+            .await
+            .iter()
+            .map(|m| m.id().as_str().to_owned())
+            .collect();
+        assert_eq!(ids, ["u1", "a1", "a1b"]);
+        assert_eq!(f.checkpoint_ids(), ["u1"], "只带留下的提问的切片");
+        assert!(!f.redo_available());
+        let paths: Vec<std::path::PathBuf> = f
+            .file_state
+            .baselines()
+            .into_iter()
+            .map(|(p, _)| p)
+            .collect();
+        assert_eq!(
+            paths,
+            std::slice::from_ref(&a),
+            "分叉点之后才碰到的文件不属于新会话"
+        );
+
+        // 新会话里回退到 u1 要真能用：切片和 blob 都带过来了。
+        tokio::fs::write(&a, "changed\n").await.unwrap();
+        let r = f.restore("u1").await.expect("分叉会话里回退");
+        assert!(r.failed.is_empty(), "{r:?}");
+        assert_eq!(tokio::fs::read_to_string(&a).await.unwrap(), "turn1\n");
+    }
+
+    #[tokio::test]
+    async fn 分叉_正在跑的那一轮不行_之前结束的可以() {
+        let (s, _dir) = compact_session();
+        if let Some(p) = &s.persist {
+            p.log.append(&hist_user("u1", "一"));
+            p.log.append(&hist_assistant("a1", "答一"));
+            p.log.append(&hist_user("u2", "二"));
+            p.log.append(&hist_assistant("a2", "还在说"));
+            p.log.flush().await;
+        }
+        s.hydrate().await;
+        *s.running.lock().await = Some(CancellationToken::new());
+
+        let err = fork(&s, "a2", "f1").await.expect_err("这一轮还没结束");
+        assert_eq!(
+            err,
+            SessionError::Invalid(ui_error!("kernel.fork.turnOpen"))
+        );
+        assert_eq!(fork(&s, "a1", "f2").await, Ok("a1".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn 分叉_压缩前的消息和不认识的消息都拒绝() {
+        let (s, _dir) = compact_session();
+        if let Some(p) = &s.persist {
+            p.log.append(&hist_user("u1", "压缩前"));
+            p.log.append(&hist_assistant("a1", "旧答"));
+            p.log.append_boundary(1000, 100, None);
+            p.log.append(&hist_user("u2", "续接"));
+            p.log.append(&hist_assistant("a2", "新答"));
+            p.log.flush().await;
+        }
+        let err = fork(&s, "a1", "f1").await.expect_err("归档里的不能分叉");
+        assert_eq!(
+            err,
+            SessionError::Invalid(ui_error!("kernel.fork.compacted"))
+        );
+        assert!(fork(&s, "nope", "f1").await.is_err());
+
+        // 分叉点在压缩之后：归档跟着带过去，界面照样画得出分割线上面。
+        fork(&s, "a2", "f1").await.expect("分叉");
+        let f = sibling(&s, "f1");
+        assert_eq!(f.ui_archive().await, s.ui_archive().await);
+        assert_eq!(f.history().await, s.history().await);
+    }
+
+    #[tokio::test]
+    async fn 分叉_不覆盖已有会话() {
+        let (s, _dir) = compact_session();
+        let other = sibling(&s, "f1");
+        if let Some(p) = &s.persist {
+            p.log.append(&hist_user("u1", "一"));
+            p.log.append(&hist_assistant("a1", "答"));
+            p.log.flush().await;
+        }
+        if let Some(p) = &other.persist {
+            p.log.append(&hist_user("x1", "别人的"));
+            p.log.flush().await;
+        }
+        assert!(fork(&s, "a1", "f1").await.is_err());
+        let ids: Vec<String> = sibling(&s, "f1")
+            .history()
+            .await
+            .iter()
+            .map(|m| m.id().as_str().to_owned())
+            .collect();
+        assert_eq!(ids, ["x1"]);
+    }
+
+    #[tokio::test]
+    async fn 分叉_首轮提醒只说一次_说过话之后不再提() {
+        let (s, _dir) = compact_session();
+        if let Some(p) = &s.persist {
+            p.log.append(&hist_user("u1", "一"));
+            p.log.append(&hist_assistant("a1", "答"));
+            p.log.flush().await;
+        }
+        fork(&s, "a1", "f1").await.expect("分叉");
+        let f = sibling(&s, "f1");
+        f.hydrate().await;
+        let note = f.fork_note().expect("第一轮要提醒");
+        let UserContent::Attachment(Attachment::SystemReminder { text }) = note else {
+            panic!("提醒走 system reminder：{note:?}");
+        };
+        assert!(text.contains("forked"), "{text}");
+        assert!(text.contains("Read a file again"), "{text}");
+        assert!(f.fork_note().is_none(), "只说一次");
+
+        // 分叉之后说过话（重启后水合）：不再提。
+        if let Some(p) = &f.persist {
+            p.log.append(&hist_user("u2", "分叉后"));
+            p.log.flush().await;
+        }
+        let again = sibling(&s, "f1");
+        again.hydrate().await;
+        assert!(again.fork_note().is_none());
+        // 原会话不是分叉出来的。
+        assert!(s.fork_note().is_none());
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn 分叉_工件带过去_消息里的路径换成新会话的() {
+        let (s, _dir) = compact_session();
+        let art = s.artifacts_dir();
+        let shot = art.join("shot.png");
+        std::fs::write(&shot, b"png").unwrap();
+        let said = format!("截图在 {}", shot.display());
+        if let Some(p) = &s.persist {
+            p.log.append(&hist_user("u1", "截个图"));
+            p.log.append(&hist_assistant("a1", &said));
+            p.log.flush().await;
+        }
+        fork(&s, "a1", "f1").await.expect("分叉");
+        let f = sibling(&s, "f1");
+        let moved = f.artifacts_dir().join("shot.png");
+        assert_eq!(std::fs::read(&moved).unwrap(), b"png");
+        assert_eq!(
+            f.history().await.last(),
+            Some(&hist_assistant(
+                "a1",
+                &format!("截图在 {}", moved.display())
+            ))
+        );
+        assert_eq!(
+            s.history().await.last(),
+            Some(&hist_assistant("a1", &said)),
+            "原会话的路径不动"
+        );
+    }
+
+    /// 原会话两轮：第一轮把 a.rs 从 v0 改成 turn1，第二轮改成 turn2、新建 late.rs。
+    /// worktree 目录里先放一份"当前工作区"的副本（宿主建 worktree 时带过去的）。
+    #[allow(clippy::disallowed_methods)]
+    async fn two_turns_with_worktree() -> (Session, tempfile::TempDir, tempfile::TempDir) {
+        let (s, dir) = compact_session();
+        let a = dir.path().join("a.rs");
+        tokio::fs::write(&a, "turn1\n").await.unwrap();
+        s.file_state.note_baseline(a.clone(), Some("v0\n".into()));
+        if let Some(p) = &s.persist {
+            p.log.append(&hist_user("u1", "一"));
+            p.log.append(&hist_assistant("a1", "答一"));
+            p.log.append(&hist_user("u2", "二"));
+            p.log.append(&hist_assistant("a2", "答二"));
+            p.log.flush().await;
+        }
+        s.capture_checkpoint("u1").await;
+        s.capture_checkpoint("u2").await;
+        tokio::fs::write(&a, "turn2\n").await.unwrap();
+        let late = dir.path().join("late.rs");
+        tokio::fs::write(&late, "x\n").await.unwrap();
+        s.file_state.note_baseline(late, None);
+
+        let wt = tempfile::tempdir().unwrap();
+        std::fs::write(wt.path().join("a.rs"), "turn2\n").unwrap();
+        std::fs::write(wt.path().join("late.rs"), "x\n").unwrap();
+        (s, dir, wt)
+    }
+
+    fn worktree_of(s: &Session, wt: &std::path::Path) -> riot_protocol::ForkWorktree {
+        riot_protocol::ForkWorktree {
+            path: wt.to_path_buf(),
+            repo_root: s.cwd.clone(),
+            branch: "riot/fork-test".into(),
+            base: "abc".into(),
+            project_root: s.cwd.clone(),
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn 分叉_worktree_文件落回分叉点_切片和基线搬到新根() {
+        let (s, dir, wt) = two_turns_with_worktree().await;
+        let w = worktree_of(&s, wt.path());
+        let forked = s
+            .fork_into("a1", &SessionId::from_raw("f1"), Some(&w))
+            .await
+            .expect("分叉");
+        assert_eq!(forked.end, "a1");
+        let files = forked.files.expect("worktree 分叉要报文件结果");
+        assert!(!files.stale);
+        assert_eq!((files.restored, files.deleted), (1, 1), "{files:?}");
+        assert_eq!(
+            std::fs::read_to_string(wt.path().join("a.rs")).unwrap(),
+            "turn1\n",
+            "回到分叉点那一刻"
+        );
+        assert!(
+            !wt.path().join("late.rs").exists(),
+            "分叉点之后才新建的不该在"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.rs")).unwrap(),
+            "turn2\n",
+            "原工作区不动"
+        );
+
+        let store = &s.persist.as_ref().unwrap().store;
+        let parts = store.load_parts(&SessionId::from_raw("f1")).await;
+        assert_eq!(parts.meta.unwrap().root, wt.path());
+        assert_eq!(parts.forked_from.unwrap().worktree, Some(w.clone()));
+
+        let f = Session::new(
+            SessionId::from_raw("f1"),
+            wt.path().to_path_buf(),
+            Some(SessionPersist {
+                store: Arc::clone(store),
+                log: store.open(riot_store::TranscriptMeta {
+                    id: SessionId::from_raw("f1"),
+                    root: wt.path().to_path_buf(),
+                    created_at_ms: 0,
+                }),
+                artifacts_root: dir.path().join("artifacts"),
+            }),
+        );
+        f.hydrate().await;
+        let baselines = f.file_state.baselines();
+        assert_eq!(
+            baselines,
+            vec![(wt.path().join("a.rs"), Some("v0\n".into()))],
+            "基线搬到 worktree 下，只带分叉点之前的"
+        );
+        // 新会话里回退到 u1 改的是 worktree 里的文件。
+        std::fs::write(wt.path().join("a.rs"), "改过\n").unwrap();
+        let r = f.restore("u1").await.expect("回退");
+        assert!(r.failed.is_empty(), "{r:?}");
+        assert_eq!(
+            std::fs::read_to_string(wt.path().join("a.rs")).unwrap(),
+            "turn1\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.rs")).unwrap(),
+            "turn2\n"
+        );
+        let note = f.fork_note().expect("提醒");
+        let UserContent::Attachment(Attachment::SystemReminder { text }) = note else {
+            panic!("{note:?}")
+        };
+        assert!(text.contains("worktree"), "{text}");
+        assert!(text.contains(&s.cwd.display().to_string()), "{text}");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn 分叉_worktree_最新一轮不动文件() {
+        let (s, _dir, wt) = two_turns_with_worktree().await;
+        let w = worktree_of(&s, wt.path());
+        let forked = s
+            .fork_into("a2", &SessionId::from_raw("f1"), Some(&w))
+            .await
+            .expect("分叉");
+        assert_eq!(forked.files, Some(riot_protocol::ForkFiles::default()));
+        assert_eq!(
+            std::fs::read_to_string(wt.path().join("a.rs")).unwrap(),
+            "turn2\n"
+        );
+        assert!(wt.path().join("late.rs").exists());
+    }
+
+    #[tokio::test]
+    async fn 分叉预览_数出分叉点之后改过的文件() {
+        let (s, _dir, _wt) = two_turns_with_worktree().await;
+        let p = s.fork_preview("a1").await.expect("预览");
+        assert_eq!(p.message_id, "a1");
+        assert_eq!(p.turns, 1);
+        assert!(!p.latest);
+        assert!(p.has_slice);
+        assert_eq!(p.changed_after, 2, "a.rs 又改过，late.rs 是之后新建的");
+
+        let p = s.fork_preview("a2").await.expect("预览");
+        assert!(p.latest && p.has_slice);
+        assert_eq!((p.turns, p.changed_after), (2, 0));
     }
 }

@@ -131,6 +131,15 @@ export interface SessionState {
    */
   compacting: boolean;
   /**
+   * provider 正在重连：第几次、这类失败最多几次。null = 没在重连。
+   *
+   * 重试的退避加上重发后的等待能拖几十秒，状态行一直写"正在生成"的话，
+   * 用户分不清是模型在想还是网络断了，只能干等或者去按停止。
+   * 只活在当前这轮：有新输出、换下一次请求、本轮结束都会清掉，
+   * 快照里没有它（切回会话时重连多半已经过去了）。
+   */
+  reconnect: { attempt: number; max: number } | null;
+  /**
    * 待回答的权限请求，按到达顺序排队，弹窗每次只显示队首那个。
    *
    * `[约束]` 必须是队列而不是单个槽位。调度器会把并发安全的工具放在
@@ -201,6 +210,7 @@ export const EMPTY_STATE: SessionState = {
   streamingPlan: null,
   busy: false,
   compacting: false,
+  reconnect: null,
   asks: [],
   tokens: { input: 0, output: 0, context: 0 },
   hostMode: null,

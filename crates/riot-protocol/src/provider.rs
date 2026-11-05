@@ -380,6 +380,15 @@ pub enum ProviderEvent {
     Message(Message),
     /// 用量更新。累计值，用 [`Usage::merge`] 合并。
     Usage(Usage),
+    /// 这次调用失败了，provider 要自动重试：退避等待开始前发一次。
+    ///
+    /// 只是告知，流照常往下走 —— 后面是重试那次的事件，或者最终的
+    /// `Error`。`attempt` 从 1 数；`max` 是这一类失败最多重试几次，
+    /// 各类上限不同（见 `riot_providers::watchdog`）。
+    Retrying {
+        attempt: u32,
+        max: u32,
+    },
     /// 出错。**流在此结束**，不会再有后续事件。
     Error(ProviderError),
 }
@@ -480,7 +489,11 @@ mod tests {
         assert_eq!(ThinkingPolicy::default(), high);
         assert!(high.is_default());
         for old in [r#"{"mode":"default"}"#, r#"{"mode":"adaptive"}"#] {
-            assert_eq!(serde_json::from_str::<ThinkingPolicy>(old).unwrap(), high, "{old}");
+            assert_eq!(
+                serde_json::from_str::<ThinkingPolicy>(old).unwrap(),
+                high,
+                "{old}"
+            );
         }
         assert_eq!(
             serde_json::from_str::<ThinkingPolicy>(r#"{"mode":"fixed","level":"max"}"#).unwrap(),

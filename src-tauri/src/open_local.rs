@@ -81,13 +81,46 @@ pub fn risky_to_open(path: &Path) -> bool {
 const RISKY_EVERYWHERE: &[&str] = &["jar", "appimage", "run"];
 
 const RISKY_WINDOWS: &[&str] = &[
-    "exe", "com", "scr", "pif", "cpl", "msi", "msp", "msc", "bat", "cmd", "ps1", "psm1", "vbs",
-    "vbe", "js", "jse", "wsf", "wsh", "hta", "lnk", "url", "reg", "inf", "scf", "appref-ms",
-    "application", "py", "pyw",
+    "exe",
+    "com",
+    "scr",
+    "pif",
+    "cpl",
+    "msi",
+    "msp",
+    "msc",
+    "bat",
+    "cmd",
+    "ps1",
+    "psm1",
+    "vbs",
+    "vbe",
+    "js",
+    "jse",
+    "wsf",
+    "wsh",
+    "hta",
+    "lnk",
+    "url",
+    "reg",
+    "inf",
+    "scf",
+    "appref-ms",
+    "application",
+    "py",
+    "pyw",
 ];
 
 const RISKY_MACOS: &[&str] = &[
-    "app", "command", "tool", "terminal", "pkg", "mpkg", "workflow", "scpt", "applescript",
+    "app",
+    "command",
+    "tool",
+    "terminal",
+    "pkg",
+    "mpkg",
+    "workflow",
+    "scpt",
+    "applescript",
 ];
 
 /// 豁免理由：宿主层，判断的是用户磁盘上真实文件的权限位，没有注入的
@@ -110,7 +143,14 @@ mod tests {
 
     #[test]
     fn 普通源码和文档可以直接打开() {
-        for name in ["Mapper.xml", "README.md", "main.rs", "a.TXT", "报告.docx", "noext"] {
+        for name in [
+            "Mapper.xml",
+            "README.md",
+            "main.rs",
+            "a.TXT",
+            "报告.docx",
+            "noext",
+        ] {
             // 这些文件都不存在：没有执行位可查，只按扩展名判。
             assert!(!risky_to_open(Path::new(name)), "{name}");
         }
@@ -125,7 +165,14 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_上脚本和程序不打开() {
-        for name in [r"D:\w\setup.exe", "run.bat", "a.ps1", "x.lnk", "main.py", "app.js"] {
+        for name in [
+            r"D:\w\setup.exe",
+            "run.bat",
+            "a.ps1",
+            "x.lnk",
+            "main.py",
+            "app.js",
+        ] {
             assert!(risky_to_open(Path::new(name)), "{name}");
         }
     }
@@ -136,7 +183,10 @@ mod tests {
         for name in ["/Applications/Foo.app", "build.command", "a.pkg", "x.scpt"] {
             assert!(risky_to_open(Path::new(name)), "{name}");
         }
-        assert!(!risky_to_open(Path::new("main.py")), "macOS 上 .py 默认是编辑器打开");
+        assert!(
+            !risky_to_open(Path::new("main.py")),
+            "macOS 上 .py 默认是编辑器打开"
+        );
     }
 
     #[cfg(unix)]

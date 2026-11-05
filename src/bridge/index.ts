@@ -44,6 +44,9 @@ import type {
   ApiProtocol,
   ContextBreakdown,
   ContextItem,
+  ForkFiles,
+  ForkPreview,
+  ForkWorktree,
   OpenaiApi as GeneratedOpenaiApi,
   BackgroundTaskStatus as GeneratedBackgroundTaskStatus,
   BackgroundTaskView as GeneratedBackgroundTaskView,
@@ -78,6 +81,8 @@ export type {
   AgentEvent,
   ContextBreakdown,
   ContextItem,
+  ForkFiles,
+  ForkWorktree,
   FileChange,
   GitChanges,
   Message,
@@ -450,6 +455,24 @@ export interface SessionInfo {
   busy: boolean;
   /** 回合停在等用户决定（权限确认、提问、表单）。侧栏画"等你处理"。 */
   awaitingUser: boolean;
+  /** 从哪个会话的哪一轮分叉出来的。不是分叉出来的为 null。 */
+  forkedFrom: ForkOrigin | null;
+  /** 创建时刻（Unix 毫秒）。 */
+  createdAtMs: number;
+}
+
+/** 分叉来源。 */
+export interface ForkOrigin {
+  session: string;
+  /** 新会话历史的最后一条（内核消息 id）。 */
+  message: string;
+  /** 新会话在独立的 git worktree 里。 */
+  worktree?: ForkWorktree | null;
+}
+
+/** 会话属于哪个项目：worktree 会话的根是 worktree 目录，但它属于原项目。 */
+export function projectRootOf(s: Pick<SessionInfo, "root" | "forkedFrom">): string {
+  return s.forkedFrom?.worktree?.projectRoot ?? s.root;
 }
 
 export interface ConfigStatus {
@@ -620,6 +643,80 @@ export function restoreCheckpoint(
 /** 把最近一次 Restore 撤回去（文件 + 被截掉的对话）。 */
 export function redoCheckpoint(sessionId: string): Promise<RestoreResult> {
   return invoke<RestoreResult>("redo_checkpoint", { sessionId }, T_SLOW);
+}
+
+/** 原工作区未提交的状态带进 worktree 的结果。 */
+export interface WorktreeCarried {
+  copied: number;
+  removed: number;
+  /** 没带过去的未跟踪文件（太大、太多、嵌套仓库），只列前几个。 */
+  skipped: string[];
+  skippedCount: number;
+}
+
+export interface ForkOut {
+  session: SessionInfo;
+  /** 进 worktree 时，文件落到分叉点的结果。 */
+  files: ForkFiles | null;
+  carried: WorktreeCarried | null;
+}
+
+/**
+ * 从 `messageId`（内核消息 id）所在那一轮的结尾分叉出一个新会话。原会话
+ * 不动，跑轮中也能分叉已经结束的轮。`worktree` 时新会话在独立的 git
+ * worktree 里，文件回到分叉点。
+ */
+export function forkSession(
+  sessionId: string,
+  messageId: string,
+  opts: { worktree?: boolean } = {},
+): Promise<ForkOut> {
+  return invoke<ForkOut>(
+    "fork_session",
+    { sessionId, messageId, worktree: opts.worktree ?? false },
+    T_SLOW,
+  );
+}
+
+export type ForkPreviewOut = ForkPreview & {
+  /** worktree 模式会建的分支。null = 不是 git 仓库（或者还没有提交）。 */
+  branch: string | null;
+};
+
+/** 分叉确认框要的数字：带几轮、分叉点之后又改过几个文件、worktree 的分支名。 */
+export function forkPreview(sessionId: string, messageId: string): Promise<ForkPreviewOut> {
+  return invoke<ForkPreviewOut>("fork_preview", { sessionId, messageId }, T_SLOW);
+}
+
+/** worktree 会话删之前查一下。 */
+export interface WorktreeStatus {
+  path: string;
+  branch: string;
+  exists: boolean;
+  /** 没提交的改动（含未跟踪文件）有几处。 */
+  dirty: number;
+  /** 分叉之后分支上的提交，没被别的分支包含的有几个。 */
+  unmerged: number;
+}
+
+/** 不是 worktree 会话回 null。 */
+export function worktreeStatus(sessionId: string): Promise<WorktreeStatus | null> {
+  return invoke<WorktreeStatus | null>("worktree_status", { sessionId }, T_SLOW);
+}
+
+export interface OrphanWorktree {
+  path: string;
+  branch: string | null;
+}
+
+/** 应用的 worktrees 目录下没有对应会话的 worktree。 */
+export function orphanWorktrees(): Promise<OrphanWorktree[]> {
+  return invoke<OrphanWorktree[]>("orphan_worktrees", {}, T_SLOW);
+}
+
+/** 删掉一个没有对应会话的 worktree（没提交的改动一起丢掉）。 */
+export function discardOrphanWorktree(path: string): Promise<void> {
+  return invoke("discard_orphan_worktree", { path }, T_SLOW);
 }
 
 /** 一条斜杠命令。模板正文留在宿主，展开走 slashExpand。 */
@@ -1375,10 +1472,13 @@ export function getHistory(sessionId: string): Promise<HistorySnapshot> {
   return invoke<HistorySnapshot>("get_history", { sessionId }, T_SLOW);
 }
 
-/** 删除会话（正在跑的轮子会被中断）。幂等。 */
-export function deleteSession(sessionId: string): Promise<void> {
+/**
+ * 删除会话（正在跑的轮子会被中断）。幂等。worktree 会话：`discardWorktree`
+ * 为 true 连 worktree 和分支一起删，false 留着，不给就干净才删。
+ */
+export function deleteSession(sessionId: string, discardWorktree?: boolean): Promise<void> {
   // 要等正在跑的那一轮真正收尾（内核补齐悬空的 tool_result）。
-  return invoke("delete_session", { sessionId }, T_SLOW);
+  return invoke("delete_session", { sessionId, discardWorktree: discardWorktree ?? null }, T_SLOW);
 }
 
 /** 重命名会话。空标题清除手动名，回退到第一条消息。 */

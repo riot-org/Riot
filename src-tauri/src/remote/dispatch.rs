@@ -143,6 +143,19 @@ pub async fn dispatch(
             ok(crate::restore_checkpoint(st, a.take("sessionId")?, a.take("messageId")?).await)
         }
         "redo_checkpoint" => ok(crate::redo_checkpoint(st, a.take("sessionId")?).await),
+        "fork_session" => ok(crate::fork_session(
+            st,
+            a.take("sessionId")?,
+            a.take("messageId")?,
+            a.take("worktree")?,
+        )
+        .await),
+        "fork_preview" => {
+            ok(crate::fork_preview(st, a.take("sessionId")?, a.take("messageId")?).await)
+        }
+        "worktree_status" => ok(crate::worktree_status(st, a.take("sessionId")?).await),
+        "orphan_worktrees" => ok(crate::orphan_worktrees(st).await),
+        "discard_orphan_worktree" => ok(crate::discard_orphan_worktree(st, a.take("path")?).await),
         "queue_list" => ok(crate::queue_list(st, a.take("sessionId")?).await),
         "queue_remove" => {
             ok(crate::queue_remove(st, a.take("sessionId")?, a.take("entryId")?).await)
@@ -192,13 +205,9 @@ pub async fn dispatch(
             },
             Err(e) => Err(e.to_ui()),
         },
-        "write_file_text" => ok(crate::write_file_text(
-            st,
-            a.take("path")?,
-            a.take("text")?,
-            a.take("base")?,
-        )
-        .await),
+        "write_file_text" => {
+            ok(crate::write_file_text(st, a.take("path")?, a.take("text")?, a.take("base")?).await)
+        }
         "probe_dirs" => val(crate::probe_dirs(a.take("paths")?)),
         "path_exists" => val(crate::path_exists(a.take("path")?)),
         // 宿主机的剪贴板和远端用户无关（见模块说明）。
@@ -256,7 +265,9 @@ pub async fn dispatch(
         "create_session" => ok(crate::create_session(st, a.take("root")?).await),
         "list_sessions" => ok(crate::list_sessions(st).await),
         "get_history" => ok(crate::get_history(st, a.take("sessionId")?).await),
-        "delete_session" => ok(crate::delete_session(st, a.take("sessionId")?).await),
+        "delete_session" => {
+            ok(crate::delete_session(st, a.take("sessionId")?, a.take("discardWorktree")?).await)
+        }
         "rename_session" => {
             ok(crate::rename_session(st, a.take("sessionId")?, a.take("title")?).await)
         }

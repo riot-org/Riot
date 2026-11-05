@@ -4,6 +4,7 @@ import type { Message } from "../../bridge";
 import {
   PHANTOM_AFTER_MS,
   applyHistorySnap,
+  latestForkPoint,
   liveDeltasOf,
   locateMessage,
   mergeLive,
@@ -123,6 +124,17 @@ describe("applyHistorySnap", () => {
     expect(out.streaming).toBe("more");
   });
 
+  it("keeps the reconnect status only while the host is still busy", () => {
+    const s = state({ busy: true, reconnect: { attempt: 1, max: 10 } });
+    expect(applyHistorySnap(s, snap({ busy: true })).reconnect).toEqual({ attempt: 1, max: 10 });
+    expect(applyHistorySnap(s, snap({ messages: turn, busy: true })).reconnect).toEqual({
+      attempt: 1,
+      max: 10,
+    });
+    expect(applyHistorySnap(s, snap()).reconnect).toBeNull();
+    expect(applyHistorySnap(s, snap({ messages: turn })).reconnect).toBeNull();
+  });
+
   it("keeps an optimistic bubble the host has not recorded yet", () => {
     const bubble: Item = { kind: "user", id: "local-9", text: "new question", at: Date.now() };
     const out = applyHistorySnap(state({ items: [bubble] }), snap({ messages: turn, busy: true }));
@@ -197,5 +209,24 @@ describe("reconcileAsks", () => {
     ] as never);
     expect(out[0]).toBe(keep);
     expect(out.map((a) => a.requestId)).toEqual(["r1", "r3"]);
+  });
+});
+
+describe("latestForkPoint", () => {
+  const user = (id: string): Item => ({ kind: "user", id, text: id });
+  const reply = (id: string): Item => ({ kind: "assistant", id, text: id });
+  const items: Item[] = [user("u1"), reply("a1"), user("u2"), reply("a2-t3")];
+
+  it("空闲时取最后一条回答", () => {
+    expect(latestForkPoint(items, false)).toBe("a2-t3");
+  });
+
+  it("生成中跳过还没结尾的那一轮", () => {
+    expect(latestForkPoint(items, true)).toBe("a1");
+  });
+
+  it("没有回答就没有分叉点", () => {
+    expect(latestForkPoint([user("u1")], false)).toBeNull();
+    expect(latestForkPoint([user("u1"), reply("a1")], true)).toBeNull();
   });
 });

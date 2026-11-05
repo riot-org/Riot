@@ -197,6 +197,17 @@ mod tests {
         assert!(ReqwestTransport::new().is_ok());
     }
 
+    /// 本机一个刚放掉的端口：没人听，连接立刻被拒。
+    ///
+    /// `[约束]` 不能拿 TEST-NET 这类"外网连不上"的地址。开着 TUN 代理
+    /// （Clash / Surge 的 fake-IP）的机器上，任何外网 TCP 都会被当场接通，
+    /// 之后是挂住、断开还是回一个 5xx 全看代理心情 —— 测试会时过时不过，
+    /// 慢的一次能等两分钟。回环地址不走 TUN。
+    fn dead_addr() -> std::net::SocketAddr {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").expect("绑端口");
+        l.local_addr().expect("取地址")
+    }
+
     #[tokio::test]
     async fn 连不上的地址报传输错误() {
         // `[约束]` transport=true 决定了这个错误是可重试的。置错的话
@@ -205,8 +216,7 @@ mod tests {
         let err = t
             .post_sse(
                 HttpRequest {
-                    // 保留给文档示例的 TEST-NET-1，不会有人真的监听
-                    url: "http://192.0.2.1:9/v1/x".into(),
+                    url: format!("http://{}/v1/x", dead_addr()),
                     headers: vec![],
                     body: b"{}".to_vec(),
                 },
@@ -216,7 +226,7 @@ mod tests {
             .err()
             .expect("应该连不上");
 
-        assert!(err.transport, "必须标成传输错误，否则不会重试");
+        assert!(err.transport, "必须标成传输错误，否则不会重试：{err:?}");
         assert!(err.status.is_none());
     }
 
@@ -305,17 +315,14 @@ mod tests {
     async fn 错误文案不带查询串里的密钥() {
         // 少数中转把 key 放在查询串里，那种配置下 URL 就是密钥，
         // 而这段文案会进 UI 和日志。
-        let dead = {
-            let l = std::net::TcpListener::bind("127.0.0.1:0").expect("绑端口");
-            l.local_addr().expect("取地址")
-            // listener 在这里 drop：端口没人听，连接立刻被拒。
-        };
-
         let t = ReqwestTransport::new().expect("建客户端");
         let err = t
             .post_sse(
                 HttpRequest {
-                    url: format!("http://{dead}/v1/messages?api_key=sk-绝密-在-URL-里"),
+                    url: format!(
+                        "http://{}/v1/messages?api_key=sk-绝密-在-URL-里",
+                        dead_addr()
+                    ),
                     headers: vec![],
                     body: b"{}".to_vec(),
                 },

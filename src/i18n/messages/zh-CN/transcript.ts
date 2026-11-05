@@ -19,11 +19,17 @@ export default {
 
   // 对话流状态行、分隔线、回底按钮
   "transcript.wait.generating": "正在生成…",
+  "transcript.wait.reconnecting": "正在重新连接… {attempt}/{max}",
   "transcript.wait.runningTool": "正在执行 {tool}",
   "transcript.wait.compacting": "正在压缩上下文…",
   "transcript.jumpBottom": "回到底部",
   "transcript.jumpBottomNew": "回到底部（有新内容）",
   "transcript.compactRule": "以上消息已被压缩",
+  "transcript.forkRule": "从「{title}」分叉",
+  "transcript.forkRuleUntitled": "新会话",
+  "transcript.forkRuleGone": "从一个已删除的会话分叉",
+  "transcript.forks.title": "从这里分出去的会话",
+  "transcript.forks.count": "已分叉 {count} 次",
 
   // 消息行与悬停操作
   "transcript.msg.stopped": "已停止生成",
@@ -31,6 +37,7 @@ export default {
   "transcript.error.detail": "详情",
   "transcript.msg.copy": "复制原文",
   "transcript.msg.regenerate": "重新生成",
+  "transcript.msg.fork": "分叉到新会话",
   "transcript.msg.regenerateBusy": "生成中，结束后才能重新生成",
   "transcript.msg.edit": "编辑（替换上下文里的原文）",
   "transcript.msg.editBusy": "生成中，结束后才能编辑",

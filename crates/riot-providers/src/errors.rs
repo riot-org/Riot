@@ -52,6 +52,16 @@ pub(crate) fn stream_broken(detail: impl ToString) -> ProviderError {
     }
 }
 
+/// 连上了，但到截止时间都没等到响应头（见 `watchdog::first_byte_deadline`）。
+/// `waited` 是每一次各等了多久，进详情 —— 用户据此判断是不是代理在憋响应。
+pub(crate) fn no_response(waited: &[std::time::Duration]) -> ProviderError {
+    let waited: Vec<String> = waited.iter().map(|d| format!("{}s", d.as_secs())).collect();
+    let detail = format!("no response headers: waited {}", waited.join(", then "));
+    ProviderError::RetriesExhausted {
+        error: ui_error!("kernel.provider.noResponse"; detail),
+    }
+}
+
 /// 传输层失败（连不上、DNS、TLS）。按 [`HttpError`] 的字段挑更具体的键。
 fn transport(e: &HttpError) -> ProviderError {
     let key_error = if e.timed_out {

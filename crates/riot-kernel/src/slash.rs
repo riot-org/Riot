@@ -305,19 +305,23 @@ fn split_args(args: &str) -> Vec<String> {
 }
 
 fn builtin() -> Vec<SlashCommand> {
-    vec![SlashCommand {
-        name: "compact".into(),
+    // 内置命令由前端按名字执行，没有模板可展开。
+    let command = |name: &str, description_text| SlashCommand {
+        name: name.into(),
         description: String::new(),
-        description_text: Some(ui_text!("kernel.slash.compact")),
+        description_text: Some(description_text),
         argument_hint: None,
         body: String::new(),
         source: "builtin".into(),
         plugin: None,
-        // 内置命令由前端按名字执行，没有模板可展开。
         expand_inline: false,
         skill_source: None,
         dir: None,
-    }]
+    };
+    vec![
+        command("compact", ui_text!("kernel.slash.compact")),
+        command("fork", ui_text!("kernel.slash.fork")),
+    ]
 }
 
 fn scan(dir: &Path, source: &str, plugin: Option<&str>, out: &mut Vec<SlashCommand>) {

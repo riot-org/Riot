@@ -37,6 +37,7 @@ export default {
   "composer.slash.group.skills": "技能",
   "composer.slash.group.commands": "命令",
   "composer.slash.expandFailed": "{name} 展开失败：命令可能刚被删掉",
+  "composer.fork.nothing": "还没有能分叉的回答",
   "composer.mention.menuLabel": "文件引用",
 
   "composer.attach.title": "附加图片或文件",
@@ -50,12 +51,15 @@ export default {
   "composer.attach.noDiskFile":
     "拖进来的东西在磁盘上没有对应文件（多半是从网页里直接拖的图）。复制它，再回到这里 {key}。",
 
-  "composer.provider.switch": "切换服务方",
-  "composer.provider.pick": "选择服务方",
   "composer.provider.noKey": "未配置 key",
+  "composer.provider.setup": "设置",
   "composer.model.switch": "切换模型",
   "composer.model.pick": "选择模型",
-  "composer.model.empty": "这个服务方还没有模型",
+  "composer.model.row": "模型",
+  "composer.model.empty": "还没有模型",
+  "composer.model.recent": "最近使用",
+  "composer.model.search": "搜索模型…",
+  "composer.model.noMatch": "没有匹配的模型",
   "composer.model.vision": "能收图片",
   "composer.contextWindow": "上下文窗口",
   "composer.contextWindow.followSettings": "跟随设置",

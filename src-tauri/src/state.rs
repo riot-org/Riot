@@ -11,7 +11,7 @@
 //! (session.resume,幂等),会话设置随每轮 TurnConfig 传过去。
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -136,7 +136,37 @@ pub struct SessionInfo {
     pub busy: bool,
     /// 回合停在等用户决定（权限确认、提问、表单）。侧栏画"等你处理"。
     pub awaiting_user: bool,
+    /// 从哪个会话的哪一轮分叉出来的。侧栏画分叉记号，对话流在分叉点画
+    /// 一条能点回原会话的分隔线。
+    pub forked_from: Option<riot_store::ForkOrigin>,
+    /// 创建时刻（Unix 毫秒）。原会话上列出分叉时显示。
+    pub created_at_ms: u64,
 }
+
+/// 分叉的结果。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForkOut {
+    pub session: SessionInfo,
+    /// 进 worktree 时，文件落到分叉点的结果。
+    pub files: Option<riot_protocol::ForkFiles>,
+    /// 进 worktree 时，原工作区未提交的状态带过去了多少。
+    pub carried: Option<crate::worktree::Carried>,
+}
+
+/// 分叉确认框要的。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForkPreviewOut {
+    #[serde(flatten)]
+    pub preview: riot_protocol::ForkPreview,
+    /// worktree 模式会建的分支。None = 不是 git 仓库（或者还没有提交），
+    /// worktree 那项不可选。
+    pub branch: Option<String>,
+}
+
+/// 原会话没有标题时，worktree 分支名用它（`riot/fork-session`）。
+const FORK_BRANCH_FALLBACK: &str = "session";
 
 /// 一个会话的事件出口，带上它是"第几次订阅"。
 ///
@@ -233,6 +263,8 @@ struct Meta {
     model: String,
     /// 多任务模式（见 riot_protocol::TurnConfig::multitask）。
     multitask: bool,
+    /// 分叉来源。进索引。
+    forked_from: Option<riot_store::ForkOrigin>,
     /// 有没有轮子在跑(send_turn 置真,Done 事件清掉)。侧栏指示点用。
     busy: bool,
     /// 回合停在等用户决定(Done 带 AwaitingUser 置真,下一轮开始清掉)。
@@ -249,14 +281,29 @@ struct Meta {
 }
 
 impl Meta {
+    /// 属于哪个项目。worktree 会话的根是 worktree 目录，但它属于原项目。
+    fn project_root(&self) -> &Path {
+        self.forked_from
+            .as_ref()
+            .and_then(|f| f.worktree.as_ref())
+            .map_or(self.root.as_path(), |w| w.project_root.as_path())
+    }
+
+    fn worktree(&self) -> Option<&riot_protocol::ForkWorktree> {
+        self.forked_from.as_ref().and_then(|f| f.worktree.as_ref())
+    }
+
+    fn title(&self) -> Option<String> {
+        self.custom_title
+            .clone()
+            .or_else(|| self.auto_title.clone())
+    }
+
     fn to_info(&self, id: &str) -> SessionInfo {
         SessionInfo {
             id: id.to_owned(),
             root: self.root.display().to_string(),
-            title: self
-                .custom_title
-                .clone()
-                .or_else(|| self.auto_title.clone()),
+            title: self.title(),
             seq: self.seq,
             sampling: self.sampling,
             mode: self.mode,
@@ -268,6 +315,8 @@ impl Meta {
             model: self.model.clone(),
             busy: self.busy,
             awaiting_user: self.awaiting_user,
+            forked_from: self.forked_from.clone(),
+            created_at_ms: self.created_at_ms,
         }
     }
 
@@ -287,6 +336,7 @@ impl Meta {
             system_prompt: self.system_prompt.clone(),
             thinking: self.thinking,
             multitask: self.multitask,
+            forked_from: self.forked_from.clone(),
         }
     }
 }
@@ -480,6 +530,7 @@ impl AppState {
                     provider,
                     model,
                     multitask: p.multitask,
+                    forked_from: p.forked_from,
                     busy: false,
                     awaiting_user: false,
                     hydrated: false,
@@ -1149,6 +1200,7 @@ impl AppState {
             provider,
             model,
             multitask: false,
+            forked_from: None,
             busy: false,
             awaiting_user: false,
             hydrated: false,
@@ -1162,6 +1214,263 @@ impl AppState {
             .insert(id.as_str().to_owned(), meta);
         self.persist_index().await;
         Ok(info)
+    }
+
+    /// 分叉确认框要的：带几轮、之后又改过几个文件、worktree 会建什么分支。
+    pub async fn fork_preview(
+        &self,
+        session_id: &str,
+        message_id: &str,
+    ) -> HostResult<ForkPreviewOut> {
+        self.ensure_hydrated(session_id).await?;
+        let resp = self
+            .kernel_call(RpcRequest::SessionForkPreview {
+                session_id: sid(session_id),
+                message_id: message_id.to_owned(),
+            })
+            .await?;
+        let RpcResponse::ForkPreviewed(preview) = resp else {
+            return Err(HostError::Kernel(crate::kernel::KernelError::Rpc(
+                riot_protocol::ui_error!(
+                    "host.kernel.unexpectedReply",
+                    method = "session.fork_preview"
+                ),
+            )));
+        };
+        let (root, title) = {
+            let g = self.0.sessions.lock().await;
+            let m = g.get(session_id).ok_or(HostError::NoSession)?;
+            (m.root.clone(), m.title())
+        };
+        let branch = tokio::task::spawn_blocking(move || {
+            let repo = crate::worktree::probe(&root)?;
+            Some(crate::worktree::branch_for(
+                &repo.root,
+                title.as_deref(),
+                FORK_BRANCH_FALLBACK,
+            ))
+        })
+        .await
+        .ok()
+        .flatten();
+        Ok(ForkPreviewOut { preview, branch })
+    }
+
+    /// 从 `session_id` 的 `message_id` 处分叉出一个新会话（见
+    /// docs/FORK_DESIGN.md）。对话和旁路文件由内核复制；这里登记新会话。
+    ///
+    /// 会话设置照抄（模型、模式、采样……），标题也沿用原会话的 —— 侧栏靠
+    /// 分叉记号区分，宿主这边不造文案。网络授权不抄：那是对原会话的信任
+    /// （见 `Session::restored`）。
+    ///
+    /// `worktree` 时先建 worktree（带上原工作区未提交的状态），新会话的根
+    /// 是 worktree 里对应原根的目录。之后哪一步没做成都把 worktree 和分支
+    /// 删掉，新会话不登记。
+    pub async fn fork_session(
+        &self,
+        session_id: &str,
+        message_id: &str,
+        worktree: bool,
+    ) -> HostResult<ForkOut> {
+        self.ensure_hydrated(session_id).await?;
+        let id = NanoIdGenerator.session_id();
+        let made = if worktree {
+            let (root, title, project_root) = {
+                let g = self.0.sessions.lock().await;
+                let m = g.get(session_id).ok_or(HostError::NoSession)?;
+                (m.root.clone(), m.title(), m.project_root().to_path_buf())
+            };
+            let wt_root = crate::worktree::root(&self.0.config_path);
+            let target = id.as_str().to_owned();
+            let built = tokio::task::spawn_blocking(move || {
+                let repo = crate::worktree::probe(&root).ok_or(ui_error!("host.fork.notGit"))?;
+                let branch =
+                    crate::worktree::branch_for(&repo.root, title.as_deref(), FORK_BRANCH_FALLBACK);
+                let dest = crate::worktree::dir_for(&wt_root, &project_root, &target);
+                let (path, carried) = crate::worktree::create(&repo, &dest, &branch)?;
+                Ok::<_, UiError>((
+                    riot_protocol::ForkWorktree {
+                        path,
+                        repo_root: repo.root,
+                        branch,
+                        base: repo.head,
+                        project_root,
+                    },
+                    carried,
+                ))
+            })
+            .await
+            .map_err(|e| ui_error!("host.fork.worktreeFailed"; e))??;
+            Some(built)
+        } else {
+            None
+        };
+        let resp = self
+            .kernel_call(RpcRequest::SessionFork {
+                session_id: sid(session_id),
+                message_id: message_id.to_owned(),
+                target: id.clone(),
+                worktree: made.as_ref().map(|(w, _)| w.clone()),
+            })
+            .await;
+        let (end, files) = match resp {
+            Ok(RpcResponse::SessionForked { message_id, files }) => (message_id, files),
+            other => {
+                if let Some((w, _)) = &made {
+                    self.discard_worktree(w).await;
+                }
+                return Err(match other {
+                    Err(e) => e,
+                    Ok(_) => HostError::Kernel(crate::kernel::KernelError::Rpc(
+                        riot_protocol::ui_error!(
+                            "host.kernel.unexpectedReply",
+                            method = "session.fork"
+                        ),
+                    )),
+                });
+            }
+        };
+        let (wt, carried) = made.unzip();
+        let seq = self.0.seq.fetch_add(1, Ordering::Relaxed);
+        // 豁免理由：宿主层，持久化记录的是真实时刻，黄金回放不经过这里。
+        #[allow(clippy::disallowed_methods)]
+        let created_at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let meta = {
+            let g = self.0.sessions.lock().await;
+            g.get(session_id).map(|src| Meta {
+                root: wt
+                    .as_ref()
+                    .map_or_else(|| src.root.clone(), |w| w.relocate(&src.root)),
+                seq,
+                created_at_ms,
+                custom_title: src.custom_title.clone(),
+                auto_title: src.auto_title.clone(),
+                sampling: src.sampling,
+                mode: src.mode,
+                python_venv: src.python_venv.clone(),
+                system_prompt: src.system_prompt.clone(),
+                thinking: src.thinking,
+                provider: src.provider.clone(),
+                model: src.model.clone(),
+                multitask: src.multitask,
+                forked_from: Some(riot_store::ForkOrigin {
+                    session: sid(session_id),
+                    message: end,
+                    worktree: wt.clone(),
+                }),
+                busy: false,
+                awaiting_user: false,
+                hydrated: false,
+                last_error: None,
+            })
+        };
+        let Some(meta) = meta else {
+            if let Some(w) = &wt {
+                self.discard_worktree(w).await;
+            }
+            return Err(HostError::NoSession);
+        };
+        if let Some(b) = make_browser(self.0.browser_hub.as_ref()) {
+            self.0
+                .browsers
+                .lock()
+                .await
+                .insert(id.as_str().to_owned(), b);
+        }
+        let info = meta.to_info(id.as_str());
+        self.0
+            .sessions
+            .lock()
+            .await
+            .insert(id.as_str().to_owned(), meta);
+        self.persist_index().await;
+        Ok(ForkOut {
+            session: info,
+            files,
+            carried,
+        })
+    }
+
+    /// 删掉一个 worktree 和它的分支（分叉没做成、或者用户删会话时选了丢弃）。
+    async fn discard_worktree(&self, w: &riot_protocol::ForkWorktree) {
+        let root = crate::worktree::root(&self.0.config_path);
+        let w = w.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            crate::worktree::discard(&root, &w.path, Some(&w.branch), Some(&w.repo_root));
+        })
+        .await;
+    }
+
+    /// worktree 会话删之前查一下：有没有没提交的、没合并的。不是 worktree
+    /// 会话就是 None。
+    pub async fn worktree_status(
+        &self,
+        session_id: &str,
+    ) -> HostResult<Option<crate::worktree::Status>> {
+        let w = {
+            let g = self.0.sessions.lock().await;
+            g.get(session_id)
+                .ok_or(HostError::NoSession)?
+                .worktree()
+                .cloned()
+        };
+        let Some(w) = w else {
+            return Ok(None);
+        };
+        Ok(
+            tokio::task::spawn_blocking(move || crate::worktree::status(&w))
+                .await
+                .ok(),
+        )
+    }
+
+    /// 应用的 worktrees 目录下没有对应会话的 worktree。只列出来，不删 ——
+    /// 里面可能有用户没提交的东西。顺手把目录已经不在的 worktree 在仓库里
+    /// 的登记清掉。
+    pub async fn orphan_worktrees(&self) -> Vec<crate::worktree::Orphan> {
+        let (live, gone): (HashSet<String>, Vec<PathBuf>) = {
+            let g = self.0.sessions.lock().await;
+            (
+                g.keys().cloned().collect(),
+                g.values()
+                    .filter_map(Meta::worktree)
+                    .filter(|w| !w.path.exists())
+                    .map(|w| w.repo_root.clone())
+                    .collect(),
+            )
+        };
+        let root = crate::worktree::root(&self.0.config_path);
+        tokio::task::spawn_blocking(move || {
+            crate::worktree::prune(gone);
+            crate::worktree::orphans(&root, &live)
+        })
+        .await
+        .unwrap_or_default()
+    }
+
+    /// 删掉一个没有会话的 worktree。分支只在不会丢提交时一起删。
+    pub async fn discard_orphan_worktree(&self, path: &str) -> HostResult<()> {
+        let path = PathBuf::from(path);
+        let known = self
+            .orphan_worktrees()
+            .await
+            .into_iter()
+            .find(|o| o.path == path);
+        let Some(orphan) = known else {
+            return Err(ui_error!("host.fork.notOrphan").into());
+        };
+        let root = crate::worktree::root(&self.0.config_path);
+        let _ = tokio::task::spawn_blocking(move || {
+            let branch = orphan
+                .branch
+                .filter(|b| crate::worktree::branch_is_merged(&orphan.path, b));
+            crate::worktree::discard(&root, &orphan.path, branch.as_deref(), None);
+        })
+        .await;
+        Ok(())
     }
 
     /// 所有活着的会话。前端启动或刷新（HMR）后用它对齐状态。
@@ -1269,7 +1578,17 @@ impl AppState {
     ///
     /// 幂等 —— 删一个不存在的会话是成功，不是错误。用户连点两次删除、
     /// 或者两个窗口先后删同一个，第二次都不该弹报错。
+    ///
+    /// worktree 会话的 worktree 只在删了不丢东西时（见
+    /// [`crate::worktree::Status::clean`]）跟着删；要按用户的选择来，走
+    /// [`Self::delete_session_with`]。
     pub async fn delete_session(&self, session_id: &str) {
+        self.delete_session_with(session_id, None).await;
+    }
+
+    /// 同 [`Self::delete_session`]。`discard_worktree`：`Some(true)` 连 worktree
+    /// 和分支一起删（丢弃没提交的改动），`Some(false)` 留着，`None` 干净才删。
+    pub async fn delete_session_with(&self, session_id: &str, discard_worktree: Option<bool>) {
         let removed = self.0.sessions.lock().await.remove(session_id);
         self.0.sinks.lock().await.remove(session_id);
         // 面板观看者表也一起摘:浏览器句柄下面会 Drop,留着的 Channel 再也
@@ -1326,6 +1645,24 @@ impl AppState {
                 b.close_all().await;
             }
             self.remove_artifacts(session_id).await;
+            // `[约束]` 和工件同理，要在内核侧删除（中断轮子）之后：工具可能
+            // 还在往 worktree 里写。
+            if let Some(w) = removed.as_ref().and_then(Meta::worktree) {
+                let discard = match discard_worktree {
+                    Some(d) => d,
+                    None => {
+                        let probe = w.clone();
+                        tokio::task::spawn_blocking(move || crate::worktree::status(&probe))
+                            .await
+                            .is_ok_and(|s| s.clean())
+                    }
+                };
+                if discard {
+                    self.discard_worktree(w).await;
+                } else {
+                    tracing::info!(path = %w.path.display(), branch = %w.branch, "会话删了，worktree 留着");
+                }
+            }
             self.persist_index().await;
         }
     }
@@ -1524,9 +1861,11 @@ impl AppState {
             .lock()
             .await
             .iter()
-            .filter(|(_, m)| m.root.display().to_string() == root)
+            .filter(|(_, m)| m.project_root().display().to_string() == root)
             .map(|(id, _)| id.clone())
             .collect();
+        // worktree 是应用自己建的目录，干净的跟着收掉；有改动的留着，下次
+        // 启动会列成没有会话的 worktree。
         for id in &doomed {
             self.delete_session(id).await;
         }
@@ -2514,12 +2853,18 @@ impl AppState {
 
     pub async fn interrupt(&self, session_id: &str) -> HostResult<bool> {
         self.require_session(session_id).await?;
-        self.kernel_call(RpcRequest::TurnInterrupt {
-            session_id: sid(session_id),
-            interjection: false,
-        })
-        .await?;
-        Ok(true)
+        match self
+            .kernel_call(RpcRequest::TurnInterrupt {
+                session_id: sid(session_id),
+                interjection: false,
+            })
+            .await?
+        {
+            RpcResponse::Interrupted { cancelled } => Ok(cancelled),
+            _ => Err(HostError::Kernel(crate::kernel::KernelError::Rpc(
+                riot_protocol::ui_error!("host.kernel.unexpectedReply", method = "turn.interrupt"),
+            ))),
+        }
     }
 
     /// 本会话改了哪些文件、哪些行。给 review 视图。
@@ -3577,11 +3922,7 @@ fn describe_reload(changed: bool, servers: &[riot_protocol::rpc::McpServerStatus
     out.push_str("\nMCP 服务器：");
     for s in servers {
         let line = match s.state.as_str() {
-            "connected" => format!(
-                "{}：已连接，{} 个工具（下一轮起可用）",
-                s.id,
-                s.tools.len()
-            ),
+            "connected" => format!("{}：已连接，{} 个工具（下一轮起可用）", s.id, s.tools.len()),
             "connecting" => format!(
                 "{}：还在连接（npx 第一次下包会慢），过一会儿再调一次 ReloadConfig 看结果",
                 s.id
@@ -3789,7 +4130,9 @@ impl crate::kernel::HostCallHandler for HostCalls {
                     // （schedule::for_model），只给键名它改不了参数。
                     SC::Create { spec } => {
                         match self.0.schedule_create(session_id.as_str(), spec).await {
-                            Ok(task) => R::Schedule { task: Box::new(task) },
+                            Ok(task) => R::Schedule {
+                                task: Box::new(task),
+                            },
                             Err(e) => host_unavailable(crate::schedule::for_model(&e)),
                         }
                     }
@@ -3798,7 +4141,9 @@ impl crate::kernel::HostCallHandler for HostCalls {
                     },
                     SC::SetEnabled { id, enabled } => {
                         match self.0.schedule_set_enabled(&id, enabled).await {
-                            Ok(task) => R::Schedule { task: Box::new(task) },
+                            Ok(task) => R::Schedule {
+                                task: Box::new(task),
+                            },
                             Err(e) => host_unavailable(crate::schedule::for_model(&e)),
                         }
                     }
@@ -4245,13 +4590,19 @@ mod tests {
         let state = AppState::restore_at(cfg.clone());
         assert!(state.config().await.mcp_servers.is_empty());
 
-        assert_eq!(state.adopt_disk_config().await, Ok(false), "没改过就不算变化");
+        assert_eq!(
+            state.adopt_disk_config().await,
+            Ok(false),
+            "没改过就不算变化"
+        );
 
         let mut edited = cfg_two_models();
-        edited.mcp_servers = vec![serde_json::from_value(serde_json::json!({
-            "id": "added", "command": "npx", "args": ["-y", "pkg"]
-        }))
-        .expect("服务器配置")];
+        edited.mcp_servers = vec![
+            serde_json::from_value(serde_json::json!({
+                "id": "added", "command": "npx", "args": ["-y", "pkg"]
+            }))
+            .expect("服务器配置"),
+        ];
         crate::config::save_at(&cfg, &edited).expect("模型写");
         assert_eq!(state.adopt_disk_config().await, Ok(true));
         assert_eq!(state.config().await.mcp_servers[0].id, "added");
@@ -4272,7 +4623,10 @@ mod tests {
 
         edited.mcp_servers[0].id = "bad.id".into();
         crate::config::save_at(&cfg, &edited).expect("写不合规的 id");
-        let err = state.adopt_disk_config().await.expect_err("校验不过要报出来");
+        let err = state
+            .adopt_disk_config()
+            .await
+            .expect_err("校验不过要报出来");
         assert!(err.contains("mcpIdInvalid"), "要说清哪条规则：{err}");
     }
 
@@ -4287,7 +4641,11 @@ mod tests {
         };
         let text = describe_reload(
             true,
-            &[s("gh", "connected", 3), s("slow", "connecting", 0), s("bad", "failed", 0)],
+            &[
+                s("gh", "connected", 3),
+                s("slow", "connecting", 0),
+                s("bad", "failed", 0),
+            ],
         );
         assert!(text.contains("gh：已连接，3 个工具"), "{text}");
         assert!(text.contains("slow：还在连接"), "{text}");
@@ -4344,6 +4702,7 @@ mod tests {
                     system_prompt: None,
                     thinking: riot_protocol::ThinkingPolicy::default(),
                     multitask: false,
+                    forked_from: None,
                 }],
             },
         )

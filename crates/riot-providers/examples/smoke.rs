@@ -122,6 +122,7 @@ async fn main() {
                     u.input_tokens, u.output_tokens, u.cache_read_tokens
                 );
             }
+            ProviderEvent::Retrying { attempt, max } => eprintln!("\n[重连] {attempt}/{max}"),
             ProviderEvent::Error(e) => {
                 eprintln!("\n\n失败：{e}");
                 failed = true;

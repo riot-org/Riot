@@ -6,6 +6,7 @@
 
 use crate::changes::{FileChange, GitChanges, RestorePreview, RestoreResult};
 use crate::event::AgentEvent;
+use crate::fork::{ForkFiles, ForkPreview, ForkWorktree};
 use crate::id::{RequestId, SessionId, TurnId};
 use crate::message::Message;
 use crate::permission::{PendingAsk, PermissionMode, PermissionResponse};
@@ -62,7 +63,7 @@ pub enum RpcRequest {
         images: Option<Vec<crate::turn::ImageInput>>,
         config: Box<TurnConfig>,
     },
-    /// 中断当前轮。
+    /// 中断当前轮。应答 `Interrupted`。
     #[serde(rename = "turn.interrupt")]
     TurnInterrupt {
         session_id: SessionId,
@@ -150,6 +151,26 @@ pub enum RpcRequest {
     /// 把最近一次 Restore 撤回去（文件 + 被截掉的对话）。空闲时才能做。
     #[serde(rename = "history.redo")]
     HistoryRedo { session_id: SessionId },
+    /// 把这个会话到分叉点为止的对话复制成新会话 `target`（见
+    /// docs/FORK_DESIGN.md）。原会话不动；它跑轮中也能分叉已经结束的轮。
+    /// 没带 `worktree` = 和原会话共用项目根，文件不动。
+    #[serde(rename = "session.fork")]
+    SessionFork {
+        session_id: SessionId,
+        /// 内核消息 id（不是界面条目 id）。分叉点是它所在那一轮的结尾。
+        message_id: String,
+        /// 宿主分配好的新会话 id。
+        target: SessionId,
+        /// 宿主建好的 worktree。新会话的根换到它里面，文件落到分叉点。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        worktree: Option<ForkWorktree>,
+    },
+    /// 分叉确认框要的数字：带几轮、是不是最新一轮、之后改过几个文件。
+    #[serde(rename = "session.fork_preview")]
+    SessionForkPreview {
+        session_id: SessionId,
+        message_id: String,
+    },
 
     /// 手动压缩(/compact)。带模型端点 —— 压缩要调 LLM。
     #[serde(rename = "session.compact")]
@@ -279,6 +300,15 @@ pub enum RpcResponse {
     RestorePreview(RestorePreview),
     HistoryRestored(RestoreResult),
     HistoryRedone(RestoreResult),
+    /// session.fork 的应答。`message_id` 是实际的分叉点：新会话历史的
+    /// 最后一条。
+    SessionForked {
+        message_id: String,
+        /// worktree 分叉时文件落到分叉点的结果。共用工作区时没有。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        files: Option<ForkFiles>,
+    },
+    ForkPreviewed(ForkPreview),
     SessionList {
         sessions: Vec<SessionSummary>,
     },
@@ -304,6 +334,12 @@ pub enum RpcResponse {
     /// turn.nudge 的应答：提醒有没有排上（false = 此刻没有轮在跑）。
     Nudged {
         queued: bool,
+    },
+    /// turn.interrupt 的应答：是否停下了一轮正在跑的（它的 Done 随后就到）。
+    /// false = 没有轮在跑（停在等用户决定的也算，挂起照样收掉），界面上的
+    /// 忙碌是残留 —— 前端据此当场收掉停止键，不去等一个永远不会来的 Done。
+    Interrupted {
+        cancelled: bool,
     },
     /// task.history 的应答。`task` 为 None = 没有这个子 agent（登记表里
     /// 没有，盘上也没有它的记录 —— 登记表跟着会话落盘，重启后旧 id 照样

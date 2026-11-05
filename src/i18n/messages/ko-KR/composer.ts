@@ -38,6 +38,7 @@ export default {
   "composer.slash.group.skills": "Skills",
   "composer.slash.group.commands": "명령",
   "composer.slash.expandFailed": "{name} 확장 실패: 명령이 방금 삭제되었을 수 있습니다",
+  "composer.fork.nothing": "아직 분기할 답변이 없습니다",
   "composer.mention.menuLabel": "파일 참조",
 
   "composer.attach.title": "이미지 또는 파일 첨부",
@@ -51,12 +52,15 @@ export default {
   "composer.attach.noDiskFile":
     "끌어온 항목에 해당하는 파일이 디스크에 없습니다(대부분 웹 페이지에서 바로 끌어온 이미지입니다). 복사한 뒤 여기로 돌아와 {key}를 누르세요.",
 
-  "composer.provider.switch": "제공자 전환",
-  "composer.provider.pick": "제공자 선택",
   "composer.provider.noKey": "key 미설정",
+  "composer.provider.setup": "설정",
   "composer.model.switch": "모델 전환",
   "composer.model.pick": "모델 선택",
-  "composer.model.empty": "이 제공자에는 아직 모델이 없습니다",
+  "composer.model.row": "모델",
+  "composer.model.empty": "아직 모델이 없습니다",
+  "composer.model.recent": "최근 사용",
+  "composer.model.search": "모델 검색…",
+  "composer.model.noMatch": "일치하는 모델이 없습니다",
   "composer.model.vision": "이미지 입력 가능",
   "composer.contextWindow": "컨텍스트 윈도우",
   "composer.contextWindow.followSettings": "설정을 따름",

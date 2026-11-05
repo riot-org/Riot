@@ -52,6 +52,7 @@ import {
   dropSettled,
   fillToolInput,
   rememberCheckpoint,
+  shownUserText,
   stampOf,
   trimAfterUserPrompt,
   trimThroughEdited,
@@ -295,10 +296,13 @@ export function useSession(
   // 事件回调里要判断"此刻在不在跑"（queueSendNow 分流），同样不能读 state。
   const busyRef = useRef(false);
   const compactingRef = useRef(false);
+  // 增量一秒几十个，每个都 setState 去清重连标志太浪费：先看 ref。
+  const reconnectingRef = useRef(false);
   useEffect(() => {
     busyRef.current = state.busy;
     compactingRef.current = state.compacting;
-  }, [state.busy, state.compacting]);
+    reconnectingRef.current = state.reconnect !== null;
+  }, [state.busy, state.compacting, state.reconnect]);
   /** 有没有子 agent 在跑（看门狗用，见 TASK_SILENCE_MS）。 */
   const tasksRunningRef = useRef(false);
   useEffect(() => {
@@ -409,6 +413,7 @@ export function useSession(
         busy: false,
         // 收不到事件了，那个"压缩中"再也不会有人来清。
         compacting: false,
+        reconnect: null,
         items: [
           ...s.items,
           {
@@ -420,10 +425,18 @@ export function useSession(
       }));
     };
 
+    // 有了新输出 = 重连上了，状态行换回"正在生成"。
+    const endReconnect = () => {
+      if (!reconnectingRef.current) return;
+      reconnectingRef.current = false;
+      setState((s) => (s.reconnect ? { ...s, reconnect: null } : s));
+    };
+
     const handle = (event: AgentEvent) => {
       lastHeardAt.current = Date.now();
       switch (event.type) {
         case "delta":
+          endReconnect();
           if (event.kind === "text") {
             // 开始写正文 = 这段思考结束，计时停在这里。
             const c = thinkClocks.get(sessionId);
@@ -513,17 +526,27 @@ export function useSession(
           // 一轮的第一次请求（turn 0）还意味着上一轮的失败过时了：不论这轮
           // 是用户发的还是内核自己起的（后台任务唤醒），旧红卡都该收掉。
           // 轮内后续的请求不算 —— 中途的「等待授权超时」还没过时。
+          reconnectingRef.current = false;
           setState((s) => ({
             ...s,
             busy: true,
             streamingPlan: null,
             compacting: false,
+            reconnect: null,
             items: event.turn === 0 ? dropErrors(s.items) : s.items,
           }));
           break;
 
+        case "retrying":
+          // 退避加重发能拖几十秒，一直写"正在生成"的话用户以为模型在想。
+          // 计时不清零：用户要知道的是这一轮总共等了多久。
+          reconnectingRef.current = true;
+          setState((s) => ({ ...s, reconnect: { attempt: event.attempt, max: event.max } }));
+          break;
+
         case "message": {
           flush();
+          endReconnect();
           if (event.role === "assistant") {
             for (const c of event.content) {
               if (c.type !== "tool_use") continue;
@@ -574,7 +597,11 @@ export function useSession(
           //（宿主入队时定的、注入原样带回），配不上再按原文兜底（sendTurn
           // 返回和注入事件跨两条通道，极端时序下 id 还没换成宿主的）。
           if (event.role === "user") {
-            const text = event.content.find((c) => c.type === "text")?.text;
+            const raw = event.content.find((c) => c.type === "text")?.text;
+            const text =
+              raw === undefined
+                ? undefined
+                : shownUserText(raw, event.content.some((c) => c.type === "attachment"));
             const hit =
               queuedRef.current.find((q) => q.id === event.id) ??
               (text !== undefined ? queuedRef.current.find((q) => q.text === text) : undefined);
@@ -657,7 +684,8 @@ export function useSession(
           // 而实际上系统在做一件必要的事。
           // 手动 /compact 不开轮次、没有 request_start，等待起点在这里补。
           if (!waitStartAt.has(sessionId)) waitStartAt.set(sessionId, Date.now());
-          setState((s) => ({ ...s, compacting: true }));
+          reconnectingRef.current = false;
+          setState((s) => ({ ...s, compacting: true, reconnect: null }));
           break;
 
         case "compacted":
@@ -1493,6 +1521,7 @@ export function useSession(
           ...s,
           busy: false,
           compacting: false,
+          reconnect: null,
           streaming: "",
           thinking: "",
           streamingPlan: null,

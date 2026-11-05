@@ -196,3 +196,142 @@ async fn 内核关停后下一次调用自动重启() {
 
     state.shutdown().await;
 }
+
+fn git(dir: &std::path::Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .expect("git 能跑");
+    assert!(out.status.success(), "git {args:?}");
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+}
+
+fn msg(id: &str, text: &str, user: bool) -> riot_protocol::message::Message {
+    use riot_protocol::id::MessageId;
+    use riot_protocol::message::{AssistantContent, Message, MessageMeta, UserContent};
+    if user {
+        Message::User {
+            id: MessageId::from_raw(id),
+            content: vec![UserContent::Text { text: text.into() }],
+            meta: MessageMeta::default(),
+        }
+    } else {
+        Message::Assistant {
+            id: MessageId::from_raw(id),
+            content: vec![AssistantContent::Text { text: text.into() }],
+            usage: None,
+            meta: MessageMeta::default(),
+        }
+    }
+}
+
+/// 宿主 + 真内核 + 真 git：分叉进 worktree，新会话的根在 worktree 里，原工作区
+/// 未提交的改动带过去；分叉没做成不留 worktree；删会话按选择收尾。
+#[tokio::test]
+async fn 分叉进_worktree_失败不留痕迹_删会话按选择收尾() {
+    ensure_kernel_built();
+    let cfg_dir = std::fs::canonicalize(temp_dir("fork-wt")).unwrap();
+    let ws = std::fs::canonicalize(temp_dir("fork-wt-ws")).unwrap();
+    let _ = std::fs::remove_dir_all(cfg_dir.join("worktrees"));
+    let _ = std::fs::remove_dir_all(cfg_dir.join("sessions"));
+    let _ = std::fs::remove_dir_all(ws.join(".git"));
+    let root = ws.join("app");
+    std::fs::create_dir_all(&root).unwrap();
+    git(&ws, &["init", "-q"]);
+    git(&ws, &["config", "user.email", "t@t"]);
+    git(&ws, &["config", "user.name", "t"]);
+    std::fs::write(root.join("a.txt"), "a\n").unwrap();
+    git(&ws, &["add", "."]);
+    git(&ws, &["commit", "-qm", "init"]);
+    std::fs::write(root.join("a.txt"), "改过\n").unwrap();
+
+    let store = riot_store::Transcripts::new(cfg_dir.join("sessions"));
+    let log = store.open(riot_store::TranscriptMeta {
+        id: riot_protocol::id::SessionId::from_raw("s1"),
+        root: root.clone(),
+        created_at_ms: 1,
+    });
+    log.append(&msg("u1", "登录", true));
+    log.append(&msg("a1", "答一", false));
+    log.append(&msg("u2", "二", true));
+    log.append(&msg("a2", "答二", false));
+    log.flush().await;
+
+    let state = AppState::restore_at(cfg_dir.join("config.json"));
+    state.spawn_host_bridge();
+
+    let p = state.fork_preview("s1", "a1").await.expect("预览");
+    assert_eq!((p.preview.turns, p.preview.latest), (1, false));
+    assert_eq!(p.branch.as_deref(), Some("riot/fork-登录"));
+
+    let out = state
+        .fork_session("s1", "a1", true)
+        .await
+        .expect("分叉进 worktree");
+    let w = out
+        .session
+        .forked_from
+        .as_ref()
+        .and_then(|f| f.worktree.clone())
+        .expect("记了 worktree");
+    assert!(w.path.starts_with(cfg_dir.join("worktrees")), "{w:?}");
+    assert_eq!(w.branch, "riot/fork-登录");
+    assert_eq!(w.project_root, root);
+    assert_eq!(out.session.root, w.path.join("app").display().to_string());
+    assert_eq!(
+        std::fs::read_to_string(w.path.join("app/a.txt")).unwrap(),
+        "改过\n",
+        "未提交的改动带过去了"
+    );
+    assert_eq!(out.carried.as_ref().map(|c| c.copied), Some(1));
+    assert!(
+        out.files.as_ref().is_some_and(|f| f.stale),
+        "没有切片：如实报文件没能回到分叉点"
+    );
+
+    // 分叉点不存在：内核拒绝，worktree 和分支都不留。
+    assert!(state.fork_session("s1", "nope", true).await.is_err());
+    let group = w.path.parent().unwrap();
+    assert_eq!(std::fs::read_dir(group).unwrap().count(), 1);
+    assert_eq!(git(&ws, &["branch", "--list", "riot/*"]).lines().count(), 1);
+
+    // 有改动：不给选择时删会话留着 worktree，之后列成没有会话的。
+    let st = state
+        .worktree_status(&out.session.id)
+        .await
+        .unwrap()
+        .expect("是 worktree 会话");
+    assert!(!st.clean(), "{st:?}");
+    state.delete_session(&out.session.id).await;
+    assert!(w.path.exists(), "有改动的默认留着");
+    let orphans = state.orphan_worktrees().await;
+    assert_eq!(orphans.len(), 1);
+    assert_eq!(orphans[0].branch.as_deref(), Some("riot/fork-登录"));
+    state
+        .discard_orphan_worktree(orphans[0].path.to_str().unwrap())
+        .await
+        .expect("删孤儿");
+    assert!(!w.path.exists());
+    assert_eq!(
+        git(&ws, &["branch", "--list", "riot/*"]),
+        "",
+        "没有新提交的分支一起删"
+    );
+
+    // 选了丢弃：目录和分支都没了。
+    let out = state.fork_session("s1", "a1", true).await.expect("再分叉");
+    let w = out.session.forked_from.unwrap().worktree.unwrap();
+    state.delete_session_with(&out.session.id, Some(true)).await;
+    assert!(!w.path.exists());
+    assert_eq!(git(&ws, &["branch", "--list", "riot/*"]), "");
+    assert_eq!(git(&ws, &["worktree", "list"]).lines().count(), 1);
+    assert_eq!(
+        std::fs::read_to_string(root.join("a.txt")).unwrap(),
+        "改过\n",
+        "原工作区始终不动"
+    );
+
+    state.shutdown().await;
+}

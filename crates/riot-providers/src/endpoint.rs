@@ -74,10 +74,59 @@ pub fn openai_conversation_url(base: &str, path: &str, api: riot_protocol::Opena
     api_url_with(base, path, "v1", tail)
 }
 
+/// 地址指向本机或局域网：`localhost`、`*.local`、回环 / 私网 / 链路本地 IP。
+///
+/// 只认字面形态，不做 DNS：解析要网络往返，而这里只是挑一档超时。
+pub(crate) fn is_local(url: &str) -> bool {
+    let rest = url.trim().split_once("://").map_or(url, |(_, r)| r);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let authority = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    let host = match authority.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or_default(),
+        None => authority.split(':').next().unwrap_or_default(),
+    };
+    let host = host.to_ascii_lowercase();
+    if host == "localhost" || host.ends_with(".localhost") || host.ends_with(".local") {
+        return true;
+    }
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) => {
+            ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified()
+        }
+        Ok(std::net::IpAddr::V6(ip)) => ip.is_loopback() || ip.is_unspecified(),
+        Err(_) => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn 本机和局域网地址认得出来() {
+        for url in [
+            "http://localhost:11434/v1/chat/completions",
+            "http://127.0.0.1:8000/v1/messages",
+            "http://[::1]:8080/v1",
+            "http://192.168.1.20:1234/v1",
+            "http://10.0.0.5/v1",
+            "http://user:pw@172.16.3.4:8000/v1",
+            "http://gpu-box.local:11434/v1",
+        ] {
+            assert!(is_local(url), "{url}");
+        }
+        for url in [
+            "https://api.anthropic.com/v1/messages",
+            "https://api.deepseek.com/v1",
+            "http://8.8.8.8/v1",
+            // TUN 代理的 fake-IP 网段，背后是外网
+            "http://198.18.0.7/v1",
+            "https://localhost.example.com/v1",
+        ] {
+            assert!(!is_local(url), "{url}");
+        }
+    }
 
     #[test]
     fn 只给主机名时补上默认版本段() {

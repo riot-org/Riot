@@ -39,6 +39,7 @@ export default {
   "composer.slash.group.skills": "Skills",
   "composer.slash.group.commands": "Commands",
   "composer.slash.expandFailed": "Failed to expand {name}: the command may have just been deleted",
+  "composer.fork.nothing": "No reply to fork from yet",
   "composer.mention.menuLabel": "File references",
 
   "composer.attach.title": "Attach images or files",
@@ -52,12 +53,15 @@ export default {
   "composer.attach.noDiskFile":
     "The dropped item has no file on disk (most likely an image dragged straight from a web page). Copy it, then come back here and press {key}.",
 
-  "composer.provider.switch": "Switch provider",
-  "composer.provider.pick": "Choose a provider",
   "composer.provider.noKey": "No key",
+  "composer.provider.setup": "Settings",
   "composer.model.switch": "Switch model",
   "composer.model.pick": "Choose a model",
-  "composer.model.empty": "This provider has no models yet",
+  "composer.model.row": "Model",
+  "composer.model.empty": "No models yet",
+  "composer.model.recent": "Recent",
+  "composer.model.search": "Search models…",
+  "composer.model.noMatch": "No matching models",
   "composer.model.vision": "Accepts images",
   "composer.contextWindow": "Context window",
   "composer.contextWindow.followSettings": "Follow settings",

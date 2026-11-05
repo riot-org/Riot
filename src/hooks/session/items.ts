@@ -71,6 +71,19 @@ export function stampOf(meta: MessageMeta | null | undefined): { at?: number } {
 }
 
 /**
+ * 内核给只带附件、没写字的提问补的正文（`content::prompt_text`）。
+ * 那是写给模型的，不是用户说的话：气泡上不显示，也不拿它跟乐观气泡
+ * （正文是空串）对账 —— 对不上的话同一条消息会画成两张卡。
+ */
+// eslint-disable-next-line no-restricted-syntax -- 内核补的占位正文（与 content.rs 的 prompt_text 对齐），不是界面文案
+const ATTACHMENT_ONLY_PROMPT = "看这张图。";
+
+/** 用户气泡上该显示的正文：附件消息的占位正文还原成空。 */
+export function shownUserText(text: string, hasAttachments: boolean): string {
+  return hasAttachments && text === ATTACHMENT_ONLY_PROMPT ? "" : text;
+}
+
+/**
  * 按钮发的消息（「构建」/「并行构建」）→ 构建卡要的两个字段，摊成一段可
  * 展开的属性。计划标题取这条消息**之前**最近一份计划 —— 卡说的是"构建
  * 哪份"，同一会话第二次规划再构建时不能指到旧的那份。「转到后台」不是
@@ -257,14 +270,15 @@ export function applyMessage(s: SessionState, event: Extract<AgentEvent, { type:
         const files = msg.content.flatMap((x) =>
           x.type === "attachment" && x.kind === "user_file" ? [x.path] : [],
         );
+        const text = shownUserText(c.text, images.length + files.length > 0);
         // 乐观气泡：正文相同的 `local-*` 换成正式 id，避免同一句话两张卡。
         const localAt = items.findIndex(
-          (it) => it.kind === "user" && it.id.startsWith("local-") && it.text === c.text,
+          (it) => it.kind === "user" && it.id.startsWith("local-") && it.text === text,
         );
         const bubble: Extract<Item, { kind: "user" }> = {
           kind: "user",
           id: msg.id,
-          text: c.text,
+          text,
           ...(images.length ? { images } : {}),
           ...(files.length ? { files } : {}),
           ...stampOf(msg.meta),
@@ -398,7 +412,15 @@ export function applyDone(s: SessionState, event: Extract<AgentEvent, { type: "d
   // 回合停在等用户决定：卡片要留着等人答，那几个调用也确实还没结束（答完
   // 续跑才有结果），工具卡片保持原样。
   if (r.reason === "awaiting_user") {
-    return { ...s, busy: false, compacting: false, streaming: "", thinking: "", streamingPlan: null };
+    return {
+      ...s,
+      busy: false,
+      compacting: false,
+      reconnect: null,
+      streaming: "",
+      thinking: "",
+      streamingPlan: null,
+    };
   }
 
   // 收尾时把还挂着 running 的工具卡片改掉。否则界面上会永远转圈，
@@ -437,6 +459,7 @@ export function applyDone(s: SessionState, event: Extract<AgentEvent, { type: "d
     items,
     busy: false,
     compacting: false,
+    reconnect: null,
     streaming: "",
     thinking: "",
     streamingPlan: null,

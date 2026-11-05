@@ -35,8 +35,20 @@ export function sessionEq(a: SessionInfo, b: SessionInfo): boolean {
     a.provider === b.provider &&
     a.model === b.model &&
     a.busy === b.busy &&
+    a.createdAtMs === b.createdAtMs &&
+    forkEq(a.forkedFrom, b.forkedFrom) &&
     thinkingEq(a.thinking, b.thinking) &&
     samplingEq(a.sampling, b.sampling)
+  );
+}
+
+function forkEq(a: SessionInfo["forkedFrom"], b: SessionInfo["forkedFrom"]): boolean {
+  if (!a || !b) return a === b;
+  return (
+    a.session === b.session &&
+    a.message === b.message &&
+    (a.worktree?.path ?? null) === (b.worktree?.path ?? null) &&
+    (a.worktree?.branch ?? null) === (b.worktree?.branch ?? null)
   );
 }
 

@@ -14,16 +14,23 @@ export default {
   "transcript.find.closeTitle": "閉じる (Esc)",
 
   "transcript.wait.generating": "生成中…",
+  "transcript.wait.reconnecting": "再接続中… {attempt}/{max}",
   "transcript.wait.runningTool": "{tool} を実行中",
   "transcript.wait.compacting": "コンテキストを圧縮中…",
   "transcript.jumpBottom": "最下部へ",
   "transcript.jumpBottomNew": "最下部へ（新しい内容あり）",
   "transcript.compactRule": "これより上のメッセージは圧縮されました",
+  "transcript.forkRule": "「{title}」から分岐",
+  "transcript.forkRuleUntitled": "新しいセッション",
+  "transcript.forkRuleGone": "削除されたセッションから分岐",
+  "transcript.forks.title": "ここから分岐したセッション",
+  "transcript.forks.count": "{count} 回分岐",
 
   "transcript.msg.stopped": "生成を停止しました",
   "transcript.error.detail": "詳細",
   "transcript.msg.copy": "原文をコピー",
   "transcript.msg.regenerate": "再生成",
+  "transcript.msg.fork": "新しいセッションに分岐",
   "transcript.msg.regenerateBusy": "生成中です。終了後に再生成できます",
   "transcript.msg.edit": "編集（コンテキスト内の原文を置き換え）",
   "transcript.msg.editBusy": "生成中です。終了後に編集できます",
@@ -58,7 +65,7 @@ export default {
   "transcript.regenerate.body":
     "この返答と以降の会話は破棄されます。{files} 個のファイルを質問送信時の状態に戻してから、再生成します。",
 
-  "transcript.editor.hintResend": "送信：ここからやり直し、以降の会話は破棄 · 保存：コンテキスト内の原文だけを変更",
+  "transcript.editor.hintResend": "送信：ここからやり直し、以降の会話は破棄 · 保存：原文だけを変更",
   "transcript.editor.hintSave": "保存するとコンテキスト内の原文が置き換わり、以降の会話は新しい内容に基づきます",
   "transcript.editor.saveOnlyTitle": "コンテキスト内の原文だけを置き換え、再生成しない",
   "transcript.editor.resendTitle": "このメッセージからやり直す（⌘/Ctrl+Enter）",

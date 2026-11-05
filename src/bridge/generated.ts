@@ -28,6 +28,11 @@ export type AgentEvent =
       type: "compacting";
     }
   | {
+      attempt: number;
+      max: number;
+      type: "retrying";
+    }
+  | {
       after_tokens: number;
       before_tokens: number;
       strategy: CompactStrategy;
@@ -600,7 +605,16 @@ export type PermissionResponse =
  *
  * 可序列化是为了黄金回放：用例把模型响应存成 JSON，测试时原样喂回主循环。
  */
-export type ProviderEvent = ProviderEventDelta | ProviderEventMessage | ProviderEventUsage | ProviderEventError;
+export type ProviderEvent =
+  | ProviderEventDelta
+  | ProviderEventMessage
+  | ProviderEventUsage
+  | {
+      attempt: number;
+      event: "retrying";
+      max: number;
+    }
+  | ProviderEventError;
 export type ProviderEventDelta = StreamDelta & {
   event: "delta";
 };
@@ -841,6 +855,31 @@ export type RpcRequest =
   | {
       method: "history.redo";
       params: {
+        session_id: string;
+      };
+    }
+  | {
+      method: "session.fork";
+      params: {
+        /**
+         * 内核消息 id（不是界面条目 id）。分叉点是它所在那一轮的结尾。
+         */
+        message_id: string;
+        session_id: string;
+        /**
+         * 宿主分配好的新会话 id。
+         */
+        target: string;
+        /**
+         * 宿主建好的 worktree。新会话的根换到它里面，文件落到分叉点。
+         */
+        worktree?: ForkWorktree | null;
+      };
+    }
+  | {
+      method: "session.fork_preview";
+      params: {
+        message_id: string;
         session_id: string;
       };
     }
@@ -1118,6 +1157,20 @@ export type RpcResponse =
     }
   | {
       data: {
+        /**
+         * worktree 分叉时文件落到分叉点的结果。共用工作区时没有。
+         */
+        files?: ForkFiles | null;
+        message_id: string;
+      };
+      result: "session_forked";
+    }
+  | {
+      data: ForkPreview;
+      result: "fork_previewed";
+    }
+  | {
+      data: {
         sessions: SessionSummary[];
       };
       result: "session_list";
@@ -1157,6 +1210,12 @@ export type RpcResponse =
         queued: boolean;
       };
       result: "nudged";
+    }
+  | {
+      data: {
+        cancelled: boolean;
+      };
+      result: "interrupted";
     }
   | {
       data: {
@@ -1835,6 +1894,36 @@ export interface ScheduledWake {
   taskId: string;
 }
 /**
+ * worktree 分叉：新会话在一个独立检出里干活。
+ *
+ * 宿主先建好 worktree 再发 `session.fork`；内核负责把文件落到分叉点、把
+ * 切片和基线里的路径搬到新根下。整份记进新会话的分叉来源 —— 删会话时
+ * 宿主据此收拾 worktree 和分支。
+ */
+export interface ForkWorktree {
+  /**
+   * 建 worktree 时的提交。删会话时据此判断分支上有没有新提交。
+   */
+  base: string;
+  /**
+   * 检出的分支（`riot/fork-…`）。
+   */
+  branch: string;
+  /**
+   * worktree 目录（检出的仓库根）。
+   */
+  path: string;
+  /**
+   * 原项目根：侧栏按它分组。分叉的分叉沿用来源记下的那个。
+   */
+  projectRoot: string;
+  /**
+   * 原工作区的仓库根，写法跟着原会话的根走（不解析符号链接）。切片、
+   * 基线里这个前缀下的路径改写到 `path` 下；之外的不动、也不写回。
+   */
+  repoRoot: string;
+}
+/**
  * MCP 服务器的启动描述。宿主从设置里组好(过滤掉未启用/没填完的),
  * 内核只管照单连接 —— 内核不读配置文件。
  */
@@ -1896,6 +1985,47 @@ export interface RestoreResult {
   redoAvailable: boolean;
   restored: number;
   skipped: RestoreSkip[];
+}
+/**
+ * worktree 分叉时文件落到分叉点的结果。
+ */
+export interface ForkFiles {
+  deleted: number;
+  failed: RestoreSkip[];
+  restored: number;
+  skipped: RestoreSkip[];
+  /**
+   * 没有分叉点那一刻的切片（老会话）：worktree 停在当前工作区的样子，
+   * 没往回落。
+   */
+  stale: boolean;
+}
+/**
+ * `session.fork_preview` 的应答：分叉确认框要的数字。
+ */
+export interface ForkPreview {
+  /**
+   * 分叉点之后原会话改过、此刻和分叉点那一刻不一样的文件数。共用工作区
+   * 时新会话直接看到的就是这些改动，确认框要提一句。没有切片时是 0。
+   */
+  changedAfter: number;
+  /**
+   * 有分叉点那一刻的文件切片：worktree 能把会话动过的文件落回那一刻。
+   * 最新一轮不需要切片（此刻的磁盘就是那一刻），也记 true。
+   */
+  hasSlice: boolean;
+  /**
+   * 分叉点就是原会话的最新一轮，之后没有别的轮。
+   */
+  latest: boolean;
+  /**
+   * 实际的分叉点：新会话历史的最后一条。
+   */
+  messageId: string;
+  /**
+   * 带过去几轮（用户提问数，含压缩归档里的）。
+   */
+  turns: number;
 }
 export interface SessionSummary {
   cwd: string;

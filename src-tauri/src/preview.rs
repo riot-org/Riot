@@ -124,9 +124,10 @@ pub async fn resolve(state: &AppState, requested: &str) -> Result<PathBuf, UiErr
     resolve_in(&roots(state).await, requested).ok_or_else(|| {
         // 提示里只放文件名：整条路径往往很长（微信这类沙盒临时目录），
         // 读的人要知道的是"哪个文件"，完整路径留在 path 里。
-        let name = std::path::Path::new(requested)
-            .file_name()
-            .map_or_else(|| requested.to_owned(), |n| n.to_string_lossy().into_owned());
+        let name = std::path::Path::new(requested).file_name().map_or_else(
+            || requested.to_owned(),
+            |n| n.to_string_lossy().into_owned(),
+        );
         ui_error!("host.preview.outOfScope", path = requested, name = name)
     })
 }

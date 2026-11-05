@@ -1913,10 +1913,7 @@ mod tests {
         assert!(md.contains("## untrusted_content"));
 
         // 正文抽样：两边逐字相同。分家的话就是两份要各自维护、必然漂移的提示词。
-        for needle in [
-            "Lead with the outcome.",
-            "[打开 报告.docx](报告.docx)",
-        ] {
+        for needle in ["Lead with the outcome.", "[打开 报告.docx](报告.docx)"] {
             assert!(xml.contains(needle), "{needle}");
             assert!(md.contains(needle), "{needle}");
         }

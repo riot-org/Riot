@@ -19,6 +19,7 @@
 
 import {
   memo,
+  type ReactNode,
   useCallback,
   useContext,
   useEffect,
@@ -27,7 +28,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { flushSync } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 
 import {
   host,
@@ -52,9 +53,10 @@ import { estimateTurnHeight, isLongUserText, lastAssistantIndex } from "../lib/t
 import { openPlanPanel } from "../lib/plan";
 import { Chevron } from "./Chevron";
 import { Chip, FileChip } from "./Chip";
+import { ContextMenu, type MenuState } from "./chrome";
 import { Composer } from "./Composer";
 import { ConfirmDialog, type ConfirmRequest } from "./ConfirmDialog";
-import { PlanModeIcon } from "./icons";
+import { BranchIcon, PlanModeIcon } from "./icons";
 import { HYDRATE_EVENT, LazyMarkdown, Markdown, ProjectRootContext } from "./Markdown";
 import { AskChoiceCard, EnvVarsCard, ModeSwitchCard, PermissionCard } from "./PermissionDialog";
 import {
@@ -102,7 +104,7 @@ const bottomTop = (box: HTMLElement) => Math.max(0, box.scrollHeight - box.clien
  */
 type Turn = { key: string; from: number; blocks: Block[] };
 
-function groupTurns(blocks: Block[], keyOf: (id: string) => string): Turn[] {
+export function groupTurns(blocks: Block[], keyOf: (id: string) => string): Turn[] {
   const turns: Turn[] = [];
   blocks.forEach((b, i) => {
     const cur = turns[turns.length - 1];
@@ -115,6 +117,51 @@ function groupTurns(blocks: Block[], keyOf: (id: string) => string): Turn[] {
     cur.blocks.push(b);
   });
   return turns;
+}
+
+/**
+ * 这一块是不是来自这条内核消息。条目 id 是消息 id 加后缀（`-u3` / `-t5` /
+ * `-k2`，见 messagesToItems），流式刚落定的那条还是光秃秃的消息 id。
+ * 工具卡的 id 是 tool_use id，对不上。
+ */
+function blockHasMessage(b: Block, messageId: string): boolean {
+  const hit = (id: string) => id === messageId || id.startsWith(`${messageId}-`);
+  return b.kind === "row" ? hit(b.item.id) : b.items.some((it) => hit(it.id));
+}
+
+/** 从这个会话分出去的一个会话（「已分叉 N 次」列表里的一项）。 */
+export interface ForkChild {
+  id: string;
+  title: string | null;
+  /** 0 = 老记录没有。 */
+  createdAtMs: number;
+  /** 原会话里的分叉点：那一轮的最后一条（内核消息 id）。 */
+  message: string;
+  /** 分在 worktree 里时的分支名。 */
+  branch: string | null;
+}
+
+type OpenForks = (e: React.MouseEvent<HTMLElement>, forks: readonly ForkChild[]) => void;
+
+/**
+ * 「已分叉 N 次」挂在哪条回答上（条目 id → 从那一轮分出去的会话）：分叉点
+ * 所在那一轮挂操作栏的回答。分叉点已经不在当前历史里（被回退、重新生成
+ * 掉了）的不挂。
+ */
+export function forkMarks(
+  turns: Turn[],
+  forks: readonly ForkChild[] | undefined,
+): Map<string, ForkChild[]> {
+  const out = new Map<string, ForkChild[]>();
+  for (const f of forks ?? []) {
+    const tn = turns.find((tn) => tn.blocks.some((b) => blockHasMessage(b, f.message)));
+    const a = tn?.blocks[lastAssistantIndex(tn.blocks)];
+    if (a?.kind !== "row") continue;
+    const list = out.get(a.item.id);
+    if (list) list.push(f);
+    else out.set(a.item.id, [f]);
+  }
+  return out;
 }
 
 /**
@@ -541,6 +588,7 @@ export const Transcript = memo(function Transcript({
   thinkClock,
   busy,
   compacting,
+  reconnect = null,
   waitSince,
   armed = true,
   modeAsk,
@@ -558,6 +606,12 @@ export const Transcript = memo(function Transcript({
   onRestoreEntry,
   redoAvailable,
   onRedo,
+  onFork,
+  forks,
+  onOpenSession,
+  forkOrigin,
+  jumpTo,
+  onJumped,
 }: {
   sessionId: string;
   items: Item[];
@@ -577,6 +631,8 @@ export const Transcript = memo(function Transcript({
   armed?: boolean;
   /** 宿主正在压缩上下文。见 useSession 里同名字段。 */
   compacting: boolean;
+  /** provider 正在重连。见 SessionState 里同名字段。 */
+  reconnect?: { attempt: number; max: number } | null;
   /**
    * 当前这轮等待的起点（epoch ms）。挂在组件外（见 waitStartedAt），
    * 活得过切会话导致的重挂载 —— 状态行的秒数靠它接着数而不是清零。
@@ -610,6 +666,22 @@ export const Transcript = memo(function Transcript({
   /** 最近一次回退还能前进回去。图标画在被留下的那条提问上。 */
   redoAvailable?: boolean;
   onRedo?: () => void;
+  /** 从这条回答所在的一轮分叉出一个新会话。原会话不动。 */
+  onFork?: (itemId: string) => void;
+  /** 从这个会话分出去的会话。记号挂在各自的分叉点上，点开列出来、点一项切过去。 */
+  forks?: readonly ForkChild[];
+  onOpenSession?: (id: string) => void;
+  /**
+   * 这个会话是分叉出来的：分叉点（内核消息 id）和原会话。分叉点那一轮
+   * 底下画一条分隔线，点它回原会话。`title` 为 null = 原会话已经删了。
+   */
+  forkOrigin?: { messageId: string; title: string | null; onOpen?: () => void };
+  /**
+   * 滑到这条消息（内核消息 id）并闪一下。`[约束]` 只在历史就绪后给：
+   * 这里找不到就当那条消息已经不在了，直接 onJumped。
+   */
+  jumpTo?: { messageId: string; nonce: number };
+  onJumped?: () => void;
 }) {
   const { t } = useT();
   const boxRef = useRef<HTMLDivElement>(null);
@@ -1693,9 +1765,11 @@ export const Transcript = memo(function Transcript({
     return null;
   }, [items]);
 
-  const waitLabel = runningTool
-    ? t("transcript.wait.runningTool", { tool: runningTool })
-    : t("transcript.wait.generating");
+  const waitLabel = reconnect
+    ? t("transcript.wait.reconnecting", { attempt: reconnect.attempt, max: reconnect.max })
+    : runningTool
+      ? t("transcript.wait.runningTool", { tool: runningTool })
+      : t("transcript.wait.generating");
 
   // 连续的思考 / 工具折成组（学 Cursor）。长探索几十行连排会把回答
   // 挤出屏幕，折完对话流里剩下的才是内容。生成期间正在跑的工具也在
@@ -1755,6 +1829,68 @@ export const Transcript = memo(function Transcript({
   // 再按轮收一层。离屏的轮整个跳过排版绘制，这一层就是那个开关挂的地方
   // （见 groupTurns 和 styles.css 的 `.turn`）。
   const turns = useMemo(() => groupTurns(blocks, keyOf), [blocks, keyOf]);
+  // 分叉点落在哪一轮。轮尾是工具结果（停在工具中间）时对不上，就不画 —— 侧栏的记号还在。
+  const forkTurn = useMemo(() => {
+    const mid = forkOrigin?.messageId;
+    if (!mid) return -1;
+    return turns.findIndex((tn) => tn.blocks.some((b) => blockHasMessage(b, mid)));
+  }, [turns, forkOrigin?.messageId]);
+  const marks = useMemo(() => forkMarks(turns, forks), [turns, forks]);
+  // 记号的列表菜单。经 portal 挂到 body：会话面板（.chat-pane）自成层叠
+  // 上下文，菜单留在里面压不过面板外的东西（右侧抽屉、终端）。
+  const [markMenu, setMarkMenu] = useState<MenuState | null>(null);
+  const openSessionRef = useRef(onOpenSession);
+  openSessionRef.current = onOpenSession;
+  const openForks = useCallback<OpenForks>(
+    (e, list) => {
+      const r = e.currentTarget.getBoundingClientRect();
+      const stamp = dateTimeFormat(MARK_STAMP_OPTS);
+      const entries = list.map((f) => ({
+        label: f.title || t("transcript.forkRuleUntitled"),
+        hint: [f.createdAtMs ? stamp.format(f.createdAtMs) : "", f.branch].filter(Boolean).join(" · "),
+        action: () => openSessionRef.current?.(f.id),
+      }));
+      setMarkMenu({ x: r.left, y: r.bottom + 4, entries });
+    },
+    [t],
+  );
+  // 定位目标：哪一轮的第几块（`轮 key \n 块下标`，字符串好进依赖）。取最后一块 ——
+  // 一条回答拆成几段正文时，分叉点在它的结尾。
+  const jumpMid = jumpTo?.messageId;
+  const jumpAt = useMemo(() => {
+    if (!jumpMid) return null;
+    for (const tn of turns) {
+      for (let bi = tn.blocks.length - 1; bi >= 0; bi--) {
+        const b = tn.blocks[bi];
+        if (b && blockHasMessage(b, jumpMid)) return `${tn.key}\n${bi}`;
+      }
+    }
+    return null;
+  }, [turns, jumpMid]);
+  const jumpedRef = useRef(onJumped);
+  jumpedRef.current = onJumped;
+  useEffect(() => {
+    if (!jumpTo || !armed) return;
+    if (!jumpAt) {
+      jumpedRef.current?.();
+      return;
+    }
+    const [key, bi] = jumpAt.split("\n");
+    // 等切回来那次位置还原落稳（见上面的 layout effect，最多 150ms）再滑 ——
+    // 还原会把滑到一半的位置写回去。
+    const timer = window.setTimeout(() => {
+      const turn = [...(boxRef.current?.querySelectorAll<HTMLElement>(".turn") ?? [])].find(
+        (el) => el.dataset.turnKey === key,
+      );
+      const el = turn?.children[Number(bi)];
+      if (el) {
+        releaseStickFn.current();
+        glideToElFn.current(el, "center", true);
+      }
+      jumpedRef.current?.();
+    }, 160);
+    return () => window.clearTimeout(timer);
+  }, [jumpTo, jumpAt, armed]);
   // 每轮没渲染过时的占位高度，按内容估（见 lib/turnHeight）。列宽取渲染时
   // 量到的；第一次渲染还没有 DOM，按最宽算。渲染过的轮浏览器记着真实
   // 高度（contain-intrinsic-size 的 auto），这个估值就不再起作用。
@@ -1820,6 +1956,7 @@ export const Transcript = memo(function Transcript({
               // 懒水合的窗口按块数算，所以要用块在 blocks 里的原下标。
               const i = t.from + bi;
               const rowKey = b.kind === "row" ? keyOf(b.item.id) : "";
+              const forked = b.kind === "row" ? marks.get(b.item.id) : undefined;
               return b.kind === "row" ? (
                 <Row
                   key={rowKey}
@@ -1839,6 +1976,8 @@ export const Transcript = memo(function Transcript({
                     ? { checkpointIds, onRestoreEntry: requestRestore }
                     : {})}
                   {...(redoId && onRedo ? { redoId, onRedo } : {})}
+                  {...(onFork ? { onFork } : {})}
+                  {...(forked ? { forks: forked, onOpenForks: openForks } : {})}
                 />
               ) : (
                 <ProcessGroup
@@ -1853,6 +1992,7 @@ export const Transcript = memo(function Transcript({
               );
               });
             })()}
+            {ti === forkTurn && forkOrigin ? <ForkRule origin={forkOrigin} /> : null}
           </div>
         ))}
 
@@ -1919,6 +2059,9 @@ export const Transcript = memo(function Transcript({
       {confirmDel ? (
         <ConfirmDialog c={confirmDel} portal onClose={() => setConfirmDel(null)} />
       ) : null}
+      {markMenu
+        ? createPortal(<ContextMenu menu={markMenu} onClose={() => setMarkMenu(null)} />, document.body)
+        : null}
       {/* 叠在滚动容器外面。滚动流里 sticky + 负边距：WebKit 把按钮
           挤出视口（Mac 上看不见），Chromium 把它压扁（Windows 上不圆）。
           往上翻超过一屏才出现 —— 贴底时它只是噪音。 */}
@@ -1984,6 +2127,9 @@ export const Row = memo(function Row({
   redoId,
   onRedo,
   mutateEnabled,
+  onFork,
+  forks,
+  onOpenForks,
 }: {
   item: Item;
   /** 回答底下挂不挂操作栏：对话流里一轮只有最后一条回答挂（见 lastAssistantIndex）。默认挂。 */
@@ -2012,8 +2158,23 @@ export const Row = memo(function Row({
   onRedo?: () => void;
   /** 编辑/删除此刻可用（空闲）。生成中改历史会和正在写的轮子打架。 */
   mutateEnabled?: boolean;
+  /** 从这条回答所在的一轮分叉。不改历史，生成中也能点（操作栏只挂在已结束的轮上）。 */
+  onFork?: (itemId: string) => void;
+  /** 从这一轮分出去的会话。 */
+  forks?: readonly ForkChild[];
+  onOpenForks?: OpenForks;
 }) {
   const { t } = useT();
+  // 「已分叉 N 次」和操作栏排在同一行的最左边。
+  const foot = (bar: ReactNode) =>
+    forks && onOpenForks ? (
+      <div className="msg-foot">
+        <ForkMark forks={forks} onOpen={onOpenForks} />
+        {bar}
+      </div>
+    ) : (
+      bar
+    );
   // 编辑态挂在 Row 上（hooks 不能进 switch 分支），只有文本气泡用它。
   const [editing, setEditing] = useState(false);
   const [entering] = useState(enter);
@@ -2120,17 +2281,20 @@ export const Row = memo(function Row({
           {/* 半截话得说明白它为什么半截 —— 不标的话，用户过一会儿回来
               看到的是一句戛然而止的回答，分不清是自己停的还是模型崩了。 */}
           {item.stopped ? <div className="msg-stopped">{t("transcript.msg.stopped")}</div> : null}
-          {actions ? (
-            <MsgActions
-              text={item.text}
-              regenEnabled={!!regenEnabled && !!onRegenerate}
-              mutateEnabled={!!mutateEnabled}
-              {...(item.at ? { at: item.at } : {})}
-              {...(onRegenerate ? { onRegenerate: () => onRegenerate(item.id) } : {})}
-              {...(onEditEntry ? { onEdit: () => setEditing(true) } : {})}
-              {...(onDeleteEntry ? { onDelete: () => onDeleteEntry(item) } : {})}
-            />
-          ) : null}
+          {foot(
+            actions ? (
+              <MsgActions
+                text={item.text}
+                regenEnabled={!!regenEnabled && !!onRegenerate}
+                mutateEnabled={!!mutateEnabled}
+                {...(item.at ? { at: item.at } : {})}
+                {...(onRegenerate ? { onRegenerate: () => onRegenerate(item.id) } : {})}
+                {...(onFork ? { onFork: () => onFork(item.id) } : {})}
+                {...(onEditEntry ? { onEdit: () => setEditing(true) } : {})}
+                {...(onDeleteEntry ? { onDelete: () => onDeleteEntry(item) } : {})}
+              />
+            ) : null,
+          )}
         </div>
       );
     case "thinking":
@@ -2220,6 +2384,15 @@ const FULL_STAMP_OPTS: Intl.DateTimeFormatOptions = {
   timeStyle: "medium",
 };
 
+/** 分叉列表里的时刻：几个分叉常常隔天，要带日期。 */
+const MARK_STAMP_OPTS: Intl.DateTimeFormatOptions = {
+  month: "numeric",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+};
+
 /** 悬停出现的消息操作：复制 / 重新生成 / 上下文编辑 / 删除，末尾是时刻。
  *  占位始终在，hover 才可见。 */
 /**
@@ -2250,6 +2423,44 @@ function BuildCard({ item }: { item: Extract<Item, { kind: "user" }> }) {
   );
 }
 
+/** 分叉点：继承来的对话到这里为止，往下是这个会话自己的。 */
+function ForkRule({
+  origin,
+}: {
+  origin: { title: string | null; onOpen?: () => void };
+}) {
+  const { t } = useT();
+  return (
+    <div className="compact-rule fork-rule" role="separator">
+      {origin.title !== null && origin.onOpen ? (
+        <button type="button" className="fork-rule-link" onClick={origin.onOpen}>
+          <BranchIcon />
+          {t("transcript.forkRule", { title: origin.title || t("transcript.forkRuleUntitled") })}
+        </button>
+      ) : (
+        <span>{t("transcript.forkRuleGone")}</span>
+      )}
+    </div>
+  );
+}
+
+/** 操作栏那一行最左边的「已分叉 N 次」。常显，点开列出从这一轮分出去的会话。 */
+function ForkMark({ forks, onOpen }: { forks: readonly ForkChild[]; onOpen: OpenForks }) {
+  const { t, tn } = useT();
+  return (
+    <button
+      type="button"
+      className="fork-mark"
+      aria-haspopup="menu"
+      title={t("transcript.forks.title")}
+      onClick={(e) => onOpen(e, forks)}
+    >
+      <BranchIcon size={12} />
+      {tn("transcript.forks.count", forks.length)}
+    </button>
+  );
+}
+
 function MsgActions({
   text,
   at,
@@ -2260,6 +2471,7 @@ function MsgActions({
   onRestore,
   onRedo,
   mutateEnabled,
+  onFork,
 }: {
   text: string;
   /** 消息产生的时刻（Unix 毫秒）。undefined = 老记录没有，不显示。 */
@@ -2276,6 +2488,8 @@ function MsgActions({
   onRedo?: () => void;
   /** 编辑/删除此刻可用（空闲）。 */
   mutateEnabled?: boolean;
+  /** 分叉到新会话。undefined = 不画。 */
+  onFork?: () => void;
 }) {
   const { t } = useT();
   const [copied, flashCopied] = useTimedFlag(false, 1500);
@@ -2306,6 +2520,17 @@ function MsgActions({
           onClick={() => onRegenerate()}
         >
           <RegenIcon />
+        </button>
+      ) : null}
+      {onFork ? (
+        <button
+          type="button"
+          className="msg-action"
+          title={t("transcript.msg.fork")}
+          aria-label={t("transcript.msg.fork")}
+          onClick={onFork}
+        >
+          <BranchIcon />
         </button>
       ) : null}
       {onEdit ? (

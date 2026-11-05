@@ -906,14 +906,20 @@ mod tests {
     #[test]
     fn 相对路径计算() {
         assert_eq!(
-            relative_path(Path::new("top/poppler/lib"), Path::new("top/poppler/share/terminfo")),
+            relative_path(
+                Path::new("top/poppler/lib"),
+                Path::new("top/poppler/share/terminfo")
+            ),
             Path::new("../share/terminfo")
         );
         assert_eq!(
             relative_path(Path::new("top/lib"), Path::new("top/lib/libx.1.dylib")),
             Path::new("libx.1.dylib")
         );
-        assert_eq!(relative_path(Path::new("a/b"), Path::new("a/b")), Path::new("."));
+        assert_eq!(
+            relative_path(Path::new("a/b"), Path::new("a/b")),
+            Path::new(".")
+        );
     }
 
     /// 目标在包里根本不存在的（打包机器上就悬空的、或者指向包外系统文件的）
@@ -944,7 +950,10 @@ mod tests {
             "指向系统文件的链接不能落地"
         );
         assert!(
-            staging.join("pack/poppler/lib/terminfo").symlink_metadata().is_err(),
+            staging
+                .join("pack/poppler/lib/terminfo")
+                .symlink_metadata()
+                .is_err(),
             "包里没有目标的链接不落地"
         );
     }

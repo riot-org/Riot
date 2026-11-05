@@ -5,13 +5,14 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { SessionInfo } from "../bridge";
+import { projectRootOf, type SessionInfo } from "../bridge";
 import { useImeGuard } from "../hooks/useImeGuard";
 import { useT } from "../i18n";
 import { shortcut } from "../lib/keys";
 import { basename } from "../pathDisplay";
 import { Chevron } from "./Chevron";
 import {
+  BranchIcon,
   ClockIcon,
   DotsIcon,
   FolderIcon,
@@ -80,6 +81,9 @@ export interface SidebarProps {
   onRenameCancel: () => void;
   /** 收起侧栏。按钮坐在侧栏顶栏；收起后入口回到主区顶栏。 */
   onCollapse: () => void;
+  /** 没有会话认领的 worktree 有几个。>0 时侧栏底部挂一条提示。 */
+  orphanWorktrees: number;
+  onOrphanWorktrees: () => void;
 }
 
 export function Sidebar(props: SidebarProps) {
@@ -117,16 +121,18 @@ export function Sidebar(props: SidebarProps) {
   useEffect(() => {
     if (active && active !== prevActive.current) {
       const s = sessions.find((x) => x.id === active);
-      if (s) expandProject(s.root);
+      if (s) expandProject(projectRootOf(s));
     }
     prevActive.current = active;
   }, [active, sessions, expandProject]);
 
+  // worktree 会话归原项目（它的 root 是应用自己建的目录）。
   // 有会话但不在项目列表里的根也要显示（理论上不会发生，但真发生时
   // 隐藏会话比多显示一个组糟得多）。
   const roots = [...projects];
   for (const s of sessions) {
-    if (!roots.includes(s.root)) roots.push(s.root);
+    const root = projectRootOf(s);
+    if (!roots.includes(root)) roots.push(root);
   }
 
   return (
@@ -176,8 +182,8 @@ export function Sidebar(props: SidebarProps) {
               aria-expanded={!projectsFolded}
               onClick={toggleProjectsFolded}
             >
-              <Chevron open={!projectsFolded} />
               <span className="section-name">{t("app.sidebar.projects")}</span>
+              <Chevron open={!projectsFolded} solid />
               {projectsFolded ? <span className="project-count">{roots.length}</span> : null}
             </button>
             <button className="row-btn" onClick={onOpenProject} title={t("app.openDir")}>
@@ -197,7 +203,7 @@ export function Sidebar(props: SidebarProps) {
                 {...props}
                 root={root}
                 gone={props.missing.has(root)}
-                sessions={sessions.filter((s) => s.root === root)}
+                sessions={sessions.filter((s) => projectRootOf(s) === root)}
                 collapsed={collapsed.has(root)}
                 onToggle={() => toggleCollapsed(root)}
                 onExpand={() => expandProject(root)}
@@ -208,6 +214,12 @@ export function Sidebar(props: SidebarProps) {
       </nav>
 
       <div className="sidebar-foot">
+        {props.orphanWorktrees > 0 ? (
+          <button className="side-item side-warn" onClick={props.onOrphanWorktrees}>
+            <BranchIcon />
+            <span className="side-label">{tn("app.sidebar.orphanWorktrees", props.orphanWorktrees)}</span>
+          </button>
+        ) : null}
         <button className="side-item" onClick={onSettings}>
           <GearIcon />
           <span className="side-label">{t("app.sidebar.settings")}</span>
@@ -366,7 +378,23 @@ function ProjectGroup(
               </span>
             </>
           ) : (
-            <span className="thread-title">{s.title ?? t("app.newSession")}</span>
+            <>
+              {/* 分叉出来的会话标题沿用原会话的，靠这枚记号区分。 */}
+              {s.forkedFrom ? (
+                <span className="thread-fork" title={t("app.session.forked")}>
+                  <BranchIcon size={12} />
+                </span>
+              ) : null}
+              <span className="thread-title">{s.title ?? t("app.newSession")}</span>
+              {/* 在 worktree 里的：分支名是它和同名会话唯一的区别，放右边不参与截断。 */}
+              {s.forkedFrom?.worktree ? (
+                <span className="thread-meta">
+                  <span className="thread-branch" title={s.forkedFrom.worktree.path}>
+                    {s.forkedFrom.worktree.branch.replace(/^riot\//, "")}
+                  </span>
+                </span>
+              ) : null}
+            </>
           )}
         </button>
         <button className="row-btn" onClick={(e) => onSessionMenu(e, s)} title={t("app.session.actions")}>
@@ -397,7 +425,6 @@ function ProjectGroup(
           title={gone ? t("app.project.titleGone", { root }) : root}
           onClick={onToggle}
         >
-          <Chevron open={!collapsed} />
           <FolderIcon />
           <span className="project-name">{name}</span>
           {gone ? (
@@ -405,6 +432,7 @@ function ProjectGroup(
               {t("app.project.gone")}
             </span>
           ) : null}
+          <Chevron open={!collapsed} solid />
           {busy ? (
             <span
               className="thread-busy"

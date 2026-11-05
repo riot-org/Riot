@@ -15,7 +15,6 @@ import {
   type Nudge,
   type PermissionMode,
   pickFiles,
-  type ProviderConfig,
   readImage,
   searchFiles,
   setConfig as saveConfig,
@@ -94,11 +93,12 @@ import {
   effortLabel,
   effortPolicy,
 } from "../../lib/effort";
+import { endpointKey, loadRecentModels, parseEndpointKey, pushRecentModel } from "../../lib/recentModels";
 import { ArrowUpIcon, ForkIcon, PlusIcon, StopIcon } from "../icons";
 import {
   ModeMenu,
   Picker,
-  type PickerSection,
+  type PickerGroup,
   type PickerSubmenu,
   type WorkMode,
   isExecPermissionMode,
@@ -166,6 +166,7 @@ export function ComposerDock({
   armed = true,
   planReady = false,
   onBuildAvailable,
+  onFork,
 }: {
   sessionId: string;
   /** 会话的项目根。斜杠命令要按它找项目级 commands/。 */
@@ -226,6 +227,8 @@ export function ComposerDock({
   planReady?: boolean;
   /** 「构建」键此刻在不在（计划面板底部的提示按它写）。 */
   onBuildAvailable?: (on: boolean) => void;
+  /** `/fork`：从最近一轮已经结束的回答分叉。false = 还没有能分叉的回答。 */
+  onFork?: () => boolean;
 }) {
   const { t } = useT();
   // 编辑区是**非受控**的：内容住在 DOM 里，这些 state 只是它的投影。
@@ -385,33 +388,85 @@ export function ComposerDock({
   const hasKey = hasActiveKey(config, activeProvider?.id ?? sessionProviderId);
 
   // 内联切换：只改**这个会话**的 provider/model。全局 active_* 是新会话
-  // 的默认，写进去的话 A 换模型 B 的输入框跟着跳。切 provider 时若当前
-  // 模型不属于新家，跳到新家的第一个模型。
-  const switchProvider = (p: ProviderConfig) => {
-    if (p.id === sessionProviderId) return;
-    const nextModel = p.models.some((m) => m.id === sessionModelId)
-      ? sessionModelId
-      : (p.models[0]?.id ?? "");
-    void setSessionModel(sessionId, p.id, nextModel)
-      .then(() => onSessionEndpoint(p.id, nextModel))
+  // 的默认，写进去的话 A 换模型 B 的输入框跟着跳。菜单里每一项都是
+  // 「服务方 + 模型」，两个一起写 —— 只写 model 的话，服务方为空时会留下
+  // 「模型有值、provider 是空 id」，keyStatus 按空 id 查不到，表现为 key
+  // 已保存、横幅却说没配。
+  const [recentModels, setRecentModels] = useState(loadRecentModels);
+  const switchEndpoint = (key: string) => {
+    const { provider, model } = parseEndpointKey(key);
+    if (provider === sessionProviderId && model === sessionModelId) return;
+    setRecentModels(pushRecentModel({ provider, model }));
+    void setSessionModel(sessionId, provider, model)
+      .then(() => onSessionEndpoint(provider, model))
       .catch(() => {});
   };
-  const switchModel = (m: string) => {
-    if (m === sessionModelId && activeProvider?.id === sessionProviderId) return;
-    // 菜单里列的是当前会话服务方（含 providers[0] 兜底）的模型，所以
-    // provider 要一起写。只写 model 的话，服务方为空时会留下
-    // 「模型有值、provider 是空 id」—— keyStatus 按空 id 查不到，
-    // 表现为 key 已保存、横幅却说没配。
-    const provider = activeProvider?.id ?? sessionProviderId;
-    void setSessionModel(sessionId, provider, m)
-      .then(() => onSessionEndpoint(provider, m))
-      .catch(() => {});
-  };
+
+  const modelGroups: PickerGroup[] = cfg.providers.map((p) => {
+    const noKey = !config.keyStatus[p.id];
+    return {
+      id: p.id,
+      title: p.name,
+      dim: noKey,
+      ...(noKey
+        ? {
+            note: t("composer.provider.noKey"),
+            warn: true,
+            action: { label: t("composer.provider.setup"), onClick: onOpenSettings },
+          }
+        : p.models.length === 0
+          ? { note: t("composer.model.empty") }
+          : {}),
+      items: p.models.map((m) => ({
+        id: endpointKey({ provider: p.id, model: m.id }),
+        // 有显示名就用它。菜单里那一列越短越好读，模型 ID 常常很长。
+        label: m.name?.trim() || m.id,
+        active: p.id === activeProvider?.id && m.id === sessionModelId,
+        ...(m.vision ? { vision: true } : {}),
+        ...(m.contextWindow ? { note: fmtTokens(m.contextWindow) } : {}),
+      })),
+    };
+  });
+  // 只有一家服务方时，最近使用就是同一列的子集，不值得占地方。
+  const recentItems =
+    cfg.providers.filter((p) => p.models.length > 0).length > 1
+      ? recentModels.flatMap((e) => {
+          const p = cfg.providers.find((x) => x.id === e.provider);
+          const m = p?.models.find((x) => x.id === e.model);
+          if (!p || !m) return [];
+          return [
+            {
+              id: endpointKey(e),
+              label: m.name?.trim() || m.id,
+              active: p.id === activeProvider?.id && m.id === sessionModelId,
+              note: p.name,
+            },
+          ];
+        })
+      : [];
+  if (recentItems.length > 1) {
+    modelGroups.unshift({
+      id: "\nrecent",
+      title: t("composer.model.recent"),
+      items: recentItems,
+      hideOnSearch: true,
+    });
+  }
+  const activeModelLabel = modelLabel(activeProvider, sessionModelId);
+  // 同名模型别家也有（同一个 Claude 走不同网关），pill 上得标出是哪家。
+  const ambiguousModel =
+    !!activeModelLabel &&
+    cfg.providers.some(
+      (p) =>
+        p.id !== activeProvider?.id &&
+        p.models.some((m) => m.id === sessionModelId || (m.name?.trim() || m.id) === activeModelLabel),
+    );
 
   // 思考力度跟着会话走，下一轮生效。放在模型菜单里（Claude 桌面端同款）：
   // 它和模型一起决定"这一轮想多深、花多少"。
   const currentEffort = effortKey(sessionThinking);
   const effortSubmenu: PickerSubmenu = {
+    id: "effort",
     label: EFFORT_TITLE,
     value: effortLabel(sessionThinking),
     items: EFFORT_OPTIONS.map((o) => ({
@@ -465,9 +520,13 @@ export function ComposerDock({
       )
     : (cfg.compactThresholdTokens ?? DEFAULT_COMPACT_THRESHOLD);
 
-  const windowSection: PickerSection | undefined = activeModelCfg
+  const windowSubmenu: PickerSubmenu | undefined = activeModelCfg
     ? {
-        title: t("composer.contextWindow"),
+        id: "window",
+        label: t("composer.contextWindow"),
+        value: fmtTokens(
+          activeModelCfg.contextWindow ?? cfg.compactThresholdTokens ?? DEFAULT_COMPACT_THRESHOLD,
+        ),
         items: [
           {
             id: "",
@@ -747,7 +806,7 @@ export function ComposerDock({
     // 只附了图/只挂了块、什么都没打也算一条消息 —— "看这个截图"、
     // "看看这个文件"都是这么发的（见 canSend）。
     // busy 不拦：模型干活时发的消息进排队面板，内核在安全点注入。
-    if (!canSend || !hasKey || !sessionModelId) return;
+    if (!canSend) return;
 
     // 斜杠命令：内置的当场执行，能展开的展开成 prompt 再走正常发送。
     //
@@ -766,6 +825,9 @@ export function ComposerDock({
           const slash = SLASH_SUBMIT_RE.exec(text);
           return slash ? commands.find((c) => c.name === slash[1]) : undefined;
         })();
+    // `/fork` 只复制对话、不调模型：没配服务方也能用。
+    const offline = cmd?.source === "builtin" && cmd.name === "fork";
+    if (!offline && (!hasKey || !sessionModelId)) return;
     if (cmd && runnable(cmd)) {
       // 参数 = 命令块之外的文字，技能块按 `/名字` 原位放回去。
       const args = cmdSeg
@@ -823,6 +885,8 @@ export function ComposerDock({
         } catch (e) {
           setSlashNote(String(e));
         }
+      } else if (cmd.name === "fork" && onFork && !onFork()) {
+        setSlashNote(t("composer.fork.nothing"));
       }
       return;
     }
@@ -1645,40 +1709,34 @@ export function ComposerDock({
               />
             )}
             <ModeMenu value={workMode} onChange={changeWorkMode} />
-            {/* 窄列藏起来：三个 pill 并排是挤的源头，换服务方/模型去设置里也能做。 */}
             <div className="composer-picks">
               <Picker
-                title={t("composer.provider.switch")}
-                label={activeProvider?.name ?? t("composer.provider.pick")}
-                items={cfg.providers.map((p) => ({
-                  id: p.id,
-                  label: p.name,
-                  active: p.id === sessionProviderId,
-                  ...(config.keyStatus[p.id]
-                    ? {}
-                    : { note: t("composer.provider.noKey"), warn: true }),
-                }))}
-                onPick={(id) => {
-                  const p = cfg.providers.find((x) => x.id === id);
-                  if (p) switchProvider(p);
-                }}
-              />
-              <Picker
                 title={t("composer.model.switch")}
-                label={modelLabel(activeProvider, sessionModelId) || t("composer.model.pick")}
-                items={(activeProvider?.models ?? []).map((m) => ({
-                  id: m.id,
-                  // 有显示名就用它。菜单里那一列越短越好读，模型 ID 常常很长。
-                  label: m.name?.trim() || m.id,
-                  active: m.id === sessionModelId,
-                  ...(m.vision ? { vision: true } : {}),
-                  ...(m.contextWindow ? { note: fmtTokens(m.contextWindow) } : {}),
-                }))}
-                submenu={effortSubmenu}
-                {...(windowSection ? { section: windowSection } : {})}
+                label={activeModelLabel || t("composer.model.pick")}
+                hint={[
+                  ...(ambiguousModel && activeProvider ? [activeProvider.name] : []),
+                  effortSubmenu.value,
+                ].join(" · ")}
+                {...(activeProvider && sessionModelId
+                  ? { tip: `${activeProvider.name} · ${sessionModelId}` }
+                  : {})}
+                rows={[
+                  ...(windowSubmenu ? [windowSubmenu] : []),
+                  effortSubmenu,
+                  {
+                    id: "model",
+                    label: t("composer.model.row"),
+                    value: activeModelLabel || t("composer.model.pick"),
+                    groups: modelGroups,
+                    onPick: switchEndpoint,
+                    sepBefore: true,
+                    searchPlaceholder: t("composer.model.search"),
+                    noMatch: t("composer.model.noMatch"),
+                  },
+                ]}
+                empty={modelGroups.every((g) => g.items.length === 0)}
                 emptyHint={t("composer.model.empty")}
                 onEmpty={onOpenSettings}
-                onPick={switchModel}
               />
             </div>
           </div>

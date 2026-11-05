@@ -34,7 +34,10 @@ use super::request::{RetryContext, SystemSection, build_request, wire_bytes};
 use crate::retry::{GiveUpReason, RequestSource, RetryDecision, RetryPolicy, decide};
 use crate::sse::SseParser;
 use crate::transport::{HttpError, HttpRequest, HttpTransport};
-use crate::watchdog::{DEFAULT_IDLE, track_bytes, with_idle_watchdog_live};
+use crate::watchdog::{
+    DEFAULT_IDLE, Guarded, NO_HEADERS_RETRIES, STALL_RETRIES, Sent, first_byte_deadline,
+    hold_until_content, post_within, track_bytes, wait_before_retry, with_idle_watchdog_live,
+};
 
 pub struct AnthropicConfig {
     pub base_url: String,
@@ -214,6 +217,10 @@ impl Provider for AnthropicProvider {
             let mut retry_ctx = RetryContext::initial();
             let mut attempt = 0u32;
             let mut overload_streak = 0u32;
+            // 还没出内容就静默、已经重试过几次（上限见 STALL_RETRIES）。
+            let mut stalls = 0u32;
+            // 等不到响应头的那几次各等了多久（重发上限见 NO_HEADERS_RETRIES）。
+            let mut no_headers: Vec<Duration> = Vec::new();
 
             'attempts: loop {
                 if cancel.is_cancelled() {
@@ -243,9 +250,44 @@ impl Provider for AnthropicProvider {
 
                 // ── 请求阶段 ──────────────────────────────────
                 // 这里的失败可以重试：还没有任何事件流出去。
-                let byte_stream = match transport.post_sse(http_req, cancel.child_token()).await {
-                    Ok(s) => s,
-                    Err(e) => {
+                let deadline = first_byte_deadline(&http_req, idle, !no_headers.is_empty());
+                let sent = post_within(
+                    transport.as_ref(),
+                    http_req,
+                    cancel.child_token(),
+                    clock.as_ref(),
+                    deadline,
+                )
+                .await;
+                let byte_stream = match sent {
+                    Sent::Stream(s) => s,
+                    Sent::NoHeaders => {
+                        no_headers.push(deadline);
+                        let e = HttpError {
+                            timed_out: true,
+                            ..HttpError::transport("no response headers before the deadline")
+                        };
+                        let ctx = e.failure_context(source, is_subscription, attempt);
+                        match decide(&policy, &ctx, attempt as u64) {
+                            RetryDecision::Retry { after } if no_headers.len() <= NO_HEADERS_RETRIES => {
+                                tracing::warn!(attempt, waited_secs = deadline.as_secs(), "等不到响应头，放宽截止重发");
+                                yield ProviderEvent::Retrying {
+                                    attempt: no_headers.len() as u32,
+                                    max: NO_HEADERS_RETRIES as u32,
+                                };
+                                if !wait_before_retry(clock.as_ref(), after, &cancel).await {
+                                    return;
+                                }
+                                attempt += 1;
+                                continue 'attempts;
+                            }
+                            _ => {
+                                yield ProviderEvent::Error(crate::errors::no_response(&no_headers));
+                                return;
+                            }
+                        }
+                    }
+                    Sent::Failed(e) => {
                         let overloaded = e.status == Some(529);
                         if overloaded {
                             overload_streak += 1;
@@ -269,7 +311,14 @@ impl Provider for AnthropicProvider {
                         let ctx = e.failure_context(source, is_subscription, attempt);
                         match decide(&policy, &ctx, attempt as u64) {
                             RetryDecision::Retry { after } => {
-                                clock.sleep_ms(after.as_millis() as u64).await;
+                                // 按停止也会让请求以"已取消"失败：那不是故障，别报重连。
+                                if cancel.is_cancelled() {
+                                    return;
+                                }
+                                yield ProviderEvent::Retrying { attempt: attempt + 1, max: policy.max_attempts };
+                                if !wait_before_retry(clock.as_ref(), after, &cancel).await {
+                                    return;
+                                }
                                 attempt += 1;
                                 continue 'attempts;
                             }
@@ -282,20 +331,48 @@ impl Provider for AnthropicProvider {
                 };
 
                 // ── 流阶段 ────────────────────────────────────
-                // 从这里开始不再重试。见模块文档。
+                // 从这里开始出了内容就不再重试。见模块文档。还没出内容就
+                // 静默的例外，见 `watchdog::hold_until_content`。
                 // 看门狗按字节认活性：保活注释 / ping 解不出事件，但连接是活的。
                 let (byte_stream, live) = track_bytes(byte_stream);
                 let decoded = decode_stream(byte_stream);
-                let guarded = with_idle_watchdog_live(decoded, idle, Arc::clone(&clock), Some(live));
+                let guarded = hold_until_content(with_idle_watchdog_live(
+                    decoded,
+                    idle,
+                    Arc::clone(&clock),
+                    Some(live),
+                ));
                 futures::pin_mut!(guarded);
 
-                while let Some(ev) = guarded.next().await {
+                while let Some(item) = guarded.next().await {
                     if cancel.is_cancelled() {
                         return;
                     }
                     // 盖的是发出去的 model（降级后就是降级到的那个），不是
                     // 服务端回显的别名解析结果。理由见 `crate::origin`。
-                    yield crate::origin::stamp_model_origin(ev, &wire.model);
+                    match item {
+                        Guarded::Event(ev) => yield crate::origin::stamp_model_origin(ev, &wire.model),
+                        Guarded::StalledBeforeContent(ev) => {
+                            let e = HttpError::transport("stream idle before any content");
+                            let ctx = e.failure_context(source, is_subscription, attempt);
+                            match decide(&policy, &ctx, attempt as u64) {
+                                RetryDecision::Retry { after } if stalls < STALL_RETRIES => {
+                                    stalls += 1;
+                                    tracing::warn!(attempt, stalls, "还没出内容就静默超时，重试");
+                                    yield ProviderEvent::Retrying { attempt: stalls, max: STALL_RETRIES };
+                                    if !wait_before_retry(clock.as_ref(), after, &cancel).await {
+                                        return;
+                                    }
+                                    attempt += 1;
+                                    continue 'attempts;
+                                }
+                                _ => {
+                                    yield crate::origin::stamp_model_origin(ev, &wire.model);
+                                    return;
+                                }
+                            }
+                        }
+                    }
                 }
                 return;
             }
@@ -570,6 +647,141 @@ mod tests {
         assert!(matches!(events.last(), Some(ProviderEvent::Error(_))));
     }
 
+    fn is_idle_error(ev: &ProviderEvent) -> bool {
+        matches!(
+            ev,
+            ProviderEvent::Error(ProviderError::Transport { error }) if error.key() == "kernel.provider.idle"
+        )
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn 还没出内容就静默会重试() {
+        // 网关拿了响应头就憋着，一个字节都不发：什么都还没画，重试安全。
+        // 不重试的话这一轮直接报错，用户得自己打「继续」。
+        let (p, t) = provider(vec![
+            ScriptedResponse::ChunksThenHang(vec![]),
+            ScriptedResponse::Chunks(ok_chunks()),
+        ]);
+        let events = collect(&p).await;
+
+        assert_eq!(t.call_count(), 2);
+        assert!(!events.iter().any(|e| matches!(e, ProviderEvent::Error(_))));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ProviderEvent::Message(_)))
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn 只吐了用量就静默也算没出内容() {
+        // message_start 带着用量先到、正文憋着 —— 用量不是内容，照样重试，
+        // 而且作废那一次的用量不能漏给上层（会和重试那次的叠在一起）。
+        let head = concat!(
+            r#"data: {"type":"message_start","message":{"id":"msg_0","model":"claude-x","usage":{"input_tokens":999,"output_tokens":1}}}"#,
+            "\n\n",
+        );
+        let (p, t) = provider(vec![
+            ScriptedResponse::ChunksThenHang(vec![head.as_bytes().to_vec()]),
+            ScriptedResponse::Chunks(ok_chunks()),
+        ]);
+        let events = collect(&p).await;
+
+        assert_eq!(t.call_count(), 2);
+        let usages: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                ProviderEvent::Usage(u) => Some(u.input_tokens),
+                _ => None,
+            })
+            .collect();
+        assert!(!usages.contains(&999), "作废那次的用量漏出来了：{usages:?}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn 出了内容再静默不重试() {
+        let head = concat!(
+            r#"data: {"type":"message_start","message":{"id":"msg_1","model":"claude-x","usage":{"input_tokens":10,"output_tokens":1}}}"#,
+            "\n\n",
+            r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            "\n\n",
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"好"}}"#,
+            "\n\n",
+        );
+        let (p, t) = provider(vec![
+            ScriptedResponse::ChunksThenHang(vec![head.as_bytes().to_vec()]),
+            ScriptedResponse::Chunks(ok_chunks()),
+        ]);
+        let events = collect(&p).await;
+
+        assert_eq!(t.call_count(), 1, "已经画出去的字不能再来一遍");
+        assert!(events.last().is_some_and(is_idle_error));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn 一直静默重试有上限() {
+        // 每次重试都要干等满一个静默周期，不能用策略的 10 次。
+        let (p, t) = provider(vec![
+            ScriptedResponse::ChunksThenHang(vec![]),
+            ScriptedResponse::ChunksThenHang(vec![]),
+            ScriptedResponse::ChunksThenHang(vec![]),
+            ScriptedResponse::ChunksThenHang(vec![]),
+        ]);
+        let events = collect(&p).await;
+
+        assert_eq!(t.call_count(), 1 + STALL_RETRIES as usize);
+        assert!(events.last().is_some_and(is_idle_error));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn 等不到响应头_按静默阈值放弃再重发() {
+        // TUN 代理当场接通、上游不通：响应头一直不来。头一档到点就重发，
+        // 不陪代理等到它自己放弃（实测两分钟以上）。
+        let (p, t) = provider(vec![
+            ScriptedResponse::NoHeaders,
+            ScriptedResponse::Chunks(ok_chunks()),
+        ]);
+        let start = tokio::time::Instant::now();
+        let events = collect(&p).await;
+        let waited = start.elapsed();
+
+        assert_eq!(t.call_count(), 2);
+        assert!(
+            !events.iter().any(|e| matches!(e, ProviderEvent::Error(_))),
+            "{events:?}"
+        );
+        assert!(
+            waited >= DEFAULT_IDLE && waited < DEFAULT_IDLE + Duration::from_secs(5),
+            "{waited:?}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn 重发放宽了也等不到就报没有回应() {
+        let (p, t) = provider(vec![
+            ScriptedResponse::NoHeaders,
+            ScriptedResponse::NoHeaders,
+            ScriptedResponse::Chunks(ok_chunks()),
+        ]);
+        let events = collect(&p).await;
+
+        assert_eq!(
+            t.call_count(),
+            1 + NO_HEADERS_RETRIES,
+            "宽档都等不到就是真不通，别再发"
+        );
+        let Some(ProviderEvent::Error(e)) = events.last() else {
+            panic!("最后该是错误：{events:?}");
+        };
+        let ui = e.ui_error();
+        assert_eq!(ui.key(), "kernel.provider.noResponse");
+        assert_eq!(
+            ui.detail.as_deref(),
+            Some("no response headers: waited 90s, then 600s"),
+            "第二次放宽到宽档；每次等了多久要写给用户看"
+        );
+    }
+
     #[tokio::test(start_paused = true)]
     async fn 认证失败只重试一次() {
         let (p, t) = provider(vec![
@@ -585,9 +797,58 @@ mod tests {
              靠 max_attempts 兜的话，用户要干等十轮退避才看到「密钥无效」"
         );
         assert!(matches!(
-            events[0],
-            ProviderEvent::Error(ProviderError::Auth { .. })
+            events.last(),
+            Some(ProviderEvent::Error(ProviderError::Auth { .. }))
         ));
+    }
+
+    /// 每次重试前报一次「第几次 / 这一类最多几次」，界面据此显示重连进度。
+    /// 三类失败的上限各不相同，分母要照实报。
+    #[tokio::test(start_paused = true)]
+    async fn 重试前报重连进度_分母按失败类型() {
+        let retrying = |events: &[ProviderEvent]| -> Vec<(u32, u32)> {
+            events
+                .iter()
+                .filter_map(|e| match e {
+                    ProviderEvent::Retrying { attempt, max } => Some((*attempt, *max)),
+                    _ => None,
+                })
+                .collect()
+        };
+        let max = RetryPolicy::default().max_attempts;
+
+        let (p, _) = provider(vec![
+            ScriptedResponse::Fail(HttpError::status(503, "busy")),
+            ScriptedResponse::Fail(HttpError::status(503, "busy")),
+            ScriptedResponse::Chunks(ok_chunks()),
+        ]);
+        let events = collect(&p).await;
+        assert_eq!(retrying(&events), vec![(1, max), (2, max)]);
+        let first_content = events
+            .iter()
+            .position(|e| matches!(e, ProviderEvent::Delta(_)))
+            .expect("重试成功后要有内容");
+        assert!(
+            events[..first_content]
+                .iter()
+                .all(|e| matches!(e, ProviderEvent::Retrying { .. })),
+            "重连进度要在新内容之前报：{events:?}"
+        );
+
+        let (p, _) = provider(vec![
+            ScriptedResponse::ChunksThenHang(vec![]),
+            ScriptedResponse::Chunks(ok_chunks()),
+        ]);
+        assert_eq!(retrying(&collect(&p).await), vec![(1, STALL_RETRIES)]);
+
+        let (p, _) = provider(vec![
+            ScriptedResponse::NoHeaders,
+            ScriptedResponse::Chunks(ok_chunks()),
+        ]);
+        assert_eq!(
+            retrying(&collect(&p).await),
+            vec![(1, NO_HEADERS_RETRIES as u32)]
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -758,6 +1019,74 @@ mod tests {
 
         assert_eq!(t.call_count(), 0);
         assert!(events.is_empty(), "取消不产生错误事件，主循环自己会发 Done");
+    }
+
+    /// 限流让它退避 30 秒，用户一秒后按了停止：不等退避睡醒。压缩、总结
+    /// 直接读这条流，没有主循环那层宽限期兜着。
+    #[tokio::test(start_paused = true)]
+    async fn 退避中取消立刻结束() {
+        let (p, t) = provider(vec![
+            ScriptedResponse::Fail(HttpError {
+                status: Some(429),
+                retry_after_secs: Some(30),
+                ..Default::default()
+            }),
+            ScriptedResponse::Chunks(ok_chunks()),
+        ]);
+        let cancel = CancellationToken::new();
+        let canceller = {
+            let cancel = cancel.clone();
+            tokio::spawn(async move {
+                TokioClock.sleep_ms(1_000).await;
+                cancel.cancel();
+            })
+        };
+        let start = tokio::time::Instant::now();
+        let events: Vec<_> = p.stream(req(), cancel).collect().await;
+        canceller.await.unwrap();
+
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            start.elapsed()
+        );
+        assert_eq!(t.call_count(), 1, "取消之后不该再发重试");
+        assert_eq!(
+            events,
+            vec![ProviderEvent::Retrying {
+                attempt: 1,
+                max: 10
+            }],
+            "退避开始前报过一次重连，取消之后什么都不该再有"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn 按停止导致的请求失败不报重连() {
+        // 停止键让 transport 以"已取消"失败，这一下也会走进重试判断。
+        // 报一句"正在重新连接"会让界面在用户刚按完停止时闪一下。
+        struct StoppedMidRequest(CancellationToken);
+        #[async_trait]
+        impl HttpTransport for StoppedMidRequest {
+            async fn post_sse(
+                &self,
+                _req: HttpRequest,
+                _cancel: CancellationToken,
+            ) -> Result<crate::transport::ByteStream, HttpError> {
+                self.0.cancel();
+                Err(HttpError::transport("request cancelled"))
+            }
+        }
+
+        let cancel = CancellationToken::new();
+        let p = AnthropicProvider::new(
+            Arc::new(StoppedMidRequest(cancel.clone())),
+            Arc::new(TokioClock),
+            sections(),
+            AnthropicConfig::default(),
+        );
+        let events: Vec<_> = p.stream(req(), cancel).collect().await;
+        assert!(events.is_empty(), "{events:?}");
     }
 
     #[test]

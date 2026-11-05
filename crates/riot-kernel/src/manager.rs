@@ -648,6 +648,28 @@ impl SessionManager {
         Ok(s.redo().await?)
     }
 
+    /// 分叉成新会话 `target`。新会话不进内存 —— 宿主切过去时照常 resume，
+    /// 从刚写好的 transcript 水合。
+    pub async fn fork(
+        &self,
+        session_id: &str,
+        message_id: &str,
+        target: &SessionId,
+        worktree: Option<&riot_protocol::ForkWorktree>,
+    ) -> Result<crate::session::Forked, RpcError> {
+        let s = self.require(session_id).await?;
+        Ok(s.fork_into(message_id, target, worktree).await?)
+    }
+
+    pub async fn fork_preview(
+        &self,
+        session_id: &str,
+        message_id: &str,
+    ) -> Result<riot_protocol::ForkPreview, RpcError> {
+        let s = self.require(session_id).await?;
+        Ok(s.fork_preview(message_id).await?)
+    }
+
     pub async fn queue_list(&self, session_id: &str) -> Vec<riot_protocol::QueuedSummary> {
         match self.get(session_id).await {
             Some(s) => s.queue_snapshot(),

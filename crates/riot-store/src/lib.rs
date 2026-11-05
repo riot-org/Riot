@@ -133,6 +133,25 @@ pub enum Record {
         request_id: String,
         response: PermissionResponse,
     },
+    /// 这个会话是从别的会话分叉出来的（见 [`Transcripts::write_fork`]）。
+    /// 紧跟在 Meta 后面，只出现一次。
+    ///
+    /// 不放进 [`TranscriptMeta`]：那是会话的身份，到处都在构造；血缘只有
+    /// 分叉这一处写、水合和索引重建两处读。旧加载器不认识这行会当坏行
+    /// 跳过，丢的只是"从哪来"，对话本身完整。
+    ForkOrigin(ForkOrigin),
+}
+
+/// 分叉的来源：哪个会话、到哪条消息为止。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForkOrigin {
+    pub session: SessionId,
+    /// 分叉点：新会话历史的最后一条消息（原会话里那一轮的结尾）。
+    pub message: String,
+    /// 新会话在自己的 worktree 里（见 [`riot_protocol::ForkWorktree`]）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<riot_protocol::ForkWorktree>,
 }
 
 /// transcript 里记下的一张用户附图。`text` 有值 = 当时是视觉兼容的转述图。
@@ -219,6 +238,8 @@ pub struct LoadedTranscript {
     pub archived: Vec<Message>,
     /// 还在等用户决定的挂起（见 [`Record::Suspend`]）。
     pub suspended: Option<SuspendState>,
+    /// 分叉来源（见 [`Record::ForkOrigin`]）。不是分叉出来的会话为 None。
+    pub forked_from: Option<ForkOrigin>,
 }
 
 /// 挂起记录还作不作数：它的调用都还在活历史里，而且一个结果都没有。
@@ -242,6 +263,8 @@ pub struct ScannedTranscript {
     pub meta: TranscriptMeta,
     /// 第一条用户消息的文本。标题重建用；没说过话就是 None。
     pub first_prompt: Option<String>,
+    /// 分叉来源（见 [`Record::ForkOrigin`]）。索引重建后侧栏照样认得出分叉。
+    pub forked_from: Option<ForkOrigin>,
 }
 
 /// 一个目录下所有会话的 transcript。
@@ -297,6 +320,7 @@ impl Transcripts {
             live: Vec::new(),
             archived: Vec::new(),
             suspended: None,
+            forked_from: None,
         };
         let path = self.path_of(id);
         let bytes = match tokio::fs::read(&path).await {
@@ -313,6 +337,7 @@ impl Transcripts {
         let mut archived = Vec::new();
         let mut rewind_stack = Vec::new();
         let mut suspended: Option<SuspendState> = None;
+        let mut forked_from = None;
         let mut skipped = 0usize;
         for (i, line) in bytes.split(|&b| b == b'\n').enumerate() {
             if line.is_empty() {
@@ -368,6 +393,11 @@ impl Transcripts {
                         st.answers.insert(request_id, response);
                     }
                 }
+                Ok(Record::ForkOrigin(o)) => {
+                    if forked_from.is_none() {
+                        forked_from = Some(o);
+                    }
+                }
                 Err(e) => {
                     skipped += 1;
                     tracing::debug!(line = i + 1, error = %e, "transcript 有读不懂的行");
@@ -387,7 +417,73 @@ impl Transcripts {
             live,
             archived,
             suspended,
+            forked_from,
         }
+    }
+
+    /// 写一份分叉出来的 transcript：Meta、来源、`archived`、（有归档时）
+    /// 一条压缩边界、`live`。
+    ///
+    /// 写的是**加载结果**，不是原文件的逐行副本：Rewind / Edit / Delete 都已经
+    /// 应用好，新文件里没有要重放的编辑记录，加载出来和传进来的逐条相同。
+    /// 多次压缩合成一条边界 —— [`Self::load_parts`] 本来就把归档并成一份。
+    ///
+    /// `rewrite` = 把每行序列化结果里的 `from` 换成 `to`（按 JSON 转义后的
+    /// 形式匹配）。给工件路径用：消息里引用的是原会话的工件目录。
+    ///
+    /// 先写临时文件再改名，目标已存在就报 `AlreadyExists` —— 分叉绝不能
+    /// 盖掉一个会话。
+    // 豁免理由：持久化层就是 FileSystem 抽象的真实一侧（见模块文档）。
+    #[allow(clippy::disallowed_methods)]
+    pub async fn write_fork(
+        &self,
+        meta: &TranscriptMeta,
+        origin: &ForkOrigin,
+        archived: &[Message],
+        live: &[Message],
+        rewrite: Option<(&str, &str)>,
+    ) -> std::io::Result<()> {
+        let path = self.path_of(&meta.id);
+        if tokio::fs::try_exists(&path).await? {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                format!("{} 已存在", path.display()),
+            ));
+        }
+        let rewrite = match rewrite {
+            Some((from, to)) => Some((json_escaped(from)?, json_escaped(to)?)),
+            None => None,
+        };
+        let mut records = Vec::with_capacity(archived.len() + live.len() + 3);
+        records.push(Record::Meta(meta.clone()));
+        records.push(Record::ForkOrigin(origin.clone()));
+        let message = |m: &Message| Record::Message {
+            message: Box::new(m.clone()),
+        };
+        records.extend(archived.iter().map(message));
+        if !archived.is_empty() {
+            // token 数只是诊断，原会话最后一次压缩的数加载结果里没有。
+            records.push(Record::CompactBoundary {
+                before_tokens: 0,
+                after_tokens: 0,
+                keep_from: None,
+            });
+        }
+        records.extend(live.iter().map(message));
+
+        let mut out = String::new();
+        for r in &records {
+            let line = serde_json::to_string(r).map_err(std::io::Error::other)?;
+            match &rewrite {
+                Some((from, to)) => out.push_str(&line.replace(from.as_str(), to)),
+                None => out.push_str(&line),
+            }
+            out.push('\n');
+        }
+        tokio::fs::create_dir_all(&self.dir).await?;
+        let tmp = path.with_extension("jsonl.tmp");
+        tokio::fs::write(&tmp, out).await?;
+        tokio::fs::rename(&tmp, &path).await
     }
 
     /// 扫描目录里所有 transcript 的首行元数据和第一句用户输入。
@@ -591,6 +687,13 @@ fn apply_delete(live: &mut Vec<Message>, archived: &mut Vec<Message>, id: &str) 
     }
 }
 
+/// 一段文本在 JSON 字符串里的样子（不带两边引号）。Windows 路径的反斜杠
+/// 序列化后是双写的，拿原文去匹配序列化结果会落空。
+fn json_escaped(s: &str) -> std::io::Result<String> {
+    let quoted = serde_json::to_string(s).map_err(std::io::Error::other)?;
+    Ok(quoted[1..quoted.len() - 1].to_owned())
+}
+
 fn scan_one(path: &Path) -> Option<ScannedTranscript> {
     let f = std::fs::File::open(path).ok()?;
     let mut lines = std::io::BufReader::new(f).lines();
@@ -603,9 +706,15 @@ fn scan_one(path: &Path) -> Option<ScannedTranscript> {
     // 找第一条消息。正常情况它就是第二行（历史总以用户消息开头）；
     // 上限兜住"前面塞了一堆坏行"的病态文件，别在重建路径上读到天荒地老。
     let mut first_prompt = None;
+    let mut forked_from = None;
     for line in lines.take(50) {
         let Ok(line) = line else { break };
-        if let Ok(Record::Message { message }) = serde_json::from_str::<Record>(&line) {
+        let record = serde_json::from_str::<Record>(&line);
+        if let Ok(Record::ForkOrigin(o)) = record {
+            forked_from = Some(o);
+            continue;
+        }
+        if let Ok(Record::Message { message }) = record {
             if let Message::User { content, .. } = message.as_ref() {
                 first_prompt = content.iter().find_map(|c| match c {
                     UserContent::Text { text } => {
@@ -618,7 +727,11 @@ fn scan_one(path: &Path) -> Option<ScannedTranscript> {
             break;
         }
     }
-    Some(ScannedTranscript { meta, first_prompt })
+    Some(ScannedTranscript {
+        meta,
+        first_prompt,
+        forked_from,
+    })
 }
 
 enum Cmd {
@@ -1794,5 +1907,161 @@ mod tests {
 
         let (_, msgs) = store.load(&SessionId::from_raw("s1")).await;
         assert_eq!(msgs, vec![user("m2", "下一轮")], "整轮消失，后面的保留");
+    }
+
+    fn origin(session: &str, message: &str) -> ForkOrigin {
+        ForkOrigin {
+            session: SessionId::from_raw(session),
+            message: message.into(),
+            worktree: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn 分叉写出的会话加载结果和传进去的一样() {
+        // 原会话压缩过、回退过、改过字：分叉写的是加载结果，新文件里不该再有
+        // 任何要重放的编辑记录，加载出来逐条相同，归档仍在分割线上面。
+        let d = dir();
+        let store = Transcripts::new(d.path());
+        let log = store.open(meta("src"));
+        log.append(&user("m1", "压缩前"));
+        log.append(&assistant("a1", "旧答"));
+        log.append_boundary(1000, 100, None);
+        log.append(&user("m2", "压缩后"));
+        log.append(&assistant("a2", "要丢掉的"));
+        log.append_rewind("m2");
+        log.append(&assistant("a3", "新答"));
+        log.append_edit("a3", "改过的新答", None, None);
+        log.append(&user("m3", "分叉点之后"));
+        log.flush().await;
+        let src = store.load_parts(&SessionId::from_raw("src")).await;
+
+        let kept = &src.live[..2];
+        store
+            .write_fork(
+                &meta("dst"),
+                &origin("src", "a3"),
+                &src.archived,
+                kept,
+                None,
+            )
+            .await
+            .expect("写分叉");
+
+        let fork = store.load_parts(&SessionId::from_raw("dst")).await;
+        assert_eq!(fork.meta, Some(meta("dst")));
+        assert_eq!(fork.forked_from, Some(origin("src", "a3")));
+        assert_eq!(fork.archived, src.archived, "归档原样带过去");
+        assert_eq!(
+            fork.live,
+            vec![user("m2", "压缩后"), assistant("a3", "改过的新答")]
+        );
+        let raw = std::fs::read_to_string(d.path().join("dst.jsonl")).expect("读");
+        assert!(
+            !raw.contains("rewind") && !raw.contains("\"type\":\"edit\""),
+            "{raw}"
+        );
+        assert!(!raw.contains("要丢掉的"), "截掉的尾巴不该被带进新会话");
+
+        // 原会话一个字节都不动
+        assert!(
+            store
+                .load_parts(&SessionId::from_raw("src"))
+                .await
+                .forked_from
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn 分叉没有归档时不写压缩边界() {
+        let d = dir();
+        let store = Transcripts::new(d.path());
+        let live = vec![user("m1", "一"), assistant("a1", "答")];
+        store
+            .write_fork(&meta("dst"), &origin("src", "a1"), &[], &live, None)
+            .await
+            .expect("写分叉");
+        let raw = std::fs::read_to_string(d.path().join("dst.jsonl")).expect("读");
+        assert!(!raw.contains("compact_boundary"));
+        let fork = store.load_parts(&SessionId::from_raw("dst")).await;
+        assert!(fork.archived.is_empty());
+        assert_eq!(fork.live, live);
+    }
+
+    #[tokio::test]
+    async fn 分叉之后新会话照常追加() {
+        // 新会话的句柄打开的是已经存在的文件：不能再写一遍 Meta，也不能
+        // 把来源那行冲掉。
+        let d = dir();
+        let store = Transcripts::new(d.path());
+        store
+            .write_fork(
+                &meta("dst"),
+                &origin("src", "a1"),
+                &[],
+                &[user("m1", "一")],
+                None,
+            )
+            .await
+            .expect("写分叉");
+        let log = store.open(meta("dst"));
+        log.append(&user("m2", "分叉后的第一句"));
+        log.flush().await;
+
+        let fork = store.load_parts(&SessionId::from_raw("dst")).await;
+        assert_eq!(
+            fork.live,
+            vec![user("m1", "一"), user("m2", "分叉后的第一句")]
+        );
+        assert_eq!(fork.forked_from, Some(origin("src", "a1")));
+        let raw = std::fs::read_to_string(d.path().join("dst.jsonl")).expect("读");
+        assert_eq!(raw.matches("\"type\":\"meta\"").count(), 1);
+    }
+
+    #[tokio::test]
+    async fn 分叉不覆盖已有会话() {
+        let d = dir();
+        let store = Transcripts::new(d.path());
+        let log = store.open(meta("dst"));
+        log.append(&user("m1", "原有的"));
+        log.flush().await;
+
+        let err = store
+            .write_fork(
+                &meta("dst"),
+                &origin("src", "a1"),
+                &[],
+                &[user("x", "新")],
+                None,
+            )
+            .await
+            .expect_err("目标已存在必须拒绝");
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        let (_, msgs) = store.load(&SessionId::from_raw("dst")).await;
+        assert_eq!(msgs, vec![user("m1", "原有的")]);
+    }
+
+    #[tokio::test]
+    async fn 分叉改写只命中给定的文本() {
+        // 带反斜杠的路径序列化后是双写的：按原文去匹配会一条都换不到。
+        let d = dir();
+        let store = Transcripts::new(d.path());
+        let live = vec![user("m1", r"截图在 C:\art\src\a.png，别处的 src 不动")];
+        store
+            .write_fork(
+                &meta("dst"),
+                &origin("src", "m1"),
+                &[],
+                &live,
+                Some((r"C:\art\src", r"C:\art\dst")),
+            )
+            .await
+            .expect("写分叉");
+        let (_, msgs) = store.load(&SessionId::from_raw("dst")).await;
+        assert_eq!(
+            msgs,
+            vec![user("m1", r"截图在 C:\art\dst\a.png，别处的 src 不动")]
+        );
     }
 }

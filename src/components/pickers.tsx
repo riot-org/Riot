@@ -3,7 +3,7 @@
  * 它们共用的开合/键盘导航逻辑（useDropdown）。从 App.tsx 拆出。
  */
 
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useRef, useState } from "react";
 
 import type { PermissionMode, ProviderConfig } from "../bridge";
 import { type MessageKey, useT } from "../i18n";
@@ -335,8 +335,8 @@ export function PermissionMenu({
 }
 
 /**
- * 输入框里的内联下拉（服务方 / 模型共用）。样式沿用 ModeMenu 的
- * pill + 上拉菜单，长文本（模型名）截断，避免把整条工具栏撑开。
+ * 模型 pill 菜单里的一个选项。样式沿用 ModeMenu 的 pill + 上拉菜单，
+ * 长文本（模型名）截断，避免把整条工具栏撑开。
  */
 export interface PickerItem {
   id: string;
@@ -354,40 +354,54 @@ export interface PickerItem {
 }
 
 /**
- * 主列表下方的第二组选项，带分隔线和小标题。
+ * 菜单里的一行「名字  当前值 >」，展开成右侧的二级菜单（Cursor 模型菜单
+ * 同款）。触发行和子菜单是兄弟节点，不嵌套 `button`。
  *
- * 模型菜单用它放当前模型的上下文窗口档位。做成同一层的分组而不是二级
- * 弹出菜单：菜单项是 `button`，嵌一个能展开子菜单的按钮进去就成了嵌套
- * `button`（HTML 非法），而绕开它要把整行改成 `div` 自己实现键盘语义。
- * 分组的代价只是菜单长几行，换来的是上下键和读屏行为都不用重写。
- */
-export interface PickerSection {
-  title: string;
-  items: PickerItem[];
-  onPick: (id: string) => void;
-}
-
-/**
- * 主列表下方的一行「名字  当前值 >」，展开成右侧的二级菜单（Claude 桌面端
- * 模型菜单里的 Effort）。触发行和子菜单是兄弟节点，不嵌套 `button`。
+ * 模型列表也住在这样一行里：主菜单只剩几行设置，不随模型数量变高；
+ * 列表长了在二级菜单里滚、在那里搜。
  */
 export interface PickerSubmenu {
+  id: string;
   label: string;
   /** 当前值，灰字跟在触发行右侧。 */
   value: string;
-  items: PickerItem[];
+  items?: PickerItem[];
+  /** 给了就按组排，`items` 不再用。 */
+  groups?: PickerGroup[];
   onPick: (id: string) => void;
+  /** 这一行前面画分隔线。 */
+  sepBefore?: boolean;
+  /** 给了且项数够多才出搜索框。 */
+  searchPlaceholder?: string;
+  noMatch?: string;
 }
 
-function PickerRow({
-  item,
-  onPick,
-  onMouseEnter,
-}: {
-  item: PickerItem;
-  onPick: () => void;
-  onMouseEnter?: () => void;
-}) {
+/**
+ * 主列表按组排（模型菜单按服务方分）。组标题行可以带说明和一个动作，
+ * 比如「未配置 key · 设置」。
+ */
+export interface PickerGroup {
+  id: string;
+  title: string;
+  items: PickerItem[];
+  /** 标题右侧的说明。`warn` 用黄字。 */
+  note?: string;
+  warn?: boolean;
+  /** 整组暗一档：还能选，但选了发不出去（服务方没配 key）。 */
+  dim?: boolean;
+  action?: { label: string; onClick: () => void };
+  /** 搜索时不出现。「最近使用」是别的组的重复，搜出来会成对。 */
+  hideOnSearch?: boolean;
+}
+
+/** 总项数到这个数才出搜索框。几项的菜单扫一眼就够，框子反而占地方。 */
+const SEARCH_MIN = 8;
+
+function matches(q: string, ...texts: string[]): boolean {
+  return texts.some((s) => s.toLowerCase().includes(q));
+}
+
+function PickerRow({ item, onPick }: { item: PickerItem; onPick: () => void }) {
   const { t } = useT();
   return (
     <button
@@ -397,7 +411,6 @@ function PickerRow({
       className={item.active ? "menu-item menu-pick picker-item active" : "menu-item menu-pick picker-item"}
       title={item.tip}
       onClick={onPick}
-      onMouseEnter={onMouseEnter}
     >
       <span className="menu-pick-body">
         <span className="pick-main">
@@ -425,60 +438,173 @@ function PickerRow({
   );
 }
 
-export function Picker({
-  label,
-  title,
-  items,
-  onPick,
-  emptyHint,
-  onEmpty,
-  section,
-  submenu,
-}: {
-  label: string;
-  title?: string;
-  items: PickerItem[];
+/** 二级菜单的内容：可选的搜索框 + 分组列表。卸载即清空搜索。 */
+function PickerList({ menu, onPick, onClose }: {
+  menu: PickerSubmenu;
   onPick: (id: string) => void;
-  /** 列表为空时点 pill 的提示与去向（一般是打开设置补模型）。 */
-  emptyHint?: string;
-  onEmpty?: () => void;
-  section?: PickerSection;
-  submenu?: PickerSubmenu;
+  onClose: () => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const [subOpen, setSubOpen] = useState(false);
-  const isEmpty = items.length === 0;
-  const { rootRef, onKeyDown } = useDropdown(open, setOpen);
-  const subRef = useRef<HTMLDivElement>(null);
-  const subTimer = useRef(0);
+  const [query, setQuery] = useState("");
+  const listRef = useRef<HTMLDivElement>(null);
+  const groups: PickerGroup[] = menu.groups ?? [{ id: "", title: "", items: menu.items ?? [] }];
+  const total = groups.reduce((n, g) => n + (g.hideOnSearch ? 0 : g.items.length), 0);
+  const searchable = Boolean(menu.searchPlaceholder) && total >= SEARCH_MIN;
+  const q = query.trim().toLowerCase();
+  const shown = q
+    ? groups
+        .filter((g) => !g.hideOnSearch)
+        .map((g) =>
+          matches(q, g.title) ? g : { ...g, items: g.items.filter((it) => matches(q, it.label, it.id)) },
+        )
+        .filter((g) => g.items.length > 0)
+    : groups;
 
   useEffect(() => {
-    if (!open) setSubOpen(false);
+    listRef.current?.querySelector<HTMLElement>(".menu-item.active")?.scrollIntoView({ block: "nearest" });
+  }, []);
+
+  return (
+    <>
+      {searchable ? (
+        <input
+          className="picker-search"
+          type="text"
+          value={query}
+          placeholder={menu.searchPlaceholder}
+          aria-label={menu.searchPlaceholder}
+          spellCheck={false}
+          autoComplete="off"
+          // 悬停展开也给焦点：看到搜索框就能直接打字，不用再点一下。
+          autoFocus
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key !== "Enter" || !q) return;
+            e.preventDefault();
+            const first = shown[0]?.items[0];
+            if (first) onPick(first.id);
+          }}
+        />
+      ) : null}
+      <div className="picker-list" ref={listRef}>
+        {shown.map((g, gi) => (
+          <div
+            key={g.id}
+            className={g.dim ? "picker-group dim" : "picker-group"}
+            {...(g.title ? { role: "group", "aria-label": g.title } : {})}
+          >
+            {gi > 0 ? <div className="menu-sep" role="separator" /> : null}
+            {g.title ? (
+              <div className="picker-group-head">
+                <span className="menu-group-title">{g.title}</span>
+                {g.note ? <span className={g.warn ? "menu-warn" : "menu-hint"}>{g.note}</span> : null}
+                {g.action ? (
+                  <button
+                    type="button"
+                    className="picker-group-action"
+                    onClick={() => {
+                      onClose();
+                      g.action?.onClick();
+                    }}
+                  >
+                    {g.action.label}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+            {g.items.map((it) => (
+              <PickerRow key={it.id} item={it} onPick={() => onPick(it.id)} />
+            ))}
+          </div>
+        ))}
+        {shown.length === 0 ? <div className="picker-empty">{menu.noMatch}</div> : null}
+      </div>
+    </>
+  );
+}
+
+/**
+ * 输入框里的模型 pill。点开是几行设置（上下文窗口 / Effort / 模型），
+ * 每行展开成右侧的二级菜单。
+ */
+export function Picker({
+  label,
+  hint,
+  title,
+  tip,
+  rows,
+  empty,
+  emptyHint,
+  onEmpty,
+}: {
+  label: string;
+  /** pill 上跟在名字后面的淡色后缀。 */
+  hint?: string;
+  title?: string;
+  /** pill 的悬停说明，默认就是 label。 */
+  tip?: string;
+  rows: PickerSubmenu[];
+  /** 没东西可选：点 pill 不开菜单，走 `onEmpty`（一般是打开设置补模型）。 */
+  empty?: boolean;
+  emptyHint?: string;
+  onEmpty?: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [sub, setSub] = useState<string | null>(null);
+  const { rootRef, onKeyDown } = useDropdown(open, setOpen);
+  const subTimer = useRef(0);
+  const lastSub = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!open) setSub(null);
   }, [open]);
   useEffect(() => () => window.clearTimeout(subTimer.current), []);
 
-  /** 悬停开合。关要晚一点：鼠标斜着往子菜单走时会擦过主菜单的别的行。 */
-  const hoverSub = (v: boolean) => {
-    window.clearTimeout(subTimer.current);
-    if (v) setSubOpen(true);
-    else subTimer.current = window.setTimeout(() => setSubOpen(false), 250);
+  // 二级菜单因为鼠标移走而关掉时，焦点可能还在它（已卸载）的搜索框里，
+  // 落到 body 上 —— Esc 和上下键就不归这个菜单管了。还给它的触发行。
+  useEffect(() => {
+    if (!open || sub) return;
+    const a = document.activeElement;
+    if (a && a !== document.body) return;
+    const id = lastSub.current;
+    if (!id) return;
+    rootRef.current
+      ?.querySelector<HTMLButtonElement>(`.picker-sub-trigger[data-sub="${CSS.escape(id)}"]`)
+      ?.focus({ preventScroll: true });
+  }, [open, sub, rootRef]);
+
+  const triggerOf = (id: string) =>
+    rootRef.current?.querySelector<HTMLButtonElement>(`.picker-sub-trigger[data-sub="${CSS.escape(id)}"]`);
+
+  const showSub = (id: string) => {
+    lastSub.current = id;
+    setSub(id);
   };
 
-  /** 键盘打开子菜单：焦点放到当前档上。 */
-  const enterSub = () => {
-    setSubOpen(true);
+  /** 悬停开合。关要晚一点：鼠标斜着往子菜单走时会擦过主菜单的别的行。 */
+  const hoverSub = (id: string | null) => {
+    window.clearTimeout(subTimer.current);
+    if (id) showSub(id);
+    else subTimer.current = window.setTimeout(() => setSub(null), 250);
+  };
+
+  /** 键盘 / 点击打开子菜单：焦点给搜索框，没有就给当前档。 */
+  const enterSub = (id: string) => {
+    window.clearTimeout(subTimer.current);
+    showSub(id);
     requestAnimationFrame(() => {
-      const root = subRef.current;
+      const fly = rootRef.current?.querySelector<HTMLElement>(".picker-sub-flyout");
       (
-        root?.querySelector<HTMLButtonElement>(".picker-submenu .menu-item.active") ??
-        root?.querySelector<HTMLButtonElement>(".picker-submenu .menu-item")
+        fly?.querySelector<HTMLElement>(".picker-search") ??
+        fly?.querySelector<HTMLElement>(".menu-item.active") ??
+        fly?.querySelector<HTMLElement>(".menu-item")
       )?.focus();
     });
   };
 
   const leaveSub = () => {
-    setSubOpen(false);
-    subRef.current?.querySelector<HTMLButtonElement>(".picker-sub-trigger")?.focus();
+    const id = sub;
+    setSub(null);
+    if (id) triggerOf(id)?.focus();
   };
 
   return (
@@ -486,103 +612,80 @@ export function Picker({
       <button
         type="button"
         className="pill picker-pill"
-        title={isEmpty ? (emptyHint ?? title) : label}
+        title={empty ? (emptyHint ?? title) : (tip ?? label)}
         aria-haspopup="menu"
         aria-expanded={open}
-        onClick={() => (isEmpty ? onEmpty?.() : setOpen(!open))}
+        onClick={() => (empty ? onEmpty?.() : setOpen(!open))}
       >
         <span className="picker-pill-row">
           <span className="pick-label">{label}</span>
+          {hint ? <span className="pick-hint">{hint}</span> : null}
           <Chevron down open={open} />
         </span>
       </button>
-      {open && !isEmpty ? (
-        <div className="menu" role="menu">
-          {items.map((it) => (
-            <PickerRow
-              key={it.id}
-              item={it}
-              onPick={() => {
-                onPick(it.id);
-                setOpen(false);
-              }}
-              {...(submenu ? { onMouseEnter: () => hoverSub(false) } : {})}
-            />
-          ))}
-          {submenu ? (
-            <>
-              <div className="menu-sep" role="separator" />
+      {open && !empty ? (
+        <div className="menu picker-menu" role="menu">
+          {rows.map((r) => (
+            <Fragment key={r.id}>
+              {r.sepBefore ? <div className="menu-sep" role="separator" /> : null}
               <div
                 className="picker-sub"
-                ref={subRef}
-                onMouseEnter={() => hoverSub(true)}
-                onMouseLeave={() => hoverSub(false)}
+                onMouseEnter={() => hoverSub(r.id)}
+                onMouseLeave={() => hoverSub(null)}
               >
                 <button
                   type="button"
                   role="menuitem"
                   aria-haspopup="menu"
-                  aria-expanded={subOpen}
-                  className={subOpen ? "menu-item menu-pick picker-sub-trigger open" : "menu-item menu-pick picker-sub-trigger"}
-                  onClick={() => (subOpen ? setSubOpen(false) : enterSub())}
+                  aria-expanded={sub === r.id}
+                  data-sub={r.id}
+                  className={
+                    sub === r.id
+                      ? "menu-item menu-pick picker-sub-trigger open"
+                      : "menu-item menu-pick picker-sub-trigger"
+                  }
+                  onMouseEnter={(e) => e.currentTarget.focus({ preventScroll: true })}
+                  onClick={() => (sub === r.id ? setSub(null) : enterSub(r.id))}
                   onKeyDown={(e) => {
                     if (e.key === "ArrowRight") {
                       e.preventDefault();
-                      enterSub();
+                      enterSub(r.id);
                     }
                   }}
                 >
                   <span className="menu-pick-body">
-                    <span className="pick-label">{submenu.label}</span>
+                    <span className="pick-label">{r.label}</span>
                   </span>
-                  <span className="picker-sub-value">{submenu.value}</span>
+                  <span className="picker-sub-value">{r.value}</span>
                   <Chevron />
                 </button>
-                {subOpen ? (
+                {sub === r.id ? (
                   <div
                     className="picker-sub-flyout"
                     onKeyDown={(e) => {
-                      if (e.key === "ArrowLeft" || e.key === "Escape") {
+                      const inInput = (e.target as HTMLElement).tagName === "INPUT";
+                      if (e.key === "Escape" || (e.key === "ArrowLeft" && !inInput)) {
                         e.preventDefault();
                         e.stopPropagation();
                         leaveSub();
                       }
                     }}
                   >
-                    <div className="menu picker-submenu" role="menu" aria-label={submenu.label}>
-                      {submenu.items.map((it) => (
-                        <PickerRow
-                          key={it.id}
-                          item={it}
-                          onPick={() => {
-                            submenu.onPick(it.id);
-                            setOpen(false);
-                          }}
-                        />
-                      ))}
+                    <div className="menu picker-submenu" role="menu" aria-label={r.label}>
+                      <PickerList
+                        menu={r}
+                        onPick={(id) => {
+                          r.onPick(id);
+                          setOpen(false);
+                        }}
+                        onClose={() => setOpen(false)}
+                      />
                     </div>
                   </div>
                 ) : null}
               </div>
-            </>
-          ) : null}
-          {section && section.items.length ? (
-            <>
-              <div className="menu-sep" role="separator" />
-              <div className="menu-group-title">{section.title}</div>
-              {section.items.map((it) => (
-                <PickerRow
-                  key={it.id}
-                  item={it}
-                  onPick={() => {
-                    section.onPick(it.id);
-                    setOpen(false);
-                  }}
-                  {...(submenu ? { onMouseEnter: () => hoverSub(false) } : {})}
-                />
-              ))}
-            </>
-          ) : null}
+            </Fragment>
+          ))}
         </div>
       ) : null}
     </div>

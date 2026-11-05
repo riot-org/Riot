@@ -78,7 +78,10 @@ const BUILTIN_SKILLS: &[(&str, &str)] = &[
         "extend-riot",
         include_str!("../builtin/skills/extend-riot/SKILL.md"),
     ),
-    ("add-mcp", include_str!("../builtin/skills/add-mcp/SKILL.md")),
+    (
+        "add-mcp",
+        include_str!("../builtin/skills/add-mcp/SKILL.md"),
+    ),
     ("commit", include_str!("../builtin/skills/commit/SKILL.md")),
     ("review", include_str!("../builtin/skills/review/SKILL.md")),
     ("verify", include_str!("../builtin/skills/verify/SKILL.md")),

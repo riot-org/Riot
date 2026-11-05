@@ -109,10 +109,14 @@ const MAX_IMAGE_B64: usize = 5_000_000;
 /// `[约束]` 模型收不了图片时必须**在这里**转成文字，不能把图片原样塞进历史。
 /// 塞进去的话，OpenAI 那条路会把它发成一条模型看不懂的 image_url（400），
 /// Anthropic 那条路会被服务方拒 —— 而两种失败都发生在用户已经按下发送之后。
+///
+/// `cancel` 是这一轮的令牌。转述一张图要调一次模型，慢的时候十几秒；用户
+/// 这期间按了停止就不再等，那张图按转述失败留一句说明。
 pub(crate) async fn user_content(
     input: TurnInput,
     vision: &dyn riot_protocol::vision::VisionAccess,
     mentions: MentionCtx<'_>,
+    cancel: &tokio_util::sync::CancellationToken,
 ) -> Vec<UserContent> {
     let mut content = Vec::with_capacity(input.images.len() + 1);
 
@@ -149,26 +153,33 @@ pub(crate) async fn user_content(
         // 转述进 DescribedImage 而不是 SystemReminder：模型那边两者一样（都
         // 只读文字，provider 不发图），但前者把图片本体留在了消息里，界面
         // 切回会话时还能把用户发过的图画出来。
-        let described = vision
-            .describe(riot_protocol::vision::DescribeRequest {
-                media_type: img.media_type.clone(),
-                data: img.data.clone(),
-                focus: "The user attached this image so the assistant can understand what is in \
-                        it: the text on it, the interface elements, the data, and anything that \
-                        looks like an error"
-                    .to_owned(),
-            })
-            .await;
-        content.push(UserContent::Attachment(Attachment::DescribedImage {
-            media_type: img.media_type,
-            data: img.data,
-            text: match described {
+        let describe = vision.describe(riot_protocol::vision::DescribeRequest {
+            media_type: img.media_type.clone(),
+            data: img.data.clone(),
+            focus: "The user attached this image so the assistant can understand what is in \
+                    it: the text on it, the interface elements, the data, and anything that \
+                    looks like an error"
+                .to_owned(),
+        });
+        let text = tokio::select! {
+            biased;
+            () = cancel.cancelled() => format!(
+                "The user attached image {}, but the task was stopped before it could be \
+                 converted to text.",
+                i + 1
+            ),
+            described = describe => match described {
                 Ok(desc) => format!("Image {} attached by the user:\n{desc}", i + 1),
                 Err(e) => format!(
                     "The user attached image {}, but it could not be converted to text: {e}",
                     i + 1
                 ),
             },
+        };
+        content.push(UserContent::Attachment(Attachment::DescribedImage {
+            media_type: img.media_type,
+            data: img.data,
+            text,
         }));
     }
 
@@ -251,6 +262,9 @@ pub(crate) fn attachments_for_edit(
 ///
 /// 空文本也要留个位置:用户可能只丢了一张图什么都没说，而空的 user 消息
 /// 会被一部分服务方拒。
+///
+/// `[约束]` 占位原文和 `src/hooks/session/items.ts` 的 `ATTACHMENT_ONLY_PROMPT`
+/// 对齐：前端靠逐字比对把它从气泡上藏掉，改了这里那边会把它当成用户的话画出来。
 pub(crate) fn prompt_text(text: &str) -> String {
     if text.trim().is_empty() {
         "看这张图。".to_owned()
@@ -316,6 +330,7 @@ pub(crate) struct MentionCtx<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio_util::sync::CancellationToken;
 
     /// 不解析 @ 引用的上下文（图片相关的用例不碰文件）。cwd 指一个
     /// 不存在的目录，万一测试文本里出现 @ 也读不到东西。
@@ -354,6 +369,7 @@ mod tests {
             },
             &Direct,
             no_mentions(),
+            &CancellationToken::new(),
         )
         .await;
 
@@ -404,6 +420,7 @@ mod tests {
             },
             &Compat,
             no_mentions(),
+            &CancellationToken::new(),
         )
         .await;
 
@@ -431,6 +448,50 @@ mod tests {
                 c, UserContent::Text { text } if text.contains("看这张图")
             )),
             "空文本要补一句：{content:?}"
+        );
+    }
+
+    /// 转述卡住时用户按了停止：不等它，图按没转成留一句说明，图片本体照留。
+    #[tokio::test]
+    async fn 停止后不再等图片转述() {
+        struct Stuck;
+        #[async_trait::async_trait]
+        impl riot_protocol::vision::VisionAccess for Stuck {
+            fn accepts_images(&self) -> bool {
+                false
+            }
+            async fn describe(
+                &self,
+                _r: riot_protocol::vision::DescribeRequest,
+            ) -> Result<String, riot_protocol::vision::VisionError> {
+                futures::future::pending().await
+            }
+        }
+
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let content = user_content(
+            TurnInput {
+                text: "看图".into(),
+                images: vec![ImageInput {
+                    media_type: "image/png".into(),
+                    data: "AAAA".into(),
+                }],
+                ..Default::default()
+            },
+            &Stuck,
+            no_mentions(),
+            &cancel,
+        )
+        .await;
+
+        assert!(
+            content.iter().any(|c| matches!(
+                c,
+                UserContent::Attachment(Attachment::DescribedImage { text, data, .. })
+                    if text.contains("stopped") && data == "AAAA"
+            )),
+            "{content:?}"
         );
     }
 
@@ -462,6 +523,7 @@ mod tests {
             },
             &Direct,
             no_mentions(),
+            &CancellationToken::new(),
         )
         .await;
 
@@ -564,8 +626,13 @@ mod tests {
             ..Default::default()
         };
         let pending = pending_user_content(&input);
-        let final_content =
-            user_content(input, &riot_protocol::vision::NoVision, no_mentions()).await;
+        let final_content = user_content(
+            input,
+            &riot_protocol::vision::NoVision,
+            no_mentions(),
+            &CancellationToken::new(),
+        )
+        .await;
 
         let text_of = |c: &[UserContent]| {
             c.iter()

@@ -373,6 +373,27 @@ export function MenuPickCheck({ active }: { active: boolean }) {
 }
 
 /**
+ * 分叉出来的会话（从别的会话某一轮另开的一条线）。和子 agent 的 ForkIcon
+ * 刻意画得不一样：一根主干上岔出一枝，是 git 分支的样子 —— 子 agent 是
+ * 一分为二、各干各的，分叉会话是"从这里起换条路走"。
+ */
+export function BranchIcon({ size = 13 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden>
+      <circle cx="4.5" cy="3.5" r="1.6" stroke="currentColor" strokeWidth="1.3" />
+      <circle cx="4.5" cy="12.5" r="1.6" stroke="currentColor" strokeWidth="1.3" />
+      <circle cx="11.5" cy="4.5" r="1.6" stroke="currentColor" strokeWidth="1.3" />
+      <path
+        d="M4.5 5.1v5.8M11.5 6.1c0 2.4-1.6 3.4-4 3.8-1.3.2-2.4.7-3 1.3"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+/**
  * 子 agent（子任务）。工作台标签、回答里的子任务链接共用这一枚，
  * 看到它就知道"这是一个子 agent"。不用 ⑂ 字形：主字体里没有这个字符，
  * 回退字体的笔画粗细和基线都和界面对不上。

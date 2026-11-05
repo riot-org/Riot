@@ -322,10 +322,9 @@ async fn dispatch(request: RpcRequest, manager: &manager::SessionManager) -> Rpc
             Ok(()) => RpcResponse::Ok,
             Err(error) => RpcResponse::Error { error },
         },
-        Req::TurnInterrupt { session_id, .. } => {
-            manager.interrupt(session_id.as_str()).await;
-            RpcResponse::Ok
-        }
+        Req::TurnInterrupt { session_id, .. } => RpcResponse::Interrupted {
+            cancelled: manager.interrupt(session_id.as_str()).await,
+        },
         Req::TurnNudge { session_id, nudge } => RpcResponse::Nudged {
             queued: manager.nudge(session_id.as_str(), nudge).await,
         },
@@ -423,6 +422,28 @@ async fn dispatch(request: RpcRequest, manager: &manager::SessionManager) -> Rpc
             Ok(result) => RpcResponse::HistoryRedone(result),
             Err(error) => RpcResponse::Error { error },
         },
+        Req::SessionFork {
+            session_id,
+            message_id,
+            target,
+            worktree,
+        } => match manager
+            .fork(session_id.as_str(), &message_id, &target, worktree.as_ref())
+            .await
+        {
+            Ok(f) => RpcResponse::SessionForked {
+                message_id: f.end,
+                files: f.files,
+            },
+            Err(error) => RpcResponse::Error { error },
+        },
+        Req::SessionForkPreview {
+            session_id,
+            message_id,
+        } => match manager.fork_preview(session_id.as_str(), &message_id).await {
+            Ok(preview) => RpcResponse::ForkPreviewed(preview),
+            Err(error) => RpcResponse::Error { error },
+        },
         Req::SessionChanges { session_id } => RpcResponse::Changes {
             changes: manager.changes(session_id.as_str()).await,
         },
@@ -432,7 +453,10 @@ async fn dispatch(request: RpcRequest, manager: &manager::SessionManager) -> Rpc
                 .await,
         },
         Req::SessionContextBreakdown { session_id, config } => {
-            match manager.context_breakdown(session_id.as_str(), *config).await {
+            match manager
+                .context_breakdown(session_id.as_str(), *config)
+                .await
+            {
                 Ok(b) => RpcResponse::ContextBreakdown(b),
                 Err(error) => RpcResponse::Error { error },
             }
@@ -563,6 +587,22 @@ mod tests {
         assert_eq!(err["code"], "session_not_found", "{out}");
         assert_eq!(err["key"], "kernel.session.notFound", "{out}");
         assert_eq!(err["args"]["id"], "nope", "{out}");
+    }
+
+    /// 前端靠这个 false 收掉残留的忙碌（结束事件丢在了换订阅的缝里）。
+    /// 回一个笼统的 ok 的话宿主只能当成"停到了"，界面就一直等 Done。
+    #[tokio::test]
+    async fn interrupt_on_idle_session_reports_nothing_cancelled() {
+        let mgr = test_manager();
+        let sid = mgr.create(std::env::temp_dir()).await;
+        let line = format!(
+            r#"{{"jsonrpc":"2.0","id":4,"method":"turn.interrupt","params":{{"session_id":"{}","interjection":false}}}}"#,
+            sid.as_str()
+        );
+        let out = handle_line(&line, &mgr).await.expect("要有应答");
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["result"]["result"], "interrupted", "{out}");
+        assert_eq!(v["result"]["data"]["cancelled"], false, "{out}");
     }
 
     #[tokio::test]

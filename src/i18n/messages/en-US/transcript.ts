@@ -15,16 +15,24 @@ export default {
   "transcript.find.closeTitle": "Close (Esc)",
 
   "transcript.wait.generating": "Generating…",
+  "transcript.wait.reconnecting": "Reconnecting… {attempt}/{max}",
   "transcript.wait.runningTool": "Running {tool}",
   "transcript.wait.compacting": "Compacting context…",
   "transcript.jumpBottom": "Back to bottom",
   "transcript.jumpBottomNew": "Back to bottom (new content)",
   "transcript.compactRule": "Messages above have been compacted",
+  "transcript.forkRule": "Forked from “{title}”",
+  "transcript.forkRuleUntitled": "New session",
+  "transcript.forkRuleGone": "Forked from a deleted session",
+  "transcript.forks.title": "Sessions forked from here",
+  "transcript.forks.count": "Forked {count} times",
+  "transcript.forks.count#one": "Forked once",
 
   "transcript.msg.stopped": "Generation stopped",
   "transcript.error.detail": "Details",
   "transcript.msg.copy": "Copy text",
   "transcript.msg.regenerate": "Regenerate",
+  "transcript.msg.fork": "Fork into new session",
   "transcript.msg.regenerateBusy": "Generating — you can regenerate once it finishes",
   "transcript.msg.edit": "Edit (replaces the text in context)",
   "transcript.msg.editBusy": "Generating — you can edit once it finishes",
@@ -59,8 +67,7 @@ export default {
   "transcript.regenerate.body":
     "This reply and everything after it will be discarded. {files} file(s) will be restored to when the prompt was sent, then the prompt will run again.",
 
-  "transcript.editor.hintResend":
-    "Send: restart from here, discarding everything after · Save: only change the text in context",
+  "transcript.editor.hintResend": "Send: restart here, discarding what follows · Save: only edit the text",
   "transcript.editor.hintSave":
     "Saving replaces the text in context; later conversation follows the new content",
   "transcript.editor.saveOnlyTitle": "Only replace the text in context, don't regenerate",

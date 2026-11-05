@@ -238,6 +238,11 @@ pub enum ScriptedResponse {
     Fail(HttpError),
     /// 流建立成功，但吐到一半断了。
     PartialThenFail(Vec<Vec<u8>>, HttpError),
+    /// 流建立成功，吐完这些就挂着不动：连接不断，一个字节都不再发。
+    /// 网关拿了响应头就憋着的样子，给看门狗测试用。
+    ChunksThenHang(Vec<Vec<u8>>),
+    /// 连上了，响应头一直不来：TUN 代理接通了一个上游不通的连接的样子。
+    NoHeaders,
 }
 
 impl ScriptedTransport {
@@ -283,6 +288,13 @@ impl HttpTransport for ScriptedTransport {
                     .collect();
                 Ok(Box::pin(futures::stream::iter(items)))
             }
+            Some(ScriptedResponse::ChunksThenHang(chunks)) => {
+                Ok(Box::pin(futures::StreamExt::chain(
+                    futures::stream::iter(chunks.into_iter().map(Ok)),
+                    futures::stream::pending(),
+                )))
+            }
+            Some(ScriptedResponse::NoHeaders) => futures::future::pending().await,
             // 刻意用不可重试的 400 而不是传输错误。传输错误是可重试的，
             // 会让 provider 在脚本耗尽后继续空转 —— 那样「重试了多少次」
             // 这类断言就永远测不准，问题会被替身掩盖掉。

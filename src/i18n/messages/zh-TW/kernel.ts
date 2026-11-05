@@ -20,6 +20,9 @@ export default {
   "kernel.history.systemNoText": "這則是系統提示，沒有可編輯的文字。",
   "kernel.history.systemNoDelete": "這則是系統提示，不支援刪除。",
   "kernel.history.noCheckpoint": "這則提問沒有檔案檢查點，沒辦法依對話回退。",
+  "kernel.fork.turnOpen": "這一輪還沒結束，等它結束再分叉。",
+  "kernel.fork.compacted": "這則訊息在壓縮之前，沒辦法從這裡分叉。",
+  "kernel.fork.failed": "分叉沒有完成，原會話沒有受影響。",
   "kernel.history.noRedo": "沒有可以恢復的回退。重新送出或繼續對話之後就不能再還原了。",
 
   // ── 壓縮 ────────────────────────────────────────────────────
@@ -43,6 +46,8 @@ export default {
   "kernel.provider.transport": "連不上服務商 —— 檢查網路、代理或 base URL。",
   "kernel.provider.unreachable": "多次嘗試後仍然連不上服務商 —— 檢查網路、代理或 base URL。",
   "kernel.provider.timeout": "請求逾時了，網路或服務商沒有按時回應。稍等重試一般就好。",
+  "kernel.provider.noResponse":
+    "服務商一直沒有回應（連回應標頭都沒等到），已結束本次請求。多半是網路、代理或 VPN 把請求卡住了。",
   "kernel.provider.streamBroken": "讀取服務商回應時中斷了。",
   "kernel.provider.idle": "服務商 {secs} 秒沒有送任何資料，已結束本次請求。通常是中間代理或閘道的問題。",
   "kernel.provider.keepaliveOnly": "服務商 {mins} 分鐘只送保活訊號、沒有任何內容，已結束本次請求。",
@@ -94,6 +99,7 @@ export default {
   "kernel.skill.noDescription": "缺 description —— 它是模型決定要不要載入的唯一依據。",
   "kernel.skill.emptyBody": "內文是空的：frontmatter 之後要寫這個技能的具體做法。",
   "kernel.slash.compact": "把對話歷史壓縮成摘要，騰出上下文視窗",
+  "kernel.slash.fork": "從最近一輪回答分叉出一個新會話，原會話不動",
 
   // ── 設定（設定頁）────────────────────────────────────────────
   "kernel.config.unreadable": "檔案讀不出來。",

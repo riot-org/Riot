@@ -222,9 +222,7 @@ impl Tool for BrowserNavigate {
             return ToolOutcome::failed(unavailable_hint(&e));
         }
         if !show {
-            return ToolOutcome::ok_text(format!(
-                "已打开 {u}。用户看不到这一页，本轮结束后关闭。"
-            ));
+            return ToolOutcome::ok_text(format!("已打开 {u}。用户看不到这一页，本轮结束后关闭。"));
         }
         // 同 ShowBrowser：面板等前端收到这条结果才打开，轮次可能先一步结束，
         // 这里先把页占住。失败无所谓 —— 刚导航成功，浏览器是活的。
@@ -4360,7 +4358,8 @@ mod tests {
     async fn 本地_http_地址可以导航且不升级协议() {
         let b = Arc::new(FakeBrowser::default());
         let ctx = ctx_browser(Arc::clone(&b), FakeVision::Direct, Arc::new(NullFs));
-        let input = serde_json::json!({ "url": "http://localhost:8765/wechat.html", "show": false });
+        let input =
+            serde_json::json!({ "url": "http://localhost:8765/wechat.html", "show": false });
 
         BrowserNavigate
             .validate_input(&input, &ctx)
@@ -4410,7 +4409,10 @@ mod tests {
                 .await
                 .expect_err("没说清给谁看就不该放行");
             let msg = format!("{err:?}");
-            assert!(msg.contains("show") && msg.contains("true"), "要说清怎么选：{msg}");
+            assert!(
+                msg.contains("show") && msg.contains("true"),
+                "要说清怎么选：{msg}"
+            );
         }
         for show in [true, false] {
             let input = serde_json::json!({ "url": "https://example.com", "show": show });

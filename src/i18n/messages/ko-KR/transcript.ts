@@ -17,17 +17,24 @@ export default {
 
   // 상태 줄, 구분선, 맨 아래로 버튼
   "transcript.wait.generating": "생성하는 중…",
+  "transcript.wait.reconnecting": "다시 연결하는 중… {attempt}/{max}",
   "transcript.wait.runningTool": "{tool} 실행 중",
   "transcript.wait.compacting": "컨텍스트를 압축하는 중…",
   "transcript.jumpBottom": "맨 아래로",
   "transcript.jumpBottomNew": "맨 아래로 (새 내용 있음)",
   "transcript.compactRule": "위의 메시지는 압축되었습니다",
+  "transcript.forkRule": "“{title}”에서 분기",
+  "transcript.forkRuleUntitled": "새 세션",
+  "transcript.forkRuleGone": "삭제된 세션에서 분기",
+  "transcript.forks.title": "여기서 분기한 세션",
+  "transcript.forks.count": "{count}번 분기됨",
 
   // 메시지 행과 호버 동작
   "transcript.msg.stopped": "생성이 중지되었습니다",
   "transcript.error.detail": "자세히",
   "transcript.msg.copy": "원문 복사",
   "transcript.msg.regenerate": "다시 생성",
+  "transcript.msg.fork": "새 세션으로 분기",
   "transcript.msg.regenerateBusy": "생성 중입니다. 끝나면 다시 생성할 수 있습니다",
   "transcript.msg.edit": "편집 (컨텍스트의 원문을 대체)",
   "transcript.msg.editBusy": "생성 중입니다. 끝나면 편집할 수 있습니다",
@@ -63,7 +70,7 @@ export default {
     "이 답변과 이후 대화는 버려집니다. 파일 {files}개를 질문을 보낸 시점으로 되돌린 뒤 다시 생성합니다.",
 
   // 메시지 인라인 편집기
-  "transcript.editor.hintResend": "보내기: 여기서부터 다시 시작하며 이후 대화는 버려집니다 · 저장: 컨텍스트의 원문만 바꿉니다",
+  "transcript.editor.hintResend": "보내기: 여기서부터 다시 시작하며 이후 대화는 버려집니다 · 저장: 원문만 바꿉니다",
   "transcript.editor.hintSave": "저장하면 컨텍스트의 원문이 대체되며, 이후 대화는 새 내용을 따릅니다",
   "transcript.editor.saveOnlyTitle": "컨텍스트의 원문만 대체하고 다시 생성하지 않습니다",
   "transcript.editor.resendTitle": "이 메시지부터 다시 시작 (⌘/Ctrl+Enter)",

@@ -77,6 +77,21 @@ pub enum AgentEvent {
     /// 两个数才都有意义;这里只回答"为什么在等"。
     Compacting,
 
+    /// 模型调用失败，provider 正在自动重试（第 `attempt` 次，这一类最多
+    /// `max` 次）。界面状态行显示「正在重新连接… 1/5」，有新输出或本轮
+    /// 结束时撤掉。
+    ///
+    /// 没有它的话，重试期间界面只有"正在生成"和一路走的秒数 —— 一次
+    /// 等不到响应头的重发能把秒数走到十分钟，用户分不清是模型在想还是
+    /// 网络卡了。
+    ///
+    /// 不进 transcript（见 [`Self::is_durable`]）：瞬时状态，理由同
+    /// [`Self::Compacting`]。
+    Retrying {
+        attempt: u32,
+        max: u32,
+    },
+
     /// 上下文压缩发生。
     Compacted {
         before_tokens: u32,
@@ -155,6 +170,7 @@ impl AgentEvent {
             AgentEvent::Delta(_)
                 | AgentEvent::Progress { .. }
                 | AgentEvent::Compacting
+                | AgentEvent::Retrying { .. }
                 | AgentEvent::BackgroundTask { .. }
         )
     }
@@ -365,6 +381,10 @@ mod tests {
     fn compacting_is_not_durable() {
         assert!(!AgentEvent::Compacting.is_durable());
         assert!(
+            !AgentEvent::Retrying { attempt: 1, max: 5 }.is_durable(),
+            "重连同样是瞬时状态，落盘会在历史里留一个永远在重连的幽灵"
+        );
+        assert!(
             AgentEvent::Compacted {
                 before_tokens: 100,
                 after_tokens: 10,
@@ -435,6 +455,7 @@ mod tests {
             // 无字段变体:internally-tagged 下它序列化成一个只有 tag 的对象，
             // 而前端按 `type` 分派 —— 表示错了就是一条永远匹配不上的事件。
             AgentEvent::Compacting,
+            AgentEvent::Retrying { attempt: 1, max: 5 },
             AgentEvent::Compacted {
                 before_tokens: 100,
                 after_tokens: 10,

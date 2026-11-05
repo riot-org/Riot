@@ -396,7 +396,9 @@ export function ComposerEdit({
               </>
             ) : null}
             <span className="composer-edit-hint">
-              {onResend ? t("transcript.editor.hintResend") : t("transcript.editor.hintSave")}
+              <span>
+                {onResend ? t("transcript.editor.hintResend") : t("transcript.editor.hintSave")}
+              </span>
             </span>
           </div>
           <div className="composer-actions">

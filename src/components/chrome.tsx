@@ -17,6 +17,7 @@ import { PermissionMenu } from "./pickers";
  * Safari，标题栏归浏览器管，页面左上角是空的。 */
 export const IS_MAC = host.nativeWindow && navigator.userAgent.includes("Mac");
 import {
+  BranchIcon,
   GearIcon,
   PanelRightIcon,
   SidebarToggleIcon,
@@ -27,7 +28,8 @@ import {
 export interface MenuState {
   x: number;
   y: number;
-  entries: { label: string; danger?: boolean; action: () => void }[];
+  /** `hint`：标签下面一行小字（时间、预览）。 */
+  entries: { label: string; hint?: string; danger?: boolean; action: () => void }[];
   /** 打开菜单的那一行。鼠标落到菜单上时 :hover 会丢，靠这个保住行高亮。 */
   anchor?: string;
 }
@@ -91,6 +93,7 @@ export function TopBar({
   onToggleSessionCfg,
   onOpenBrowser,
   reserveControls,
+  onWorktreeMenu,
 }: {
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
@@ -109,8 +112,11 @@ export function TopBar({
   onOpenBrowser: () => void;
   /** 抽屉收起后窗口开关钉在右上角，顶栏用空槽给设置钮让位。 */
   reserveControls?: boolean;
+  /** worktree 会话的分支标签被点了：在访达里显示、在终端打开、复制路径。 */
+  onWorktreeMenu?: (e: React.MouseEvent, s: SessionInfo) => void;
 }) {
   const { t } = useT();
+  const worktree = session?.forkedFrom?.worktree;
   return (
     <header className="topbar" data-tauri-drag-region>
       <SidebarReveal visible={!sidebarOpen} onToggle={onToggleSidebar} />
@@ -122,6 +128,17 @@ export function TopBar({
         >
           <span className="tb-title-text">{session.title ?? t("app.newSession")}</span>
           <Chevron down />
+        </button>
+      ) : null}
+      {session && worktree && onWorktreeMenu ? (
+        <button
+          className="tb-branch"
+          onClick={(e) => onWorktreeMenu(e, session)}
+          title={t("app.worktree.badgeTitle", { path: worktree.path })}
+          aria-haspopup="menu"
+        >
+          <BranchIcon size={12} />
+          <span className="tb-branch-name">{worktree.branch}</span>
         </button>
       ) : null}
       {session && permission ? <PermissionMenu mode={permission} onChange={onPermission} /> : null}
@@ -348,7 +365,8 @@ export function ContextMenu({ menu, onClose }: { menu: MenuState; onClose: () =>
 
   // 贴近视口边缘时往回顶，别让菜单被截掉。右缘按典型菜单宽估算 ——
   // 菜单还没渲染，量不到自己。
-  const top = Math.min(menu.y, window.innerHeight - menu.entries.length * 34 - 16);
+  const rows = menu.entries.reduce((n, en) => n + (en.hint ? 1.6 : 1), 0);
+  const top = Math.max(8, Math.min(menu.y, window.innerHeight - rows * 34 - 16));
   const left = Math.min(menu.x, window.innerWidth - CTX_MENU_W - 8);
 
   return (
@@ -380,7 +398,8 @@ export function ContextMenu({ menu, onClose }: { menu: MenuState; onClose: () =>
       >
         {menu.entries.map((en, i) => (
           <button
-            key={en.label}
+            // 标签可以重名（同名的分叉），按位置认。
+            key={i}
             role="menuitem"
             className={en.danger ? "ctx-item danger" : "ctx-item"}
             // 打开时聚焦第一项，键盘直接能用
@@ -391,7 +410,14 @@ export function ContextMenu({ menu, onClose }: { menu: MenuState; onClose: () =>
               en.action();
             }}
           >
-            {en.label}
+            {en.hint ? (
+              <>
+                <span className="ctx-label">{en.label}</span>
+                <span className="ctx-hint">{en.hint}</span>
+              </>
+            ) : (
+              en.label
+            )}
           </button>
         ))}
       </div>

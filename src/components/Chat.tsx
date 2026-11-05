@@ -12,11 +12,12 @@ import {
 import { SessionChangesBar } from "./SessionChangesBar";
 import { hasActiveTodos, TodoPanel } from "./TodoPanel";
 import { thinkingClock, useSession, waitStartedAt } from "../hooks/useSession";
+import { assistantMessageId, latestForkPoint } from "../hooks/session/history";
 import { t, useT } from "../i18n";
 import { createLiveTextStore } from "../lib/liveText";
 import { latestPlan, planTodos, type PlanState, SWITCH_MODE_TOOL } from "../lib/plan";
 import { SubagentsContext } from "../lib/subagentLink";
-import { Transcript } from "./Transcript";
+import { type ForkChild, Transcript } from "./Transcript";
 import { Composer, type PermissionPick } from "./Composer";
 import { FolderIcon, RiotMark } from "./icons";
 
@@ -73,6 +74,12 @@ export function Chat({
   onPlanOpen,
   insertText,
   onInserted,
+  onFork,
+  forks,
+  onOpenSession,
+  forkOrigin,
+  jumpTo,
+  onJumped,
 }: {
   sessionId: string;
   /** 在前台。隐藏的保活实例不接全局快捷键 / 粘贴 / 权限弹窗。 */
@@ -125,6 +132,16 @@ export function Chat({
   /** 要塞进输入框的一段文字（终端选中的输出）。null = 没有。 */
   insertText?: string | null;
   onInserted?: () => void;
+  /** 从回答（内核消息 id）所在一轮的结尾分叉出新会话。App 负责确认、登记、切过去。 */
+  onFork?: (messageId: string) => void;
+  /** 从这个会话分出去的会话（见 Transcript 的同名 prop）。 */
+  forks?: readonly ForkChild[];
+  onOpenSession?: (id: string) => void;
+  /** 这个会话是分叉出来的。见 Transcript 的同名 prop。 */
+  forkOrigin?: { messageId: string; title: string | null; onOpen?: () => void };
+  /** 定位到这条消息（内核消息 id）。历史就绪后才交给 Transcript。 */
+  jumpTo?: { messageId: string; nonce: number };
+  onJumped?: () => void;
 }) {
   const { t } = useT();
   const session = useSession(
@@ -138,6 +155,28 @@ export function Chat({
   );
 
   const busy = session.busy;
+
+  // 分叉。Transcript 给的是界面条目 id，换成内核消息 id。经 ref 转一道：
+  // App 每次渲染都给一个新的箭头函数，直接传下去的话每条回答都要重画。
+  const forkRef = useRef(onFork);
+  forkRef.current = onFork;
+  const forkAt = useCallback((itemId: string) => {
+    forkRef.current?.(assistantMessageId(itemId));
+  }, []);
+  const openSessionRef = useRef(onOpenSession);
+  openSessionRef.current = onOpenSession;
+  const openSession = useCallback((id: string) => openSessionRef.current?.(id), []);
+  // `/fork`：最近一轮已经结束的回答。生成中的那一轮还没有结尾，跳过它。
+  const itemsRef = useRef(session.items);
+  itemsRef.current = session.items;
+  const busyNowRef = useRef(busy);
+  busyNowRef.current = busy;
+  const forkLatest = useCallback((): boolean => {
+    const id = latestForkPoint(itemsRef.current, busyNowRef.current);
+    if (!id) return false;
+    forkAt(id);
+    return true;
+  }, [forkAt]);
   const turnEndRef = useRef(onTurnEnd);
   turnEndRef.current = onTurnEnd;
   const filesChangedRef = useRef(onFilesChanged);
@@ -353,6 +392,7 @@ export function Chat({
       onTaskCancel={session.cancelTask}
       onSend={send}
       onStop={session.stop}
+      {...(onFork ? { onFork: forkLatest } : {})}
       withdrawn={session.withdrawn}
       onWithdrawnRestored={session.clearWithdrawn}
       onOpenSettings={onOpenSettings}
@@ -426,6 +466,7 @@ export function Chat({
             thinkClock={thinkingClock(sessionId, session.thinking)}
             busy={session.busy}
             compacting={session.compacting}
+            reconnect={session.reconnect}
             waitSince={waitStartedAt(sessionId)}
             armed={visible}
             onRegenerate={session.regenerate}
@@ -436,6 +477,10 @@ export function Chat({
             onRestoreEntry={session.restoreEntry}
             redoAvailable={session.redoAvailable}
             onRedo={onRedo}
+            {...(onFork ? { onFork: forkAt } : {})}
+            {...(forks?.length ? { forks, onOpenSession: openSession } : {})}
+            {...(forkOrigin ? { forkOrigin } : {})}
+            {...(jumpTo && session.ready ? { jumpTo, ...(onJumped ? { onJumped } : {}) } : {})}
             {...(modeAsk ? { modeAsk } : {})}
             {...(choiceAsk ? { choiceAsk } : {})}
             // 切回 agent 时落成这个会话进规划前那一档（Composer 上报的）。

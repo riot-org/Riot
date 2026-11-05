@@ -7,6 +7,7 @@ import {
   findLast,
   finalizeIdleItems,
   resultView,
+  shownUserText,
   stampOf,
   sumUsage,
   systemItem,
@@ -47,6 +48,7 @@ export function rebuildFromSnap(s: SessionState, hist: HistorySnap): SessionStat
     ...s,
     busy: hist.busy,
     compacting: hist.compacting,
+    reconnect: hist.busy ? s.reconnect : null,
     items: [...historyToItems(messages, archived, false), ...lastErrorItem(hist)],
     tokens: snapTokens(archived, messages),
     streaming: "",
@@ -121,6 +123,7 @@ export function applyHistorySnap(s: SessionState, hist: HistorySnap): SessionSta
             streaming: "",
             thinking: "",
             streamingPlan: null,
+            reconnect: null,
             // 空闲也按快照对账而不是清空：后台子 agent 的询问不属于任何
             // 一轮，前台空闲时它可能正等着人答。快照为准。
             asks: reconcileAsks(s.asks, hist.pendingAsks),
@@ -197,6 +200,7 @@ export function applyHistorySnap(s: SessionState, hist: HistorySnap): SessionSta
     streaming: "",
     thinking: "",
     streamingPlan: null,
+    reconnect: null,
     asks: reconcileAsks(s.asks, hist.pendingAsks),
     withdrawn: dropPhantoms(s, items, phantoms, false).withdrawn,
   };
@@ -309,6 +313,24 @@ export function assistantMessageId(itemId: string): string {
 }
 
 /**
+ * `/fork` 的分叉点：最后一条回答的条目 id。`busy` 时最后一轮还在生成、
+ * 没有结尾，从它前面那一轮里找。没有可分叉的回答返回 null。
+ */
+export function latestForkPoint(items: readonly Item[], busy: boolean): string | null {
+  let skipping = busy;
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (!it) continue;
+    if (skipping) {
+      if (it.kind === "user") skipping = false;
+      continue;
+    }
+    if (it.kind === "assistant") return it.id;
+  }
+  return null;
+}
+
+/**
  * 消息 → 界面条目。导出给子 agent 会话视图复用：那边拿到的是同一种
  * `Message[]`，画法也该和主对话一样（工具卡、思考块、回答）。
  */
@@ -357,7 +379,7 @@ export function messagesToItems(msgs: Message[], skipSynthetic = false): Item[] 
           items.push({
             kind: "user",
             id: `${msg.id}-u${items.length}`,
-            text: c.text,
+            text: imagesShown ? c.text : shownUserText(c.text, images.length + files.length > 0),
             ...(images.length && !imagesShown ? { images } : {}),
             ...(files.length && !imagesShown ? { files } : {}),
             ...stampOf(msg.meta),

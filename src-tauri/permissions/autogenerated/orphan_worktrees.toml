@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-orphan-worktrees"
+description = "Enables the orphan_worktrees command without any pre-configured scope."
+commands.allow = ["orphan_worktrees"]
+
+[[permission]]
+identifier = "deny-orphan-worktrees"
+description = "Denies the orphan_worktrees command without any pre-configured scope."
+commands.deny = ["orphan_worktrees"]

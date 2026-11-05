@@ -36,6 +36,7 @@ export default {
   "composer.slash.group.skills": "Skills",
   "composer.slash.group.commands": "コマンド",
   "composer.slash.expandFailed": "{name} を展開できませんでした：コマンドが削除された可能性があります",
+  "composer.fork.nothing": "分岐できる回答がまだありません",
   "composer.mention.menuLabel": "ファイル参照",
 
   "composer.attach.title": "画像やファイルを添付",
@@ -49,12 +50,15 @@ export default {
   "composer.attach.noDiskFile":
     "ドロップされた項目にはディスク上のファイルがありません（Web ページから直接ドラッグした画像の可能性が高いです）。コピーしてから、ここに戻って {key} を押してください。",
 
-  "composer.provider.switch": "プロバイダーを切り替え",
-  "composer.provider.pick": "プロバイダーを選択",
   "composer.provider.noKey": "key 未設定",
+  "composer.provider.setup": "設定",
   "composer.model.switch": "モデルを切り替え",
   "composer.model.pick": "モデルを選択",
-  "composer.model.empty": "このプロバイダーにはまだモデルがありません",
+  "composer.model.row": "モデル",
+  "composer.model.empty": "モデルがまだありません",
+  "composer.model.recent": "最近使用",
+  "composer.model.search": "モデルを検索…",
+  "composer.model.noMatch": "一致するモデルがありません",
   "composer.model.vision": "画像対応",
   "composer.contextWindow": "コンテキストウィンドウ",
   "composer.contextWindow.followSettings": "設定に従う",

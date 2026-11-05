@@ -48,6 +48,28 @@ pnpm gen
 
 `--workspace` 不包含 `riot-browser`（独立 Cargo workspace，避免把 CEF 编进日常构建）。
 
+## 清理 target
+
+旧工具链和长期没用的产物堆在 `target/` 里。用 `cargo-sweep` 按时间、工具链或体积删（`cargo install cargo-sweep`，本机 0.8，选项直接写在 `cargo sweep` 后面），增量缓存还在。
+
+```bash
+cargo sweep --time 30                 # 超过 30 天没被访问过的产物
+cargo sweep --installed               # 只留当前 rustup 工具链编出来的
+cargo sweep --maxsize 2GB --dry-run   # 从最旧的开始删，直到 target 小于这个体积；默认单位 MB
+
+# 只留接下来这次构建真正用到的产物。两条命令中间必须跑构建
+cargo sweep --stamp
+cargo check --workspace && cargo test --workspace
+cargo sweep --file --dry-run          # 先看会删什么
+cargo sweep --file
+```
+
+`--stamp` 只在当前目录写 `sweep.timestamp`，不删文件。`--file` 读这个时间，删掉 `target/<profile>/.fingerprint/` 里访问时间更早的 crate，以及 `deps/`、`build/` 里同一份指纹对应的文件，然后删掉戳文件。`--dry-run` 只打印，戳还留着。`incremental/` 不参与这次清理。
+
+两条命令不要连着跑。中间没有构建的话，现有产物的访问时间都早于戳，几乎会被整份清掉。判断依据是指纹文件的访问时间，不是「这条 cargo 命令成功了」：构建要真的读到这些指纹，对应 crate 才会留下。
+
+主 workspace 在仓库根目录打一次戳即可，成员 crate 共用一份 `target/`。`crates/riot-browser` 是另一个 workspace，要进那个目录单独打戳、再构建、再 `--file`。`--recursive` 只往下找 Cargo 项目，不处理你当前所在的这一层。
+
 ## 内置浏览器
 
 ```bash

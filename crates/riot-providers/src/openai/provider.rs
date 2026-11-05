@@ -27,7 +27,10 @@ use crate::anthropic::request::SystemSection;
 use crate::retry::{GiveUpReason, RequestSource, RetryDecision, RetryPolicy, decide};
 use crate::sse::SseParser;
 use crate::transport::{ByteStream, HttpError, HttpRequest, HttpTransport};
-use crate::watchdog::{DEFAULT_IDLE, track_bytes, with_idle_watchdog_live};
+use crate::watchdog::{
+    DEFAULT_IDLE, Guarded, NO_HEADERS_RETRIES, STALL_RETRIES, Sent, first_byte_deadline,
+    hold_until_content, post_within, track_bytes, wait_before_retry, with_idle_watchdog_live,
+};
 
 #[derive(Clone)]
 pub struct OpenAiConfig {
@@ -207,6 +210,10 @@ impl Provider for OpenAiProvider {
             let mut retry_ctx = RetryContext::initial();
             let mut attempt = 0u32;
             let mut overload_streak = 0u32;
+            // 还没出内容就静默、已经重试过几次（上限见 STALL_RETRIES）。
+            let mut stalls = 0u32;
+            // 等不到响应头的那几次各等了多久（重发上限见 NO_HEADERS_RETRIES）。
+            let mut no_headers: Vec<Duration> = Vec::new();
 
             'attempts: loop {
                 if cancel.is_cancelled() {
@@ -246,9 +253,43 @@ impl Provider for OpenAiProvider {
                 };
 
                 // ── 请求阶段：还没吐过事件，可以重试 ──────────
-                let byte_stream = match transport.post_sse(http_req, cancel.child_token()).await {
-                    Ok(s) => s,
-                    Err(e) => {
+                let deadline = first_byte_deadline(&http_req, idle, !no_headers.is_empty());
+                let sent = post_within(
+                    transport.as_ref(),
+                    http_req,
+                    cancel.child_token(),
+                    clock.as_ref(),
+                    deadline,
+                )
+                .await;
+                let byte_stream = match sent {
+                    Sent::Stream(s) => s,
+                    Sent::NoHeaders => {
+                        no_headers.push(deadline);
+                        let e = HttpError {
+                            timed_out: true,
+                            ..HttpError::transport("no response headers before the deadline")
+                        };
+                        match decide(&policy, &e.failure_context(source, false, attempt), attempt as u64) {
+                            RetryDecision::Retry { after } if no_headers.len() <= NO_HEADERS_RETRIES => {
+                                tracing::warn!(attempt, waited_secs = deadline.as_secs(), "等不到响应头，放宽截止重发");
+                                yield ProviderEvent::Retrying {
+                                    attempt: no_headers.len() as u32,
+                                    max: NO_HEADERS_RETRIES as u32,
+                                };
+                                if !wait_before_retry(clock.as_ref(), after, &cancel).await {
+                                    return;
+                                }
+                                attempt += 1;
+                                continue 'attempts;
+                            }
+                            _ => {
+                                yield ProviderEvent::Error(crate::errors::no_response(&no_headers));
+                                return;
+                            }
+                        }
+                    }
+                    Sent::Failed(e) => {
                         // OpenAI 系用 503 表示过载，没有 Anthropic 的 529
                         let overloaded = matches!(e.status, Some(503) | Some(529));
                         if overloaded {
@@ -270,7 +311,14 @@ impl Provider for OpenAiProvider {
                         let ctx = e.failure_context(source, false, attempt);
                         match decide(&policy, &ctx, attempt as u64) {
                             RetryDecision::Retry { after } => {
-                                clock.sleep_ms(after.as_millis() as u64).await;
+                                // 按停止也会让请求以"已取消"失败：那不是故障，别报重连。
+                                if cancel.is_cancelled() {
+                                    return;
+                                }
+                                yield ProviderEvent::Retrying { attempt: attempt + 1, max: policy.max_attempts };
+                                if !wait_before_retry(clock.as_ref(), after, &cancel).await {
+                                    return;
+                                }
                                 attempt += 1;
                                 continue 'attempts;
                             }
@@ -282,32 +330,51 @@ impl Provider for OpenAiProvider {
                     }
                 };
 
-                // ── 流阶段：不再重试 ─────────────────────────
+                // ── 流阶段：出了内容就不再重试 ────────────────
                 // 理由见 anthropic/provider.rs 的模块文档 —— UI 已经渲染了
-                // 吐出去的内容，重试会让同一段文字出现两次。
-                if endpoint.openai_api.is_responses() {
-                    // 看门狗按字节认活性：保活注释 / ping 解不出事件，但连接是活的。
-                    let (byte_stream, live) = track_bytes(byte_stream);
-                    let decoded = super::responses::decode_stream(byte_stream);
-                    let guarded = with_idle_watchdog_live(decoded, idle, Arc::clone(&clock), Some(live));
-                    futures::pin_mut!(guarded);
-                    while let Some(ev) = guarded.next().await {
-                        if cancel.is_cancelled() {
-                            return;
-                        }
-                        yield crate::origin::stamp_model_origin(ev, &sent_model);
+                // 吐出去的内容，重试会让同一段文字出现两次。还没出内容就
+                // 静默的例外，见 `watchdog::hold_until_content`。
+                //
+                // 看门狗按字节认活性：保活注释 / ping 解不出事件，但连接是活的。
+                let (byte_stream, live) = track_bytes(byte_stream);
+                let decoded: std::pin::Pin<Box<dyn futures_core::Stream<Item = ProviderEvent> + Send>> =
+                    if endpoint.openai_api.is_responses() {
+                        Box::pin(super::responses::decode_stream(byte_stream))
+                    } else {
+                        Box::pin(decode_stream(byte_stream))
+                    };
+                let guarded = hold_until_content(with_idle_watchdog_live(
+                    decoded,
+                    idle,
+                    Arc::clone(&clock),
+                    Some(live),
+                ));
+                futures::pin_mut!(guarded);
+                while let Some(item) = guarded.next().await {
+                    if cancel.is_cancelled() {
+                        return;
                     }
-                } else {
-                    // 看门狗按字节认活性：保活注释 / ping 解不出事件，但连接是活的。
-                    let (byte_stream, live) = track_bytes(byte_stream);
-                    let decoded = decode_stream(byte_stream);
-                    let guarded = with_idle_watchdog_live(decoded, idle, Arc::clone(&clock), Some(live));
-                    futures::pin_mut!(guarded);
-                    while let Some(ev) = guarded.next().await {
-                        if cancel.is_cancelled() {
-                            return;
+                    match item {
+                        Guarded::Event(ev) => yield crate::origin::stamp_model_origin(ev, &sent_model),
+                        Guarded::StalledBeforeContent(ev) => {
+                            let e = HttpError::transport("stream idle before any content");
+                            match decide(&policy, &e.failure_context(source, false, attempt), attempt as u64) {
+                                RetryDecision::Retry { after } if stalls < STALL_RETRIES => {
+                                    stalls += 1;
+                                    tracing::warn!(attempt, stalls, "还没出内容就静默超时，重试");
+                                    yield ProviderEvent::Retrying { attempt: stalls, max: STALL_RETRIES };
+                                    if !wait_before_retry(clock.as_ref(), after, &cancel).await {
+                                        return;
+                                    }
+                                    attempt += 1;
+                                    continue 'attempts;
+                                }
+                                _ => {
+                                    yield crate::origin::stamp_model_origin(ev, &sent_model);
+                                    return;
+                                }
+                            }
                         }
-                        yield crate::origin::stamp_model_origin(ev, &sent_model);
                     }
                 }
                 return;
@@ -618,6 +685,128 @@ mod header_tests {
             ProviderEvent::Message(Message::Assistant { meta, .. }) => meta.model_origin.clone(),
             _ => None,
         })
+    }
+
+    /// 网关拿了响应头就憋着不发（这次真遇到的就是 OpenAI 兼容网关）：
+    /// 还没出内容就静默要重试，Chat 和 Responses 两条路径都盯；出了内容
+    /// 再静默不重试。
+    #[tokio::test(start_paused = true)]
+    async fn 还没出内容就静默会重试_出了内容不重试() {
+        let chat = concat!(
+            r#"data: {"id":"c1","model":"m","choices":[{"delta":{"content":"hi"}}]}"#,
+            "\n\n",
+            "data: [DONE]\n\n",
+        );
+        let responses = concat!(
+            r#"data: {"type":"response.output_text.delta","delta":"hi"}"#,
+            "\n\n",
+            r#"data: {"type":"response.completed","response":{"id":"resp_1","model":"m","output":[{"type":"message","content":[{"type":"output_text","text":"hi"}]}]}}"#,
+            "\n\n",
+        );
+        for (api, ok) in [
+            (OpenaiApi::ChatCompletions, chat),
+            (OpenaiApi::Responses, responses),
+        ] {
+            let run = |script: Vec<ScriptedResponse>| {
+                let t = Arc::new(ScriptedTransport::new(script));
+                let p = OpenAiProvider::new(
+                    Arc::clone(&t) as Arc<dyn HttpTransport>,
+                    Arc::new(TokioClock),
+                    Vec::new(),
+                    OpenAiConfig {
+                        openai_api: api,
+                        api_key: "sk-test".into(),
+                        ..Default::default()
+                    },
+                );
+                async move {
+                    let events = p
+                        .stream(ping(), CancellationToken::new())
+                        .collect::<Vec<_>>()
+                        .await;
+                    (t.call_count(), events)
+                }
+            };
+
+            let (calls, events) = run(vec![
+                ScriptedResponse::ChunksThenHang(vec![]),
+                ScriptedResponse::Chunks(vec![ok.as_bytes().to_vec()]),
+            ])
+            .await;
+            assert_eq!(calls, 2, "{api:?}");
+            assert!(
+                !events.iter().any(|e| matches!(e, ProviderEvent::Error(_))),
+                "{api:?}: {events:?}"
+            );
+
+            // 只截到第一条内容就挂住。
+            let head = ok.split("\n\n").next().unwrap_or_default().to_owned() + "\n\n";
+            let (calls, events) = run(vec![
+                ScriptedResponse::ChunksThenHang(vec![head.into_bytes()]),
+                ScriptedResponse::Chunks(vec![ok.as_bytes().to_vec()]),
+            ])
+            .await;
+            assert_eq!(calls, 1, "{api:?}");
+            assert!(
+                matches!(events.last(), Some(ProviderEvent::Error(_))),
+                "{api:?}: {events:?}"
+            );
+        }
+    }
+
+    /// 响应头一直不来（TUN 代理接通了上游不通的连接）：到点重发一次，
+    /// 放宽了还等不到就报"没有回应"。两种形态共用请求阶段，一起盯。
+    #[tokio::test(start_paused = true)]
+    async fn 等不到响应头重发一次_再等不到报没有回应() {
+        let ok = concat!(
+            r#"data: {"id":"c1","model":"m","choices":[{"delta":{"content":"hi"}}]}"#,
+            "\n\n",
+            "data: [DONE]\n\n",
+        );
+        for api in [OpenaiApi::ChatCompletions, OpenaiApi::Responses] {
+            let run = |script: Vec<ScriptedResponse>| {
+                let t = Arc::new(ScriptedTransport::new(script));
+                let p = OpenAiProvider::new(
+                    Arc::clone(&t) as Arc<dyn HttpTransport>,
+                    Arc::new(TokioClock),
+                    Vec::new(),
+                    OpenAiConfig {
+                        openai_api: api,
+                        api_key: "sk-test".into(),
+                        ..Default::default()
+                    },
+                );
+                async move {
+                    let events = p
+                        .stream(ping(), CancellationToken::new())
+                        .collect::<Vec<_>>()
+                        .await;
+                    (t.call_count(), events)
+                }
+            };
+
+            let (calls, _) = run(vec![
+                ScriptedResponse::NoHeaders,
+                ScriptedResponse::Chunks(vec![ok.as_bytes().to_vec()]),
+            ])
+            .await;
+            assert_eq!(calls, 2, "{api:?}");
+
+            let (calls, events) = run(vec![
+                ScriptedResponse::NoHeaders,
+                ScriptedResponse::NoHeaders,
+                ScriptedResponse::Chunks(vec![ok.as_bytes().to_vec()]),
+            ])
+            .await;
+            assert_eq!(calls, 1 + NO_HEADERS_RETRIES, "{api:?}");
+            assert!(
+                matches!(
+                    events.last(),
+                    Some(ProviderEvent::Error(e)) if e.ui_error().key() == "kernel.provider.noResponse"
+                ),
+                "{api:?}: {events:?}"
+            );
+        }
     }
 
     /// OpenAI 把 `gpt-5` 回显成 `gpt-5-2025-08-07`。`model_origin` 得是请求名，

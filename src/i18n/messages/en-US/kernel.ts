@@ -21,6 +21,9 @@ export default {
   "kernel.history.systemNoText": "This is a system notice; it has no editable text.",
   "kernel.history.systemNoDelete": "This is a system notice; it cannot be deleted.",
   "kernel.history.noCheckpoint": "This prompt has no file checkpoint, so it cannot be restored.",
+  "kernel.fork.turnOpen": "This turn is still running. Fork it once it finishes.",
+  "kernel.fork.compacted": "This message was compacted, so you cannot fork from here.",
+  "kernel.fork.failed": "Forking failed. The original session is unchanged.",
   "kernel.history.noRedo": "There is nothing to redo. Sending again or continuing the chat clears the restore.",
 
   // ── Compact ────────────────────────────────────────────────
@@ -44,6 +47,8 @@ export default {
   "kernel.provider.transport": "Cannot reach the provider. Check your network, proxy or base URL.",
   "kernel.provider.unreachable": "Still cannot reach the provider after several attempts. Check your network, proxy or base URL.",
   "kernel.provider.timeout": "The request timed out; the network or provider did not respond in time. Retrying usually helps.",
+  "kernel.provider.noResponse":
+    "The provider never responded (not even with response headers), so the request was ended. The network, a proxy, or a VPN is most likely holding the request.",
   "kernel.provider.streamBroken": "The provider's response was cut off.",
   "kernel.provider.idle": "The provider sent nothing for {secs}s, so the request was ended. This is usually a proxy or gateway issue.",
   "kernel.provider.keepaliveOnly": "The provider only sent keep-alive pings with no content for {mins} min, so the request was ended.",
@@ -95,6 +100,7 @@ export default {
   "kernel.skill.noDescription": "Missing description \u2014 it is the only thing the model uses to decide whether to load the skill.",
   "kernel.skill.emptyBody": "The body is empty: write how this skill works after the frontmatter.",
   "kernel.slash.compact": "Compact the conversation into a summary to free up context",
+  "kernel.slash.fork": "Fork the latest reply into a new session, leaving this one as is",
 
   // ── Config (Settings) ──────────────────────────────────────
   "kernel.config.unreadable": "The file could not be read.",

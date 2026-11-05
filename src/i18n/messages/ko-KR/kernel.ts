@@ -20,6 +20,9 @@ export default {
   "kernel.history.systemNoText": "이 메시지는 시스템 프롬프트라 편집할 수 있는 텍스트가 없습니다.",
   "kernel.history.systemNoDelete": "이 메시지는 시스템 프롬프트라 삭제할 수 없습니다.",
   "kernel.history.noCheckpoint": "이 질문에는 파일 체크포인트가 없어 대화 기준으로 되돌릴 수 없습니다.",
+  "kernel.fork.turnOpen": "이 턴이 아직 끝나지 않았습니다. 끝난 뒤에 분기하세요.",
+  "kernel.fork.compacted": "이 메시지는 압축되어 여기서 분기할 수 없습니다.",
+  "kernel.fork.failed": "분기하지 못했습니다. 원래 세션은 그대로입니다.",
   "kernel.history.noRedo": "다시 적용할 되돌리기가 없습니다. 다시 보내거나 대화를 이어가면 복원할 수 없습니다.",
 
   // ── 압축 ────────────────────────────────────────────────────
@@ -43,6 +46,8 @@ export default {
   "kernel.provider.transport": "제공자에 연결할 수 없습니다 — 네트워크, 프록시 또는 base URL을 확인하세요.",
   "kernel.provider.unreachable": "여러 번 시도했지만 제공자에 연결할 수 없습니다 — 네트워크, 프록시 또는 base URL을 확인하세요.",
   "kernel.provider.timeout": "요청 시간이 초과되었습니다. 네트워크나 제공자가 제때 응답하지 않았습니다. 잠시 후 다시 시도하면 보통 해결됩니다.",
+  "kernel.provider.noResponse":
+    "제공자가 응답하지 않아(응답 헤더조차 오지 않음) 이 요청을 종료했습니다. 네트워크, 프록시 또는 VPN이 요청을 막고 있을 가능성이 큽니다.",
   "kernel.provider.streamBroken": "제공자 응답을 읽는 도중 연결이 끊어졌습니다.",
   "kernel.provider.idle": "제공자가 {secs}초 동안 아무 데이터도 보내지 않아 이 요청을 종료했습니다. 보통 중간 프록시나 게이트웨이의 문제입니다.",
   "kernel.provider.keepaliveOnly": "제공자가 {mins}분 동안 연결 유지 신호만 보내고 내용이 없어 이 요청을 종료했습니다.",
@@ -94,6 +99,7 @@ export default {
   "kernel.skill.noDescription": "description이 없습니다 — 모델이 이 Skill을 불러올지 판단하는 유일한 근거입니다.",
   "kernel.skill.emptyBody": "본문이 비어 있습니다: frontmatter 뒤에 이 Skill의 구체적인 방법을 적어야 합니다.",
   "kernel.slash.compact": "대화 기록을 요약으로 압축하여 컨텍스트 윈도우를 확보합니다",
+  "kernel.slash.fork": "최근 답변에서 새 세션으로 분기합니다(원래 세션은 그대로)",
 
   // ── 설정 (설정 페이지) ────────────────────────────────────────
   "kernel.config.unreadable": "파일을 읽을 수 없습니다.",

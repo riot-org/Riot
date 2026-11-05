@@ -61,6 +61,21 @@ describe("applyMessage", () => {
     expect(out.checkpointIds).toEqual(["msg_1"]);
   });
 
+  it("matches an image-only optimistic bubble despite the kernel's placeholder text", () => {
+    const img = "data:image/png;base64,AAA";
+    const s = state({ items: [{ kind: "user", id: "local-1", text: "", images: [img], at: 1 }] });
+    const out = applyMessage(s, {
+      type: "message",
+      role: "user",
+      id: "msg_1",
+      content: [
+        { type: "attachment", kind: "described_image", media_type: "image/png", data: "AAA", text: "x" },
+        { type: "text", text: "看这张图。" },
+      ],
+    } as MessageEvent);
+    expect(out.items).toEqual([{ kind: "user", id: "msg_1", text: "", images: [img] }]);
+  });
+
   it("gives every text and thinking block of one assistant message its own id", () => {
     const out = applyMessage(state(), {
       type: "message",
@@ -141,6 +156,18 @@ describe("applyDone", () => {
     expect(out.busy).toBe(false);
     expect(out.asks).toEqual([ask]);
     expect(out.items[0]).toMatchObject({ status: "running" });
+  });
+
+  it("drops the reconnect status however the turn ends", () => {
+    const s = state({ busy: true, reconnect: { attempt: 2, max: 10 } });
+    const reasons: Extract<AgentEvent, { type: "done" }>["reason"][] = [
+      { reason: "completed" },
+      { reason: "aborted", by: "user" },
+      { reason: "awaiting_user", asks: 1 },
+    ];
+    for (const reason of reasons) {
+      expect(applyDone(s, { type: "done", reason }).reconnect).toBeNull();
+    }
   });
 });
 

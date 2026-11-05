@@ -56,6 +56,7 @@ pub mod tree;
 pub mod update;
 #[cfg(feature = "desktop")]
 mod vibrancy;
+pub mod worktree;
 
 #[cfg(feature = "desktop")]
 use tauri::Manager;
@@ -312,6 +313,51 @@ async fn redo_checkpoint(
     session_id: String,
 ) -> HostResult<riot_protocol::RestoreResult> {
     state.redo_checkpoint(&session_id).await
+}
+
+/// 从 `message_id` 所在那一轮的结尾分叉出一个新会话。原会话不动。
+/// `worktree` 时新会话在独立的 git worktree 里，文件回到分叉点。
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn fork_session(
+    state: State<'_, AppState>,
+    session_id: String,
+    message_id: String,
+    worktree: Option<bool>,
+) -> HostResult<state::ForkOut> {
+    state
+        .fork_session(&session_id, &message_id, worktree.unwrap_or(false))
+        .await
+}
+
+/// 分叉确认框要的预览。
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn fork_preview(
+    state: State<'_, AppState>,
+    session_id: String,
+    message_id: String,
+) -> HostResult<state::ForkPreviewOut> {
+    state.fork_preview(&session_id, &message_id).await
+}
+
+/// worktree 会话删之前的状态（有没有没提交的、没合并的）。不是 worktree 会话回 null。
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn worktree_status(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> HostResult<Option<worktree::Status>> {
+    state.worktree_status(&session_id).await
+}
+
+/// 没有对应会话的 worktree。只列，不删。
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn orphan_worktrees(state: State<'_, AppState>) -> HostResult<Vec<worktree::Orphan>> {
+    Ok(state.orphan_worktrees().await)
+}
+
+/// 删掉一个没有对应会话的 worktree。
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn discard_orphan_worktree(state: State<'_, AppState>, path: String) -> HostResult<()> {
+    state.discard_orphan_worktree(&path).await
 }
 
 /// 可用的斜杠命令（内置 + 项目 + 全局 + 插件）。`root` 为 null 时不列项目级。
@@ -1433,7 +1479,10 @@ async fn write_file_text(
         return Err(ui_error!("host.file.notFile").into());
     }
     if text.len() as u64 > MAX_PREVIEW_FILE {
-        let (size, max) = (text.len() as u64 / (1024 * 1024), MAX_PREVIEW_FILE / (1024 * 1024));
+        let (size, max) = (
+            text.len() as u64 / (1024 * 1024),
+            MAX_PREVIEW_FILE / (1024 * 1024),
+        );
         return Err(ui_error!("host.file.tooLarge", size = size, max = max).into());
     }
     let current = tokio::fs::read(&path)
@@ -1524,10 +1573,17 @@ async fn get_history(
     state.history(&session_id).await
 }
 
-/// 删除会话（中断正在跑的轮子）。幂等。
+/// 删除会话（中断正在跑的轮子）。幂等。worktree 会话：`discard_worktree`
+/// 为 true 连 worktree 和分支一起删，false 留着，不给就干净才删。
 #[cfg_attr(feature = "desktop", tauri::command)]
-async fn delete_session(state: State<'_, AppState>, session_id: String) -> HostResult<()> {
-    state.delete_session(&session_id).await;
+async fn delete_session(
+    state: State<'_, AppState>,
+    session_id: String,
+    discard_worktree: Option<bool>,
+) -> HostResult<()> {
+    state
+        .delete_session_with(&session_id, discard_worktree)
+        .await;
     Ok(())
 }
 
@@ -1885,6 +1941,11 @@ pub fn run() {
             restore_preview,
             restore_checkpoint,
             redo_checkpoint,
+            fork_session,
+            fork_preview,
+            worktree_status,
+            orphan_worktrees,
+            discard_orphan_worktree,
             queue_list,
             queue_remove,
             queue_take,

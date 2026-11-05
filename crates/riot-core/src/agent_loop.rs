@@ -174,6 +174,9 @@ pub fn run_agent(
                         yield AgentEvent::Delta(d);
                     }
                     ProviderEvent::Usage(u) => turn.merge_usage(&u),
+                    ProviderEvent::Retrying { attempt, max } => {
+                        yield AgentEvent::Retrying { attempt, max };
+                    }
                     ProviderEvent::Message(mut m) => {
                         think_timer.stamp(&mut m, deps.clock.now_ms());
                         turn.push(m.clone());
@@ -277,20 +280,28 @@ pub fn run_agent(
                             // 而这条路上用户刚发出一句话、什么都还没看到 ——
                             // 不说的话那几十秒和"模型不理人"没有区别。
                             yield AgentEvent::Compacting;
-                            match deps.compactor.compact(state.messages.clone(), budget).await {
-                                CompactResult::Compacted {
+                            // 同样是"宽限期 + 兜底"：重档压缩要等一次模型调用
+                            // 写完总结，压缩器没听取消的话停止键就得陪它等。
+                            // 放弃时历史原样，回到循环开头按中断收场。
+                            let compacted = tokio::select! {
+                                r = deps.compactor.compact(state.messages.clone(), budget) => Some(r),
+                                () = grace_after_cancel(&cancel, ABORT_GRACE_MS) => None,
+                            };
+                            match compacted {
+                                None => {}
+                                Some(CompactResult::Compacted {
                                     messages,
                                     before_tokens,
                                     after_tokens,
                                     strategy,
-                                } => {
+                                }) => {
                                     // 压缩后必须仍然配对，否则重试的请求照样 400。
                                     invariants::check_tool_pairing(&messages);
                                     state.messages = messages;
                                     state.compact_failure_streak = 0;
                                     yield AgentEvent::Compacted { before_tokens, after_tokens, strategy };
                                 }
-                                CompactResult::Failed { reason } => {
+                                Some(CompactResult::Failed { reason }) => {
                                     // 不在这里终止 —— 让下一轮的 attempt_recovery
                                     // 拿着累加后的 streak 决定要不要熔断。
                                     // 终止逻辑只有一处，不要散在两个地方。

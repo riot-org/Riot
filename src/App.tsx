@@ -18,14 +18,20 @@ import {
   type ConfigStatus,
   createSession,
   deleteSession,
+  discardOrphanWorktree,
   encodePlainForComposer,
+  type ForkOut,
+  forkSession,
   encodeRefForComposer,
   getConfig,
   listSessions,
+  type OrphanWorktree,
+  orphanWorktrees,
   type PermissionMode,
   openInBrowser,
   pickFiles,
   probeDirs,
+  projectRootOf,
   type MissedRun,
   removeProject,
   renameSession,
@@ -41,8 +47,12 @@ import {
   setWindowTitle,
   subscribeConfigChanges,
   subscribeSessionsChanges,
+  worktreeStatus,
 } from "./bridge";
 import { BrowserPanel } from "./components/BrowserPanel";
+import { ForkDialog, type ForkRequest } from "./components/ForkDialog";
+import { OrphanWorktreesDialog } from "./components/OrphanWorktreesDialog";
+import type { ForkChild } from "./components/Transcript";
 import { GitChangesPanel } from "./components/GitChangesPanel";
 import { ScopePanel } from "./components/ScopePanel";
 import { SessionSettings } from "./components/SessionSettings";
@@ -149,6 +159,67 @@ import { revealInFileManagerLabel } from "./lib/platform";
 /** 同时保活的会话树上限。切走不卸 DOM，切回才不是白屏。 */
 const KEEP_CHATS = 4;
 
+/**
+ * 分叉会话的来源：原会话还在就能点回去（落到分叉点那条消息）；删了只剩一句
+ * "原会话已删除"。分隔线画在 `message`（新会话继承来的最后一条）那一轮。
+ */
+function forkOriginOf(
+  from: { session: string; message: string },
+  sessions: SessionInfo[],
+  open: (id: string, messageId: string) => void,
+): { messageId: string; title: string | null; onOpen?: () => void } {
+  const src = sessions.find((s) => s.id === from.session);
+  if (!src) return { messageId: from.message, title: null };
+  return {
+    messageId: from.message,
+    title: src.title ?? "",
+    onOpen: () => open(src.id, from.message),
+  };
+}
+
+/** 每个会话分出去的会话，按原会话分组。内容没变的组沿用上一次的数组 —— Transcript 是 memo 的。 */
+function forkChildren(
+  sessions: SessionInfo[],
+  prev: ReadonlyMap<string, ForkChild[]>,
+): Map<string, ForkChild[]> {
+  const next = new Map<string, ForkChild[]>();
+  for (const s of sessions) {
+    const from = s.forkedFrom;
+    if (!from) continue;
+    const list = next.get(from.session) ?? [];
+    list.push({
+      id: s.id,
+      title: s.title,
+      createdAtMs: s.createdAtMs,
+      message: from.message,
+      branch: from.worktree?.branch ?? null,
+    });
+    next.set(from.session, list);
+  }
+  for (const [id, list] of next) {
+    const old = prev.get(id);
+    if (old && sameForks(old, list)) next.set(id, old);
+  }
+  return next;
+}
+
+function sameForks(a: readonly ForkChild[], b: readonly ForkChild[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((f, i) => {
+      const g = b[i];
+      return (
+        g !== undefined &&
+        f.id === g.id &&
+        f.title === g.title &&
+        f.createdAtMs === g.createdAtMs &&
+        f.message === g.message &&
+        f.branch === g.branch
+      );
+    })
+  );
+}
+
 export function App() {
   const { t, tn } = useT();
   const [config, setConfig] = useState<ConfigStatus | null>(null);
@@ -183,6 +254,27 @@ export function App() {
   const [showSettings, setShowSettings] = useState(false);
   /** 定时任务页在主区前台（侧栏一级菜单进入，选会话退出）。 */
   const [schedulePage, setSchedulePage] = useState(false);
+  /**
+   * 切过去之后要定位到的那条消息（分叉会话点回原会话）。`nonce` 让连点
+   * 同一条也重新滑一次。切去别的会话就作废 —— 不然那边历史晚到，回来时
+   * 冷不丁跳一下。
+   */
+  const [jump, setJump] = useState<{ sessionId: string; messageId: string; nonce: number } | null>(
+    null,
+  );
+  useEffect(() => {
+    if (jump && jump.sessionId !== active) setJump(null);
+  }, [active, jump]);
+  const clearJump = useCallback(() => setJump(null), []);
+  const openAt = useCallback((sessionId: string, messageId: string) => {
+    setActive(sessionId);
+    setSchedulePage(false);
+    setJump({ sessionId, messageId, nonce: Date.now() });
+  }, []);
+  const openSession = useCallback((sessionId: string) => {
+    setActive(sessionId);
+    setSchedulePage(false);
+  }, []);
   /** 详情面板正看着的任务。详情占用系统右侧栏（工作台抽屉的位置）。 */
   const [selectedSchedule, setSelectedSchedule] = useState<string | null>(null);
   const {
@@ -200,6 +292,11 @@ export function App() {
   const [schedCreating, setSchedCreating] = useState(false);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
+  /** 分叉确认框（共用工作区 / 新 worktree）。 */
+  const [forkReq, setForkReq] = useState<ForkRequest | null>(null);
+  /** 没有会话认领的 worktree：会话删了、worktree 因为有改动留下的。 */
+  const [orphans, setOrphans] = useState<OrphanWorktree[]>([]);
+  const [showOrphans, setShowOrphans] = useState(false);
   /** 目录已不在磁盘上、等用户决定怎么处理的那个项目。 */
   const [goneRoot, setGoneRoot] = useState<string | null>(null);
   /** 探测过、确认不存在的项目根。用来在侧栏和欢迎页标「已失效」。 */
@@ -710,7 +807,14 @@ export function App() {
    * 分隔符用 NUL —— 路径里不可能有它。
    */
   const rootsKey = useMemo(
-    () => [...new Set([...(projectList ?? []), ...sessions.map((s) => s.root)])].join("\u0000"),
+    () =>
+      [
+        ...new Set([
+          ...(projectList ?? []),
+          ...sessions.map((s) => s.root),
+          ...sessions.map(projectRootOf),
+        ]),
+      ].join("\u0000"),
     [projectList, sessions],
   );
   const probeRoots = useMemo(() => (rootsKey ? rootsKey.split("\u0000") : []), [rootsKey]);
@@ -765,11 +869,12 @@ export function App() {
   }, [kept, sessions, active]);
 
   // 窗口标题跟随项目。多窗口/多桌面时，标题栏是用户分辨"哪个是哪个"
-  // 的唯一线索。
+  // 的唯一线索。worktree 会话按原项目算 —— worktree 目录名是会话 id。
+  const titleRoot = activeSession ? projectRootOf(activeSession) : undefined;
   useEffect(() => {
-    const name = activeSession?.root ? basename(activeSession.root) : undefined;
+    const name = titleRoot ? basename(titleRoot) : undefined;
     setWindowTitle(name ? `${name} — Riot` : "Riot").catch(() => {});
-  }, [activeSession?.root]);
+  }, [titleRoot]);
 
   const noteError = useCallback((title: string, e: unknown) => {
     setConfirm({
@@ -819,6 +924,83 @@ export function App() {
       noteError(t("app.error.createSession"), e);
     }
   }, [active, noteError, touchSession, t]);
+
+  /** 分叉先过确认框（共用工作区还是开 worktree），框里点了才真的分。 */
+  const forkFrom = useCallback((sessionId: string, messageId: string) => {
+    setForkReq({ sessionId, messageId });
+  }, []);
+
+  /** 分叉之后要用户知道的：没落回分叉点的文件、没带进 worktree 的未跟踪文件。 */
+  const forkNotes = useCallback(
+    (out: ForkOut): string[] => {
+      const notes: string[] = [];
+      const failed = out.files?.failed ?? [];
+      if (failed.length) {
+        notes.push(
+          t("app.fork.failedFiles", { files: failed.map((f) => f.path).join(t("transcript.listSep")) }),
+        );
+      }
+      const carried = out.carried;
+      if (carried && carried.skippedCount > 0) {
+        notes.push(
+          tn("app.fork.skippedUntracked", carried.skippedCount, {
+            files: carried.skipped.join(t("transcript.listSep")),
+          }),
+        );
+      }
+      return notes;
+    },
+    [t, tn],
+  );
+
+  /** 确认框里点了分叉。出错抛给框，留在框里显示。 */
+  const doFork = useCallback(
+    async (req: ForkRequest, worktree: boolean) => {
+      const out = await forkSession(req.sessionId, req.messageId, { worktree });
+      const info = out.session;
+      // 宿主写完索引会广播一次列表变化，那次刷新可能先到。
+      setSessions((prev) => (prev.some((s) => s.id === info.id) ? prev : [...prev, info]));
+      setActive(info.id);
+      touchSession(info.id);
+      setSchedulePage(false);
+      setForkReq(null);
+      const notes = forkNotes(out);
+      if (notes.length) {
+        setConfirm({
+          title: t("app.fork.noticeTitle"),
+          body: notes.map((n, i) => (
+            <span key={i} className="confirm-line">
+              {n}
+            </span>
+          )),
+          confirmLabel: t("app.dialog.gotIt"),
+          danger: false,
+          action: () => {},
+        });
+      }
+    },
+    [forkNotes, touchSession, t],
+  );
+
+  const refreshOrphans = useCallback(() => {
+    orphanWorktrees()
+      .then((list) =>
+        setOrphans((prev) =>
+          prev.length === list.length && prev.every((o, i) => o.path === list[i]?.path) ? prev : list,
+        ),
+      )
+      .catch(() => {});
+  }, []);
+  useEffect(() => {
+    if (!booting) refreshOrphans();
+  }, [booting, refreshOrphans]);
+
+  // 每个会话分出去的会话。上一份留在 ref 里，内容没变的组沿用旧数组。
+  const forkKids = useRef<Map<string, ForkChild[]>>(new Map());
+  const forksBySession = useMemo(() => {
+    forkKids.current = forkChildren(sessions, forkKids.current);
+    return forkKids.current;
+  }, [sessions]);
 
   const dirPicker = useDirectoryPicker();
   const pickDir = dirPicker.pick;
@@ -1072,8 +1254,12 @@ export function App() {
     });
   };
 
-  const doDeleteSession = async (id: string) => {
-    await deleteSession(id);
+  /** `discardWorktree`：worktree 会话的去留（见 deleteSession）。 */
+  const doDeleteSession = async (id: string, discardWorktree?: boolean) => {
+    const hadWorktree = !!sessionsRef.current.find((s) => s.id === id)?.forkedFrom?.worktree;
+    await deleteSession(id, discardWorktree);
+    // 留下来的 worktree 从此没有会话认领，去孤儿列表里排队。
+    if (hadWorktree) refreshOrphans();
     dropSessionWorkbench(id);
     setKept((prev) => prev.filter((x) => x !== id));
     // `[约束]` 必须函数式更新。菜单是存进 `menu` state 之后一直挂在屏幕上
@@ -1087,7 +1273,7 @@ export function App() {
     const victim = live.find((s) => s.id === id);
     const rest = live.filter((s) => s.id !== id);
     const sibling = victim
-      ? [...rest].reverse().find((s) => s.root === victim.root)
+      ? [...rest].reverse().find((s) => projectRootOf(s) === projectRootOf(victim))
       : undefined;
     const fallback = (sibling ?? rest[rest.length - 1])?.id ?? null;
     // 删的不是正看着的那个就别动焦点 —— `active` 同样可能在菜单挂着的
@@ -1109,7 +1295,11 @@ export function App() {
 
   const doRemoveProject = async (root: string) => {
     const closed = await removeProject(root);
-    const dead = (s: SessionInfo) => s.root === root || closed.includes(s.id);
+    // 留着改动的 worktree 会变成孤儿。
+    if (sessionsRef.current.some((s) => s.forkedFrom?.worktree && projectRootOf(s) === root)) {
+      refreshOrphans();
+    }
+    const dead = (s: SessionInfo) => projectRootOf(s) === root || closed.includes(s.id);
     // 读最新那份列表，不是建菜单那次渲染的快照（理由见 doDeleteSession）。
     // 中间隔着 await，所以是个函数：用一次算一次。
     const deadIds = () =>
@@ -1153,7 +1343,7 @@ export function App() {
       setKept((prev) => prev.filter((id) => !dropped.has(id)));
       setConfig(await getConfig());
       setSessions((prev) => [
-        ...prev.filter((s) => s.root !== oldRoot && !dropped.has(s.id)),
+        ...prev.filter((s) => projectRootOf(s) !== oldRoot && !dropped.has(s.id)),
         info,
       ]);
       setActive(info.id);
@@ -1174,6 +1364,83 @@ export function App() {
     }
   };
 
+  /** worktree 会话的三个入口。顶栏的分支标签和会话菜单共用。 */
+  const worktreeEntries = (s: SessionInfo): MenuState["entries"] => {
+    const w = s.forkedFrom?.worktree;
+    if (!w) return [];
+    return [
+      { label: revealInFileManagerLabel(), action: () => void revealInFinder(w.path) },
+      {
+        label: t("app.worktree.openTerminal"),
+        action: () => {
+          // 终端跟着前台会话开在它的目录里。
+          setActive(s.id);
+          setSchedulePage(false);
+          setShowTerm(true);
+        },
+      },
+      { label: t("app.worktree.copyPath"), action: () => void navigator.clipboard.writeText(w.path) },
+    ];
+  };
+
+  const worktreeMenu = (e: React.MouseEvent, s: SessionInfo) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const r = e.currentTarget.getBoundingClientRect();
+    setMenu({ x: r.left, y: r.bottom + 4, entries: worktreeEntries(s) });
+  };
+
+  /**
+   * 删会话。worktree 会话先看 worktree：干净的（没改动、提交都合进别的分支了）
+   * 跟着删；不干净的问一句留不留，默认留 —— 留下的会进「没有会话的 worktree」。
+   */
+  const confirmDeleteSession = async (s: SessionInfo) => {
+    const title = t("app.sessionMenu.deleteTitle");
+    const body = t("app.sessionMenu.deleteBody", { title: s.title ?? t("app.newSession") });
+    const run = (discard?: boolean) =>
+      void doDeleteSession(s.id, discard).catch((err: unknown) => setBootError(String(err)));
+    const st = s.forkedFrom?.worktree ? await worktreeStatus(s.id).catch(() => null) : null;
+    if (!st?.exists) {
+      setConfirm({ title, body, confirmLabel: t("common.delete"), action: () => run() });
+      return;
+    }
+    const lines = (extra: (string | null)[]) =>
+      [body, ...extra].flatMap((line, i) =>
+        line ? [<span key={i} className="confirm-line">{line}</span>] : [],
+      );
+    if (st.dirty === 0 && st.unmerged === 0) {
+      setConfirm({
+        title,
+        body: lines([t("app.sessionMenu.worktreeClean", { branch: st.branch })]),
+        confirmLabel: t("common.delete"),
+        action: () => run(true),
+      });
+      return;
+    }
+    setConfirm({
+      title,
+      body: lines([
+        st.dirty > 0 ? tn("app.sessionMenu.worktreeDirty", st.dirty) : null,
+        st.unmerged > 0 ? tn("app.sessionMenu.worktreeUnmerged", st.unmerged, { branch: st.branch }) : null,
+      ]),
+      confirmLabel: t("common.delete"),
+      choices: [
+        {
+          id: "keep",
+          label: t("app.sessionMenu.keepWorktree"),
+          hint: t("app.sessionMenu.keepWorktreeHint", { path: st.path }),
+        },
+        {
+          id: "discard",
+          label: t("app.sessionMenu.discardWorktree"),
+          hint: t("app.sessionMenu.discardWorktreeHint", { branch: st.branch }),
+        },
+      ],
+      choice: "keep",
+      action: (choice) => run(choice === "discard"),
+    });
+  };
+
   const sessionMenu = (e: React.MouseEvent, s: SessionInfo) => {
     e.preventDefault();
     e.stopPropagation();
@@ -1191,16 +1458,11 @@ export function App() {
             setRenaming(s.id);
           },
         },
+        ...worktreeEntries(s),
         {
           label: t("app.sessionMenu.delete"),
           danger: true,
-          action: () =>
-            setConfirm({
-              title: t("app.sessionMenu.deleteTitle"),
-              body: t("app.sessionMenu.deleteBody", { title: s.title ?? t("app.newSession") }),
-              confirmLabel: t("common.delete"),
-              action: () => void doDeleteSession(s.id).catch((err: unknown) => setBootError(String(err))),
-            }),
+          action: () => void confirmDeleteSession(s),
         },
       ],
     });
@@ -1210,7 +1472,7 @@ export function App() {
     e.preventDefault();
     e.stopPropagation();
     const name = basename(root) || root;
-    const count = sessions.filter((s) => s.root === root).length;
+    const count = sessions.filter((s) => projectRootOf(s) === root).length;
     setMenu({
       x: e.clientX,
       y: e.clientY,
@@ -1488,6 +1750,8 @@ export function App() {
             onRenameSubmit={doRename}
             onRenameCancel={() => setRenaming(null)}
             onCollapse={toggleSidebar}
+            orphanWorktrees={orphans.length}
+            onOrphanWorktrees={() => setShowOrphans(true)}
           />
       </SlidePanel>
       {sidebarOpen ? (
@@ -1552,6 +1816,7 @@ export function App() {
             onToggleSessionCfg={() => setShowSessionCfg((v) => !v)}
             onOpenBrowser={() => openTab({ kind: "browser" })}
             reserveControls={!drawerVisual}
+            onWorktreeMenu={worktreeMenu}
           />
         )}
 
@@ -1615,6 +1880,7 @@ export function App() {
             {activeSession ? (
               mountedSessions.map((s) => {
                 const visible = !schedulePage && s.id === activeSession.id;
+                const kids = forksBySession.get(s.id);
                 return (
                   <div
                     key={s.id}
@@ -1629,7 +1895,12 @@ export function App() {
                       config={config}
                       workspace={s.root}
                       workspaceMissing={missing.has(s.root)}
-                      onMissingWorkspace={() => setGoneRoot(s.root)}
+                      onMissingWorkspace={() =>
+                        // worktree 没了不等于项目没了：别把用户带去「移除项目」。
+                        s.forkedFrom?.worktree
+                          ? noteError(t("app.worktree.goneTitle"), t("app.worktree.gone", { path: s.root }))
+                          : setGoneRoot(s.root)
+                      }
                       initialMode={s.mode}
                       initialMultitask={s.multitask}
                       sessionProvider={s.provider ?? ""}
@@ -1663,6 +1934,12 @@ export function App() {
                           : `${s.root.replace(/[\\/]+$/, "")}/${p}`;
                         openFilePreview(abs);
                       }}
+                      onFork={(messageId) => forkFrom(s.id, messageId)}
+                      {...(kids ? { forks: kids, onOpenSession: openSession } : {})}
+                      {...(s.forkedFrom
+                        ? { forkOrigin: forkOriginOf(s.forkedFrom, sessions, openAt) }
+                        : {})}
+                      {...(jump?.sessionId === s.id ? { jumpTo: jump, onJumped: clearJump } : {})}
                       onTurnEnd={() => setChangesRev((n) => n + 1)}
                       onFilesChanged={() => setChangesRev((n) => n + 1)}
                       onBusy={(b) => patchSession(s.id, { busy: b })}
@@ -2031,6 +2308,24 @@ export function App() {
       <ImageLightboxHost />
       {dirPicker.element}
       {confirm ? <ConfirmDialog c={confirm} onClose={() => setConfirm(null)} /> : null}
+      {forkReq ? (
+        <ForkDialog
+          key={`${forkReq.sessionId}\n${forkReq.messageId}`}
+          req={forkReq}
+          onClose={() => setForkReq(null)}
+          onFork={(worktree) => doFork(forkReq, worktree)}
+        />
+      ) : null}
+      {showOrphans ? (
+        <OrphanWorktreesDialog
+          orphans={orphans}
+          onDiscard={async (path) => {
+            await discardOrphanWorktree(path);
+            refreshOrphans();
+          }}
+          onClose={() => setShowOrphans(false)}
+        />
+      ) : null}
       {goneRoot ? (
         <MissingProjectDialog
           root={goneRoot}

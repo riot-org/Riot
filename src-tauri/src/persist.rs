@@ -66,6 +66,9 @@ pub struct PersistedSession {
     /// 多任务模式（主 agent 只协调，实质工作交给后台子 agent）。
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub multitask: bool,
+    /// 从哪个会话的哪一轮分叉出来的。不是分叉出来的为 None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forked_from: Option<riot_store::ForkOrigin>,
 }
 
 fn default_mode() -> PermissionMode {
@@ -192,6 +195,7 @@ fn from_scan(s: riot_store::ScannedTranscript) -> PersistedSession {
         system_prompt: None,
         thinking: riot_protocol::ThinkingPolicy::default(),
         multitask: false,
+        forked_from: s.forked_from,
     }
 }
 
@@ -261,6 +265,7 @@ mod tests {
             system_prompt: None,
             thinking: riot_protocol::ThinkingPolicy::default(),
             multitask: false,
+            forked_from: None,
         }
     }
 
@@ -318,6 +323,58 @@ mod tests {
             d.path().join("index.json.bak").exists(),
             "损坏的索引要备份，不能直接扔"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn 重建索引认得出分叉的会话() {
+        // 分叉记号只在索引里的话，索引一坏侧栏就认不出分叉了。transcript
+        // 里那行来源记录是它的底。
+        let d = dir();
+        let transcripts = riot_store::Transcripts::new(d.path());
+        let origin = riot_store::ForkOrigin {
+            session: SessionId::from_raw("src"),
+            message: "a1".into(),
+            worktree: Some(riot_protocol::ForkWorktree {
+                path: "/wt/f1".into(),
+                repo_root: "/tmp".into(),
+                branch: "riot/fork-x".into(),
+                base: "abc".into(),
+                project_root: "/tmp/proj".into(),
+            }),
+        };
+        let user = Message::User {
+            id: MessageId::from_raw("m1"),
+            content: vec![UserContent::Text {
+                text: "原会话的第一句".into(),
+            }],
+            meta: MessageMeta::default(),
+        };
+        transcripts
+            .write_fork(
+                &riot_store::TranscriptMeta {
+                    id: SessionId::from_raw("f1"),
+                    root: "/tmp/proj".into(),
+                    created_at_ms: 42,
+                },
+                &origin,
+                &[],
+                &[user],
+                None,
+            )
+            .await
+            .expect("写分叉");
+
+        let idx = load(d.path(), &transcripts);
+        assert_eq!(idx.sessions.len(), 1);
+        assert_eq!(idx.sessions[0].forked_from.as_ref(), Some(&origin));
+        assert_eq!(
+            idx.sessions[0].auto_title.as_deref(),
+            Some("原会话的第一句")
+        );
+
+        // 再存一次读回来，字段还在。
+        save(d.path(), &idx).expect("保存");
+        assert_eq!(load(d.path(), &transcripts).sessions, idx.sessions);
     }
 
     async fn write_transcript(
@@ -505,6 +562,9 @@ mod tests {
         // 存回去：High 是默认值不落盘，旧写法从文件里消失。
         save(d.path(), &idx).expect("保存");
         let raw = std::fs::read_to_string(d.path().join("index.json")).expect("读");
-        assert!(!raw.contains("adaptive") && !raw.contains(r#"{"mode":"default"}"#), "{raw}");
+        assert!(
+            !raw.contains("adaptive") && !raw.contains(r#"{"mode":"default"}"#),
+            "{raw}"
+        );
     }
 }

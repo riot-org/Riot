@@ -1,7 +1,14 @@
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 
 import { useT } from "../i18n";
 import { Modal } from "./Modal";
+
+/** 确认框里的一个单选项。 */
+export interface ConfirmChoice {
+  id: string;
+  label: string;
+  hint?: string;
+}
 
 /** 破坏性操作的确认内容。 */
 export interface ConfirmRequest {
@@ -9,11 +16,16 @@ export interface ConfirmRequest {
   /** 接受节点而不只是字符串 —— 调用方已经在往里塞代码片段。 */
   body: ReactNode;
   confirmLabel: string;
-  action: () => void;
+  /** 有 `choices` 时收到选中的那个 id。 */
+  action: (choice?: string) => void;
   /** 默认 true。非破坏性确认（「知道了」）设 false，用主按钮而不是红色。 */
   danger?: boolean;
   /** 取消 / Esc / 点遮罩。确认走 `action`，不会进这里。 */
   onCancel?: () => void;
+  /** 确认之前还要选一样（删 worktree 会话时「留着 / 一起删」）。 */
+  choices?: ConfirmChoice[];
+  /** 默认选中的。不给就是第一个。 */
+  choice?: string;
 }
 
 /**
@@ -34,6 +46,7 @@ export function ConfirmDialog({
   onClose: () => void;
 }) {
   const { t } = useT();
+  const [picked, setPicked] = useState(c.choice ?? c.choices?.[0]?.id);
   const cancel = () => {
     const fn = c.onCancel;
     onClose();
@@ -45,6 +58,23 @@ export function ConfirmDialog({
         <h3>{c.title}</h3>
         <p>{c.body}</p>
       </div>
+      {c.choices ? (
+        <div className="radio-opts" role="radiogroup" aria-label={c.title}>
+          {c.choices.map((o) => (
+            <button
+              key={o.id}
+              type="button"
+              role="radio"
+              aria-checked={picked === o.id}
+              className="radio-opt"
+              onClick={() => setPicked(o.id)}
+            >
+              <span className="radio-opt-title">{o.label}</span>
+              {o.hint ? <span className="radio-opt-desc">{o.hint}</span> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
       <div className="modal-actions">
         <button autoFocus onClick={cancel}>
           {t("common.cancel")}
@@ -53,7 +83,7 @@ export function ConfirmDialog({
           className={c.danger === false ? "primary" : "btn-danger"}
           onClick={() => {
             onClose();
-            c.action();
+            c.action(picked);
           }}
         >
           {c.confirmLabel}

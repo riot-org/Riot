@@ -580,7 +580,11 @@ mod tests {
     #[test]
     fn 主目录前缀认两种分隔符() {
         assert_eq!(strip_home_prefix("~/docs/a.md"), Some("docs/a.md"));
-        assert_eq!(strip_home_prefix(r"~\docs\a.md"), Some(r"docs\a.md"), "Windows 写法");
+        assert_eq!(
+            strip_home_prefix(r"~\docs\a.md"),
+            Some(r"docs\a.md"),
+            "Windows 写法"
+        );
         assert_eq!(strip_home_prefix("~user/a"), None, "别人的主目录不展开");
         assert_eq!(strip_home_prefix("./~/a"), None);
     }
@@ -588,7 +592,10 @@ mod tests {
     #[test]
     fn 波浪号引用落到主目录() {
         let home = riot_runtime::sandbox::home_dir().expect("测试机有主目录");
-        assert_eq!(resolve("~/a.md", Path::new("/proj")), Some(home.join("a.md")));
+        assert_eq!(
+            resolve("~/a.md", Path::new("/proj")),
+            Some(home.join("a.md"))
+        );
     }
 
     fn raws(text: &str) -> Vec<String> {

@@ -136,6 +136,23 @@ impl FileSnapshot {
         self.files.iter().map(|f| f.path.as_path())
     }
 
+    /// 路径按 `map` 换一遍（分叉进 worktree：同一批文件换了个根）。`map`
+    /// 返回 None 的条目丢掉。
+    pub fn relocated(&self, map: impl Fn(&Path) -> Option<PathBuf>) -> FileSnapshot {
+        let mut files: Vec<SnapFile> = self
+            .files
+            .iter()
+            .filter_map(|f| {
+                map(&f.path).map(|path| SnapFile {
+                    path,
+                    entry: f.entry.clone(),
+                })
+            })
+            .collect();
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+        FileSnapshot { files }
+    }
+
     fn blob_hashes(&self) -> impl Iterator<Item = &str> {
         self.files.iter().filter_map(|f| match &f.entry {
             FileEntry::Blob { hash } => Some(hash.as_str()),
@@ -425,6 +442,61 @@ pub fn list_ids(dir: &Path) -> Vec<String> {
     }
     out.sort();
     out
+}
+
+/// 分叉：把 `ids` 这些提问的切片连同它们引用的 blob 复制到 `dst`。返回
+/// 复制了几张。没有切片的 id 跳过（老会话、当时没存上）。
+///
+/// blob 先试硬链接：blob 只增不改、按哈希命名，两个目录共享同一个 inode
+/// 不会互相影响，某一边 gc 删掉的只是自己那个名字。跨文件系统再退回拷贝。
+/// head / redo 不复制 —— 前者是新会话自己看到的磁盘，后者是原会话的操作
+/// 历史。
+///
+/// `map` 改写切片里的路径（分叉进 worktree）；共用工作区时原样返回。
+pub fn copy_slices(
+    src: &Path,
+    dst: &Path,
+    ids: &[String],
+    map: impl Fn(&Path) -> PathBuf,
+) -> usize {
+    let mut copied = 0usize;
+    for id in ids {
+        let Some(snap) = load_snapshot(&slice_path(src, id)) else {
+            continue;
+        };
+        let snap = snap.relocated(|p| Some(map(p)));
+        let mut ok = true;
+        for hash in snap.blob_hashes() {
+            if let Err(e) = link_blob(src, dst, hash) {
+                tracing::warn!(error = %e, id = %id, "分叉时切片的 blob 没带过去，这条不复制");
+                ok = false;
+                break;
+            }
+        }
+        if !ok {
+            continue;
+        }
+        match save_snapshot(&slice_path(dst, id), &snap) {
+            Ok(()) => copied += 1,
+            Err(e) => tracing::warn!(error = %e, id = %id, "分叉时切片没写上"),
+        }
+    }
+    copied
+}
+
+fn link_blob(src: &Path, dst: &Path, hash: &str) -> std::io::Result<()> {
+    let to = blob_path(dst, hash);
+    if to.is_file() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(blobs_dir(dst))?;
+    let from = blob_path(src, hash);
+    if std::fs::hard_link(&from, &to).is_ok() {
+        return Ok(());
+    }
+    let tmp = blobs_dir(dst).join(format!("{hash}.tmp"));
+    std::fs::copy(&from, &tmp)?;
+    std::fs::rename(&tmp, &to)
 }
 
 pub fn remove_all(dir: &Path) {

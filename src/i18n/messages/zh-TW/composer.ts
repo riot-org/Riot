@@ -36,6 +36,7 @@ export default {
   "composer.slash.group.skills": "技能",
   "composer.slash.group.commands": "指令",
   "composer.slash.expandFailed": "{name} 展開失敗：指令可能剛被刪除",
+  "composer.fork.nothing": "還沒有能分叉的回答",
   "composer.mention.menuLabel": "檔案引用",
 
   "composer.attach.title": "附加圖片或檔案",
@@ -49,12 +50,15 @@ export default {
   "composer.attach.noDiskFile":
     "拖進來的東西在磁碟上沒有對應檔案（多半是從網頁裡直接拖的圖）。複製它，再回到這裡 {key}。",
 
-  "composer.provider.switch": "切換服務商",
-  "composer.provider.pick": "選擇服務商",
   "composer.provider.noKey": "未設定 key",
+  "composer.provider.setup": "設定",
   "composer.model.switch": "切換模型",
   "composer.model.pick": "選擇模型",
-  "composer.model.empty": "這個服務商還沒有模型",
+  "composer.model.row": "模型",
+  "composer.model.empty": "還沒有模型",
+  "composer.model.recent": "最近使用",
+  "composer.model.search": "搜尋模型…",
+  "composer.model.noMatch": "沒有符合的模型",
   "composer.model.vision": "可接收圖片",
   "composer.contextWindow": "上下文視窗",
   "composer.contextWindow.followSettings": "跟隨設定",

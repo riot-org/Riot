@@ -265,6 +265,53 @@ mod ignores_cancel {
         invariants::check_tool_pairing(&transcript(&events));
         assert!(invariants::take_violations().is_empty());
     }
+
+    /// 一个开压就再也不回来的压缩器（重档总结卡在模型调用上）。
+    struct DeafCompactor;
+
+    #[async_trait]
+    impl riot_protocol::compact::Compactor for DeafCompactor {
+        async fn compact(
+            &self,
+            _messages: Vec<Message>,
+            _budget: riot_protocol::compact::CompactBudget,
+        ) -> riot_protocol::compact::CompactResult {
+            futures::future::pending().await
+        }
+    }
+
+    #[tokio::test]
+    async fn 反应式压缩不理取消也要停下() {
+        use riot_protocol::provider::{ProviderError, ProviderEvent};
+
+        let provider = Arc::new(ScriptedProvider::new(vec![vec![ProviderEvent::Error(
+            ProviderError::ContextOverflow {
+                used: 200_000,
+                limit: 180_000,
+            },
+        )]]));
+        let deps = mock_deps_with(
+            provider,
+            Arc::new(ScriptedToolRunner::new(Default::default())),
+            Arc::new(DeafCompactor),
+        );
+        let events = done_within(deps, CancellationToken::new()).await;
+
+        assert!(
+            events.iter().any(|e| matches!(e, AgentEvent::Compacting)),
+            "要真的卡在压缩上：{events:?}"
+        );
+        assert!(
+            matches!(
+                events.last(),
+                Some(AgentEvent::Done {
+                    reason: TerminalReason::Aborted { .. }
+                })
+            ),
+            "该以用户中断收场，实际：{:?}",
+            events.last()
+        );
+    }
 }
 
 /// 模型吐了半个 tool_use 就撞上输出上限。
@@ -389,6 +436,41 @@ async fn 空响应也要干净收场() {
         ),
         "没有 tool_use 就该结束，而不是卡住等一个永远不来的消息"
     );
+}
+
+/// provider 自己在重试：重连进度原样交给界面，不落进 transcript，
+/// 也不打断这一轮。
+#[tokio::test]
+async fn provider_重试的进度原样转出() {
+    use riot_protocol::provider::ProviderEvent;
+    let provider = Arc::new(ScriptedProvider::new(vec![vec![
+        ProviderEvent::Retrying { attempt: 1, max: 5 },
+        ProviderEvent::Retrying { attempt: 2, max: 5 },
+        ProviderEvent::Message(riot_core::testing::assistant_text("a1", "好了")),
+    ]]));
+    let tools = Arc::new(ScriptedToolRunner::new(Default::default()));
+    let deps = mock_deps_with(provider, tools, Arc::new(FakeCompactor::default()));
+
+    let events = collect(state(4), deps, CancellationToken::new()).await;
+
+    let retrying: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, AgentEvent::Retrying { .. }))
+        .collect();
+    assert_eq!(
+        retrying,
+        vec![
+            &AgentEvent::Retrying { attempt: 1, max: 5 },
+            &AgentEvent::Retrying { attempt: 2, max: 5 },
+        ]
+    );
+    assert!(retrying.iter().all(|e| !e.is_durable()));
+    assert!(matches!(
+        events.last(),
+        Some(AgentEvent::Done {
+            reason: TerminalReason::Completed
+        })
+    ));
 }
 
 // ────────────────────────────────────────────────────────────

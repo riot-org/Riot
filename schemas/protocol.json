@@ -271,6 +271,31 @@
           "type": "object"
         },
         {
+          "description": "模型调用失败，provider 正在自动重试（第 `attempt` 次，这一类最多\n`max` 次）。界面状态行显示「正在重新连接… 1/5」，有新输出或本轮\n结束时撤掉。\n\n没有它的话，重试期间界面只有\"正在生成\"和一路走的秒数 —— 一次\n等不到响应头的重发能把秒数走到十分钟，用户分不清是模型在想还是\n网络卡了。\n\n不进 transcript（见 [`Self::is_durable`]）：瞬时状态，理由同\n[`Self::Compacting`]。",
+          "properties": {
+            "attempt": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "max": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "retrying",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "attempt",
+            "max"
+          ],
+          "type": "object"
+        },
+        {
           "description": "上下文压缩发生。",
           "properties": {
             "after_tokens": {
@@ -1461,6 +1486,115 @@
       ],
       "type": "object"
     },
+    "ForkFiles": {
+      "description": "worktree 分叉时文件落到分叉点的结果。",
+      "properties": {
+        "deleted": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "failed": {
+          "items": {
+            "$ref": "#/$defs/RestoreSkip"
+          },
+          "type": "array"
+        },
+        "restored": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "skipped": {
+          "items": {
+            "$ref": "#/$defs/RestoreSkip"
+          },
+          "type": "array"
+        },
+        "stale": {
+          "description": "没有分叉点那一刻的切片（老会话）：worktree 停在当前工作区的样子，\n没往回落。",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "restored",
+        "deleted",
+        "skipped",
+        "failed",
+        "stale"
+      ],
+      "type": "object"
+    },
+    "ForkPreview": {
+      "description": "`session.fork_preview` 的应答：分叉确认框要的数字。",
+      "properties": {
+        "changedAfter": {
+          "description": "分叉点之后原会话改过、此刻和分叉点那一刻不一样的文件数。共用工作区\n时新会话直接看到的就是这些改动，确认框要提一句。没有切片时是 0。",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "hasSlice": {
+          "description": "有分叉点那一刻的文件切片：worktree 能把会话动过的文件落回那一刻。\n最新一轮不需要切片（此刻的磁盘就是那一刻），也记 true。",
+          "type": "boolean"
+        },
+        "latest": {
+          "description": "分叉点就是原会话的最新一轮，之后没有别的轮。",
+          "type": "boolean"
+        },
+        "messageId": {
+          "description": "实际的分叉点：新会话历史的最后一条。",
+          "type": "string"
+        },
+        "turns": {
+          "description": "带过去几轮（用户提问数，含压缩归档里的）。",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "messageId",
+        "turns",
+        "latest",
+        "changedAfter",
+        "hasSlice"
+      ],
+      "type": "object"
+    },
+    "ForkWorktree": {
+      "description": "worktree 分叉：新会话在一个独立检出里干活。\n\n宿主先建好 worktree 再发 `session.fork`；内核负责把文件落到分叉点、把\n切片和基线里的路径搬到新根下。整份记进新会话的分叉来源 —— 删会话时\n宿主据此收拾 worktree 和分支。",
+      "properties": {
+        "base": {
+          "description": "建 worktree 时的提交。删会话时据此判断分支上有没有新提交。",
+          "type": "string"
+        },
+        "branch": {
+          "description": "检出的分支（`riot/fork-…`）。",
+          "type": "string"
+        },
+        "path": {
+          "description": "worktree 目录（检出的仓库根）。",
+          "type": "string"
+        },
+        "projectRoot": {
+          "description": "原项目根：侧栏按它分组。分叉的分叉沿用来源记下的那个。",
+          "type": "string"
+        },
+        "repoRoot": {
+          "description": "原工作区的仓库根，写法跟着原会话的根走（不解析符号链接）。切片、\n基线里这个前缀下的路径改写到 `path` 下；之外的不动、也不写回。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "repoRoot",
+        "branch",
+        "base",
+        "projectRoot"
+      ],
+      "type": "object"
+    },
     "GitChanges": {
       "description": "`session.git_changes` 的应答:工作区相对所选基线的差异。\n\n和会话改动(`session.changes`)回答的问题不同:那边是\"这个会话经\n工具改了什么\",commit 之后依然在;这边跟着 git 走。基线默认是\n当前分支(等于 HEAD);用户换分支只换对比对象,不 checkout。",
       "properties": {
@@ -2574,6 +2708,31 @@
           "title": "ProviderEventUsage"
         },
         {
+          "description": "这次调用失败了，provider 要自动重试：退避等待开始前发一次。\n\n只是告知，流照常往下走 —— 后面是重试那次的事件，或者最终的\n`Error`。`attempt` 从 1 数；`max` 是这一类失败最多重试几次，\n各类上限不同（见 `riot_providers::watchdog`）。",
+          "properties": {
+            "attempt": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "event": {
+              "const": "retrying",
+              "type": "string"
+            },
+            "max": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "event",
+            "attempt",
+            "max"
+          ],
+          "type": "object"
+        },
+        {
           "allOf": [
             {
               "$ref": "#/$defs/ProviderError"
@@ -3147,7 +3306,7 @@
           "type": "object"
         },
         {
-          "description": "中断当前轮。",
+          "description": "中断当前轮。应答 `Interrupted`。",
           "properties": {
             "method": {
               "const": "turn.interrupt",
@@ -3492,6 +3651,81 @@
               },
               "required": [
                 "session_id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "把这个会话到分叉点为止的对话复制成新会话 `target`（见\ndocs/FORK_DESIGN.md）。原会话不动；它跑轮中也能分叉已经结束的轮。\n没带 `worktree` = 和原会话共用项目根，文件不动。",
+          "properties": {
+            "method": {
+              "const": "session.fork",
+              "type": "string"
+            },
+            "params": {
+              "properties": {
+                "message_id": {
+                  "description": "内核消息 id（不是界面条目 id）。分叉点是它所在那一轮的结尾。",
+                  "type": "string"
+                },
+                "session_id": {
+                  "type": "string"
+                },
+                "target": {
+                  "description": "宿主分配好的新会话 id。",
+                  "type": "string"
+                },
+                "worktree": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ForkWorktree"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "宿主建好的 worktree。新会话的根换到它里面，文件落到分叉点。"
+                }
+              },
+              "required": [
+                "session_id",
+                "message_id",
+                "target"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "分叉确认框要的数字：带几轮、是不是最新一轮、之后改过几个文件。",
+          "properties": {
+            "method": {
+              "const": "session.fork_preview",
+              "type": "string"
+            },
+            "params": {
+              "properties": {
+                "message_id": {
+                  "type": "string"
+                },
+                "session_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "session_id",
+                "message_id"
               ],
               "type": "object"
             }
@@ -4100,6 +4334,58 @@
           "type": "object"
         },
         {
+          "description": "session.fork 的应答。`message_id` 是实际的分叉点：新会话历史的\n最后一条。",
+          "properties": {
+            "data": {
+              "properties": {
+                "files": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ForkFiles"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "worktree 分叉时文件落到分叉点的结果。共用工作区时没有。"
+                },
+                "message_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "message_id"
+              ],
+              "type": "object"
+            },
+            "result": {
+              "const": "session_forked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "result",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/ForkPreview"
+            },
+            "result": {
+              "const": "fork_previewed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "result",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
           "properties": {
             "data": {
               "properties": {
@@ -4272,6 +4558,31 @@
             },
             "result": {
               "const": "nudged",
+              "type": "string"
+            }
+          },
+          "required": [
+            "result",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "turn.interrupt 的应答：是否停下了一轮正在跑的（它的 Done 随后就到）。\nfalse = 没有轮在跑（停在等用户决定的也算，挂起照样收掉），界面上的\n忙碌是残留 —— 前端据此当场收掉停止键，不去等一个永远不会来的 Done。",
+          "properties": {
+            "data": {
+              "properties": {
+                "cancelled": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "cancelled"
+              ],
+              "type": "object"
+            },
+            "result": {
+              "const": "interrupted",
               "type": "string"
             }
           },

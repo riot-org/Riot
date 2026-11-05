@@ -22,6 +22,9 @@ export default {
   "kernel.history.systemNoText": "这条是系统提示，没有可编辑的文本。",
   "kernel.history.systemNoDelete": "这条是系统提示，不支持删除。",
   "kernel.history.noCheckpoint": "这条提问没有文件检查点，没法按对话回退。",
+  "kernel.fork.turnOpen": "这一轮还没结束，等它结束再分叉。",
+  "kernel.fork.compacted": "这条在压缩之前，没法从这里分叉。",
+  "kernel.fork.failed": "分叉没做成，原会话没有受影响。",
   "kernel.history.noRedo": "没有可以恢复的回退。重新发送或继续对话之后就不能再还原了。",
 
   // ── 压缩 ────────────────────────────────────────────────────
@@ -45,6 +48,8 @@ export default {
   "kernel.provider.transport": "连不上服务方 —— 检查网络、代理或 base URL。",
   "kernel.provider.unreachable": "多次尝试后仍然连不上服务方 —— 检查网络、代理或 base URL。",
   "kernel.provider.timeout": "请求超时了，网络或服务方没有按时响应。稍等重试一般就好。",
+  "kernel.provider.noResponse":
+    "服务方一直没有回应（连响应头都没等到），已结束本次请求。多半是网络、代理或 VPN 把请求卡住了。",
   "kernel.provider.streamBroken": "读取服务方响应时中断了。",
   "kernel.provider.idle": "服务方 {secs} 秒没有发任何数据，已结束本次请求。通常是中间代理或网关的问题。",
   "kernel.provider.keepaliveOnly": "服务方 {mins} 分钟只发保活信号、没有任何内容，已结束本次请求。",
@@ -96,6 +101,7 @@ export default {
   "kernel.skill.noDescription": "缺 description —— 它是模型决定要不要加载的唯一依据。",
   "kernel.skill.emptyBody": "正文是空的：frontmatter 之后要写这个技能的具体做法。",
   "kernel.slash.compact": "把对话历史压缩成摘要，腾出上下文窗口",
+  "kernel.slash.fork": "从最近一轮回答分叉出一个新会话，原会话不动",
 
   // ── 配置（设置页）────────────────────────────────────────────
   "kernel.config.unreadable": "文件读不出来。",

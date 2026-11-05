@@ -12,6 +12,7 @@ pub mod compact;
 pub mod context;
 pub mod env;
 pub mod event;
+pub mod fork;
 pub mod hook;
 pub mod hostcall;
 pub mod id;
@@ -47,6 +48,7 @@ pub use event::{
     AbortSource, AgentError, AgentEvent, CompactStrategy, ProgressPayload, StreamDelta,
     TerminalReason, Transition,
 };
+pub use fork::{ForkFiles, ForkPreview, ForkWorktree};
 pub use id::{
     AgentId, IdGenerator, MessageId, NanoIdGenerator, RequestId, SessionId, ToolUseId, TurnId,
 };

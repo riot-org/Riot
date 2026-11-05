@@ -1098,6 +1098,38 @@ html[data-resizing] .slide-panel {
   height: 16px;
 }
 
+/* worktree 会话的分支标签：跟在标题后面，点开是 worktree 的菜单。 */
+.tb-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 200px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-family: var(--mono);
+}
+
+.tb-branch:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.tb-branch svg {
+  flex-shrink: 0;
+}
+
+.tb-branch-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .tb-title .chevron svg {
   width: 14px;
   height: 14px;
@@ -1677,11 +1709,19 @@ html[data-host='web'] body {
 }
 
 .project-name {
-  flex: 1;
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 500;
+}
+
+/* 折叠三角紧跟项目名，右边的空都归它：运行点 / 计数照旧贴右。 */
+.project-toggle .chevron.solid,
+.section-toggle .chevron.solid {
+  margin-right: auto;
+  margin-left: -2px;
 }
 
 .project-count {
@@ -1784,8 +1824,8 @@ html[data-host='web'] body {
   min-width: 0;
   display: flex;
   align-items: center;
-  /* 对齐项目名：头 6 + 开关 2 + 箭头 14 + 缝 6 + 文件夹 14 + 缝 6 */
-  padding: 6px 4px 6px 48px;
+  /* 对齐项目名：头 6 + 开关 2 + 文件夹 14 + 缝 6 */
+  padding: 6px 4px 6px 28px;
   border: none;
   background: transparent;
   font-size: 13px;
@@ -1817,9 +1857,29 @@ html[data-host='web'] body {
   color: var(--text-faint);
 }
 
+/* worktree 会话的分支名。标题优先：分支名最多占三成宽，再长就截。 */
+.thread-meta:has(.thread-branch) {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 30%;
+}
+
+.thread-branch {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+}
+
+/* 侧栏底部的提醒项（没有会话的 worktree）：比普通项暗一档的警示色。 */
+.side-item.side-warn {
+  color: var(--warn-dim);
+}
+
 /* 定时任务的一组运行：展开后每行只写日期，比组头再缩进一级。 */
 .thread-group-runs .thread-label {
-  padding-left: 62px;
+  padding-left: 42px;
 }
 
 /* 标题是 button，全局 button:hover 会再铺一层。半透明 hover 叠两层
@@ -1846,6 +1906,13 @@ html[data-host='web'] body {
 }
 
 /* 停在等用户决定：不闪（没在跑），换个颜色和"在跑"区分开。 */
+.thread-fork {
+  flex: none;
+  display: inline-flex;
+  margin-right: 6px;
+  color: var(--text-faint);
+}
+
 .thread-awaiting {
   display: inline-block;
   width: 6px;
@@ -3421,6 +3488,47 @@ html[data-host='web'] body {
   content: '';
   flex: 1;
   border-top: 1px dashed var(--border);
+}
+
+/* 分叉点：和压缩分隔线同一种虚线，中间那句能点回原会话。 */
+.fork-rule-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.fork-rule-link:hover {
+  color: var(--text-dim);
+  background: var(--bg-hover);
+}
+
+/* 「已分叉 N 次」，和操作栏排在同一行（见 .msg-foot）。常显（不像操作栏
+   要悬停），但压得很淡：它是旁注，不该和正文抢眼。 */
+.fork-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: none;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  line-height: 18px;
+  cursor: pointer;
+}
+
+.fork-mark:hover {
+  color: var(--text-dim);
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
 }
 
 .dots {
@@ -5936,6 +6044,123 @@ body.file-dragging.file-drop-hot * {
   color: var(--text-faint);
   text-transform: uppercase;
   pointer-events: none;
+}
+
+/* 模型菜单：一个 pill 管服务方和模型，菜单按服务方分组。 */
+.composer-tools .composer-picks .mode-menu {
+  max-width: 240px;
+}
+
+.menu.picker-menu {
+  min-width: 220px;
+}
+
+.picker-menu .picker-sub-trigger .menu-pick-body {
+  flex: 1 0 auto;
+}
+
+.picker-menu .picker-sub-trigger .pick-label {
+  white-space: nowrap;
+}
+
+.picker-menu .picker-sub-value {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 二级菜单一项一行：说明淡色跟在名字后面（Cursor 同款），不另起一行。
+   模型一多，两行一项的列表要翻好几屏。 */
+.picker-submenu .menu-item.picker-item .menu-pick-body {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.picker-submenu .menu-item.picker-item .menu-hint,
+.picker-submenu .menu-item.picker-item .menu-warn {
+  white-space: nowrap;
+}
+
+.picker-pill .pick-hint {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 14px;
+  color: var(--text-faint);
+}
+
+.menu input.picker-search {
+  display: block;
+  width: calc(100% - 4px);
+  margin: 2px 2px 4px;
+  padding: 6px 8px;
+  font-size: 12px;
+  background: transparent;
+  border-color: var(--border);
+  border-radius: 8px;
+}
+
+.menu input.picker-search:focus {
+  border-color: var(--border-strong);
+}
+
+.picker-list {
+  max-height: min(360px, 60vh);
+  overflow-y: auto;
+}
+
+.picker-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-right: 6px;
+}
+
+.picker-group-head .menu-group-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.picker-group-head .menu-warn,
+.picker-group-head .menu-hint {
+  padding-top: 2px;
+  font-size: 10px;
+}
+
+.picker-group-action {
+  padding: 1px 6px;
+  font-size: 10px;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--text-faint);
+}
+
+.picker-group-action:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* 没配 key 的服务方：还能选（选完横幅会引去设置），但先让它看起来不是首选。 */
+.picker-group.dim .picker-item {
+  opacity: 0.55;
+}
+
+.picker-group.dim .picker-item:hover,
+.picker-group.dim .picker-item:focus-visible {
+  opacity: 1;
+}
+
+.picker-empty {
+  padding: 10px;
+  font-size: 12px;
+  color: var(--text-faint);
 }
 
 .cap-icon {
@@ -9832,6 +10057,22 @@ button.field-slider-state:hover {
   background: var(--bg-hover);
 }
 
+/* 带小字的菜单项（分叉列表）：标题一行、时间和分支一行，都不换行。 */
+.ctx-label,
+.ctx-hint {
+  display: block;
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ctx-hint {
+  margin-top: 1px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
 .ctx-item.danger {
   color: var(--danger);
 }
@@ -9863,9 +10104,170 @@ button.field-slider-state:hover {
   font-size: 13px;
 }
 
+.confirm-line {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.confirm-line + .confirm-line {
+  margin-top: 6px;
+}
+
 .btn-danger {
   background: color-mix(in srgb, var(--danger) 12%, var(--bg-card));
   border-color: color-mix(in srgb, var(--danger) 35%, transparent);
+  color: var(--danger-soft);
+}
+
+/* 弹窗里的单选卡片（分叉的工作区、删 worktree 会话时的去留）。一个选项是
+   一句话加一两行说明，整张卡都能点。 */
+.radio-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 18px 4px;
+}
+
+.radio-opt {
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  column-gap: 10px;
+  row-gap: 3px;
+  text-align: left;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.radio-opt::before {
+  content: '';
+  grid-row: 1;
+  width: 14px;
+  height: 14px;
+  margin-top: 3px;
+  box-sizing: border-box;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 50%;
+}
+
+.radio-opt > * {
+  grid-column: 2;
+  min-width: 0;
+}
+
+.radio-opt:hover:not(:disabled) {
+  border-color: var(--accent-border);
+}
+
+.radio-opt[aria-checked='true'] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.radio-opt[aria-checked='true']::before {
+  border-color: var(--accent);
+  background: radial-gradient(circle, var(--accent) 0 3px, transparent 3.5px);
+}
+
+.radio-opt:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.radio-opt-title {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.radio-opt-desc {
+  color: var(--text-dim);
+  font-size: 12.5px;
+}
+
+.radio-opt-warn {
+  color: var(--warn-dim);
+  font-size: 12.5px;
+}
+
+.radio-opt-note {
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.modal.confirm.fork-dialog {
+  width: min(480px, 100%);
+}
+
+.modal.confirm.orphan-dialog {
+  width: min(560px, 100%);
+}
+
+.orphan-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0 18px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.orphan-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+
+.orphan-row:first-child {
+  border-top: none;
+}
+
+.orphan-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.orphan-branch {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.orphan-path {
+  color: var(--text-faint);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.orphan-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
+}
+
+.orphan-actions button {
+  font-size: 12px;
+  padding: 3px 9px;
+}
+
+/* 弹窗里的出错 / 进行中一行。 */
+.dialog-status {
+  margin: 10px 18px 0;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.dialog-status.error {
   color: var(--danger-soft);
 }
 
@@ -10953,6 +11355,20 @@ button.field-slider-state:hover {
   margin-right: 6px;
 }
 
+/* 有分叉记号的回答：记号排在操作栏那一行的最左边。不悬停时只看得见记号，
+   它就贴着正文的边，不会悬在半空。 */
+.msg-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.msg-foot > .msg-actions {
+  margin: 0;
+}
+
 /* ── 消息内联编辑（上下文修改） ───────────────── */
 
 /* 编辑态所在的那一轮永远完整渲染。
@@ -10982,17 +11398,38 @@ button.field-slider-state:hover {
   border-radius: 0;
 }
 
-/* 编辑栏里的说明让位给取消/保存/发送；太长就折，别把键挤没。 */
+/* 编辑栏里的说明让位给取消/保存/发送：一行放不下就整句不显示，不折行、
+   不截半句。说明排在一个零宽占位后面、容器只有一行高 —— 放不下时它折到
+   第二行，被裁掉。 */
 .composer-edit-hint {
-  flex: 1 1 160px;
+  flex: 1 1 0;
   min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  height: calc(12px * 1.4);
+  overflow: hidden;
   color: var(--text-faint);
   font-size: 12px;
   line-height: 1.4;
 }
 
+.composer-edit-hint::before {
+  content: '';
+  height: 100%;
+}
+
+.composer-edit-hint > span {
+  white-space: nowrap;
+}
+
 .msg.editing .composer-bar {
   flex-wrap: wrap;
+}
+
+/* 工具区不按说明的长度参与换行：说明放不下会自己藏起来，整栏只在键本身
+   放不下时才折。 */
+.msg.editing .composer-tools {
+  flex-basis: 0;
 }
 
 /* 编辑就是来改附件的，叉不用等 hover 才现身。 */
@@ -11526,11 +11963,7 @@ button.fold-head:hover,
 
 /* 压缩缓冲区：斜纹，表示"占着但不是内容" —— 那一截条满了就会压缩。 */
 .ctx-c-autocompactBuffer {
-  background: repeating-linear-gradient(
-    -45deg,
-    var(--text-faint) 0 2px,
-    transparent 2px 4px
-  );
+  background: repeating-linear-gradient(-45deg, var(--text-faint) 0 2px, transparent 2px 4px);
   opacity: 0.6;
 }
 
@@ -11674,7 +12107,7 @@ button.ctx-cat-line:focus-visible {
 
 /* 窄列（开抽屉或窗口本身窄）按对话列宽度收，不看窗口 ——
    量的是 .chat-col（lib/chatColWidth 挂的 data-narrow / data-tight），
-   不是输入框。服务方和模型藏掉：剩下 + / 权限 / 发送，一行放得下。
+   不是输入框。模型 pill 收窄：+ / 工作方式 / 模型 / 发送，一行放得下。
 
    `[约束]` 这一组只准收**横向**。宽度档问的是"这一列有多宽"，纵向间距
    跟它没有关系。早先这里连着把 .composer-dock 的下内边距（18→12）和
@@ -11683,7 +12116,7 @@ button.ctx-cat-line:focus-visible {
    - 列宽跨过 560 的那一帧，输入框上边缘硬跳 10px。而侧栏开合正好会
      跨过这个阈值 —— 500ms 的平滑滑动中间插一帧硬跳，就是"侧栏一开
      输入框弹一下"。
-   横向的变化（内边距收窄、两个 pill 收起）留着：那是宽度档的本职，
+   横向的变化（内边距收窄、模型 pill 收窄）留着：那是宽度档的本职，
    而且发生在一次横向动画里，不会把输入框在纵向上挪位置。 */
 /* 横向留白收窄。阈值 768 = 内容上限 720 + 两侧各 24。
  *
@@ -11701,19 +12134,17 @@ button.ctx-cat-line:focus-visible {
   --chat-gutter: 16px;
 }
 
-/* 真正的窄列：工具栏一行塞不下服务方和模型，藏掉，剩下 + / 工作方式 / 发送。
+/* 真正的窄列：模型 pill 收窄，名字截断，剩下 + / 工作方式 / 发送照常一行。
    宽度按 .chat-col 量（data-tight，见 lib/chatColWidth），不按输入框量。
 
-   display 是离散的，插值不了 —— 但这一条不改盒子尺寸：两个 pill 在 flex
-   里让出横向空间，其余项左对齐不动、发送键 margin-left:auto 仍贴右，行高
-   也不变（量过）。所以是"两个 pill 消失"，不是布局跳动。
+   早先服务方和模型是两个 pill，这一档直接把它们藏掉；合成一个之后塞得下，
+   藏掉反而让窄列没法换模型。
 
    `[约束]` 输入框自己的内边距**不要**跟着收。早先这里还有一条
    `.composer { padding-inline: 8px }`，省下的 8px 对工具栏能不能塞下
-   毫无影响（塞得下是靠藏 pill），代价却是跨阈值时输入框里的文字重新
-   折行 —— 又一处白给的跳动。 */
-.chat-col[data-tight] .composer-picks {
-  display: none;
+   毫无影响，代价却是跨阈值时输入框里的文字重新折行 —— 白给的跳动。 */
+.chat-col[data-tight] .composer-tools .composer-picks .mode-menu {
+  max-width: 140px;
 }
 
 /* ── 对话流里的权限确认卡 ─────────────────────
@@ -12493,7 +12924,9 @@ button.ctx-cat-line:focus-visible {
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 2px 4px 2px 6px;
+  /* 右边多让出一个 .row-btn（22）+ 缝（2）：项目行是「计数 + …」，这里
+     只有「计数 +」，补齐后两边的 + 和计数各自竖着对齐。 */
+  padding: 2px 28px 2px 6px;
   border-radius: 8px;
 }
 
@@ -12528,7 +12961,8 @@ button.ctx-cat-line:focus-visible {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 3px 2px;
+  /* 右边和 .project-toggle 一样留 4：收起后的计数要和项目行的计数竖着对齐。 */
+  padding: 3px 4px 3px 2px;
   background: none;
   border: none;
   text-align: left;
@@ -12539,10 +12973,13 @@ button.ctx-cat-line:focus-visible {
   color: var(--text-dim);
 }
 
+/* 分区标题是上一级，但不该和项目名抢：小一号、半粗、caption 色。
+   项目名 13px / 500 / 正文色，两级一眼分得开。 */
 .section-name {
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.6px;
+  letter-spacing: 0.4px;
 }
 
 .section-body {

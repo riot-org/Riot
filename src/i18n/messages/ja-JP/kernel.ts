@@ -20,6 +20,9 @@ export default {
   "kernel.history.systemNoText": "これはシステム通知のため、編集できるテキストがありません。",
   "kernel.history.systemNoDelete": "これはシステム通知のため、削除できません。",
   "kernel.history.noCheckpoint": "この質問にはファイルのチェックポイントがないため、会話から戻せません。",
+  "kernel.fork.turnOpen": "このターンはまだ終わっていません。終わってから分岐してください。",
+  "kernel.fork.compacted": "このメッセージは圧縮済みのため、ここからは分岐できません。",
+  "kernel.fork.failed": "分岐できませんでした。元のセッションは変わっていません。",
   "kernel.history.noRedo": "やり直せる回退はありません。再送信や会話の続きをすると復元できなくなります。",
 
   // ── 圧縮 ────────────────────────────────────────────────────
@@ -43,6 +46,8 @@ export default {
   "kernel.provider.transport": "プロバイダーに接続できません —— ネットワーク、プロキシ、base URL を確認してください。",
   "kernel.provider.unreachable": "複数回試してもプロバイダーに接続できません —— ネットワーク、プロキシ、base URL を確認してください。",
   "kernel.provider.timeout": "リクエストがタイムアウトしました。ネットワークまたはプロバイダーが時間内に応答しませんでした。少し待って再試行すれば通常は解決します。",
+  "kernel.provider.noResponse":
+    "プロバイダーから応答がなかった（レスポンスヘッダーも届かなかった）ため、このリクエストを終了しました。ネットワーク、プロキシ、または VPN がリクエストを止めている可能性が高いです。",
   "kernel.provider.streamBroken": "プロバイダーの応答の読み取りが途中で中断されました。",
   "kernel.provider.idle": "プロバイダーから {secs} 秒間データが届かなかったため、このリクエストを終了しました。通常は中間のプロキシやゲートウェイの問題です。",
   "kernel.provider.keepaliveOnly": "プロバイダーから {mins} 分間キープアライブだけが届き、内容がなかったため、このリクエストを終了しました。",
@@ -94,6 +99,7 @@ export default {
   "kernel.skill.noDescription": "description がありません —— モデルが読み込むかどうかを判断する唯一の手がかりです。",
   "kernel.skill.emptyBody": "本文が空です：frontmatter の後にこのスキルの具体的な手順を書いてください。",
   "kernel.slash.compact": "会話履歴を要約に圧縮してコンテキストウィンドウを空ける",
+  "kernel.slash.fork": "直近の回答から新しいセッションに分岐する（元のセッションはそのまま）",
 
   // ── 設定 ────────────────────────────────────────────────────
   "kernel.config.unreadable": "ファイルを読み込めません。",
