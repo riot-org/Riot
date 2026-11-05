@@ -236,9 +236,11 @@ pub fn create(repo: &Repo, dest: &Path, branch: &str) -> Result<(PathBuf, Carrie
     };
     std::fs::create_dir_all(parent).map_err(|e| ui_error!("host.fork.worktreeFailed"; e))?;
     // `[约束]` 规范写法：工具记基线用的是 canonicalize 过的路径，新会话的根、
-    // 改写后的切片和基线都得和它们一个写法，不然对不上。
-    let parent =
-        std::fs::canonicalize(parent).map_err(|e| ui_error!("host.fork.worktreeFailed"; e))?;
+    // 改写后的切片和基线都得和它们一个写法，不然对不上。Windows 上还要剥掉
+    // `\\?\`：git 不认这种写法，`worktree add` 直接失败。
+    let parent = std::fs::canonicalize(parent)
+        .map(crate::fence::strip_verbatim)
+        .map_err(|e| ui_error!("host.fork.worktreeFailed"; e))?;
     let dest = parent.join(name);
     if let Err(e) = run(git(&repo.root)
         .args(["worktree", "add", "--quiet", "-b", branch])
@@ -419,8 +421,13 @@ fn unmerged(git_dir: &Path, branch: &str, base: &str) -> usize {
 /// `[约束]` 只删 `root` 下面的目录：路径来自索引，索引坏了也不能让它删到
 /// 用户的项目。
 pub fn discard(root: &Path, path: &Path, branch: Option<&str>, repo_hint: Option<&Path>) {
-    let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
-    if !path.starts_with(&root) || path == root {
+    // 两边按同一个写法比：孤儿的路径是从目录列出来的，没规范化过。
+    let canon = |p: &Path| {
+        std::fs::canonicalize(p).map_or_else(|_| p.to_path_buf(), crate::fence::strip_verbatim)
+    };
+    let root = canon(root);
+    let real = canon(path);
+    if !real.starts_with(&root) || real == root {
         tracing::warn!(path = %path.display(), "worktree 不在应用的 worktrees 目录里，没删");
         return;
     }
@@ -517,7 +524,8 @@ mod tests {
     /// 一个有一次提交的仓库，会话根在子目录 `app` 里。
     fn repo() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
-        let top = std::fs::canonicalize(dir.path()).unwrap().join("repo");
+        let top =
+            crate::fence::strip_verbatim(std::fs::canonicalize(dir.path()).unwrap()).join("repo");
         std::fs::create_dir_all(top.join("app")).unwrap();
         sh(&top, &["init", "-q"]);
         sh(&top, &["config", "user.email", "t@t"]);

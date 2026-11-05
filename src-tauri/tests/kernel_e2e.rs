@@ -232,8 +232,9 @@ fn msg(id: &str, text: &str, user: bool) -> riot_protocol::message::Message {
 #[tokio::test]
 async fn 分叉进_worktree_失败不留痕迹_删会话按选择收尾() {
     ensure_kernel_built();
-    let cfg_dir = std::fs::canonicalize(temp_dir("fork-wt")).unwrap();
-    let ws = std::fs::canonicalize(temp_dir("fork-wt-ws")).unwrap();
+    let canon = |p| riot_permissions::fence::strip_verbatim(std::fs::canonicalize(p).unwrap());
+    let cfg_dir = canon(temp_dir("fork-wt"));
+    let ws = canon(temp_dir("fork-wt-ws"));
     let _ = std::fs::remove_dir_all(cfg_dir.join("worktrees"));
     let _ = std::fs::remove_dir_all(cfg_dir.join("sessions"));
     let _ = std::fs::remove_dir_all(ws.join(".git"));
