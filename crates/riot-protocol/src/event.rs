@@ -192,6 +192,9 @@ pub enum Transition {
     ReactiveCompactRetry,
     /// 输出 token 耗尽，调低上限后重试。
     OutputLimitRecovery,
+    /// 流读到一半断了（网络抖动、网关掐连接），丢掉这次的半截输出、原样
+    /// 重发。界面和宿主收到它要清掉上一次尝试的流式内容。
+    StreamRetry,
     /// stop hook 拦下了结束，注入内容后继续。
     StopHookBlocking,
     /// 收尾时待办清单还有没做完的项，提醒模型对账后继续。

@@ -41,6 +41,31 @@ use crate::turn::TurnAccumulator;
 /// 继续对半砍只会让模型输出越来越短的半成品。
 const MAX_OUTPUT_LIMIT_RECOVERY: u8 = 2;
 
+/// 流读到一半断开时，同一次请求最多重发几次。
+///
+/// provider 只重试请求阶段的失败（出了内容再重试会让界面上出现两遍
+/// 半截回答），流中途的断开由这里接手：主循环能在重发前把半截输出连同
+/// 界面上的显示一起丢掉（见 [`Transition::StreamRetry`]）。
+///
+/// 3 次是按"偶发抖动"定的：连着断三次多半是网关或网络真有问题，再试
+/// 只是让用户多等。
+const MAX_STREAM_RETRIES: u32 = 3;
+
+/// 第 n 次（从 1 数）流重试前等多久：2s、4s、8s。
+fn stream_retry_delay_ms(attempt: u32) -> u64 {
+    2_000u64 << attempt.saturating_sub(1).min(4)
+}
+
+/// 流建立后被打断：读到一半断了，或出过内容后静默超时。这两种重发同一个
+/// 请求大概率就好了。请求阶段的传输失败 provider 已经退避重试过，别再叠一层。
+fn is_stream_interruption(e: &ProviderError) -> bool {
+    matches!(
+        e,
+        ProviderError::Transport { error }
+            if matches!(error.key(), "kernel.provider.streamBroken" | "kernel.provider.idle")
+    )
+}
+
 /// 用户取消之后，等下游自己收场的宽限期。
 ///
 /// 礼貌的下游（真实的 provider、调度器）在几毫秒内就结束了，走它们
@@ -83,6 +108,8 @@ pub fn run_agent(
 ) -> impl Stream<Item = AgentEvent> + Send {
     guarded(stream! {
         let mut state = initial;
+        // 当前这次请求因为流中途断开已经重发了几次。一次完整读完就清零。
+        let mut stream_retries: u32 = 0;
 
         loop {
             // ── 1. 中断检查 ──────────────────────────────────────
@@ -157,6 +184,8 @@ pub fn run_agent(
             futures::pin_mut!(abort_deadline);
 
             let mut stream_abandoned = false;
+            let mut held: Vec<Message> = Vec::new();
+            let mut interrupted: Option<ProviderError> = None;
             'stream: loop {
                 let item = tokio::select! {
                     item = model_stream.next() => match item {
@@ -177,15 +206,30 @@ pub fn run_agent(
                     ProviderEvent::Retrying { attempt, max } => {
                         yield AgentEvent::Retrying { attempt, max };
                     }
+                    // `[约束]` 消息先压着，流结束才发。宿主收到 Message 就
+                    // 落盘、收不回来；流读到一半断了要重发时，provider 先吐
+                    // 出来的那半条消息必须还没出门。一次请求只在流尾出一条
+                    // 消息，压到流结束不会让界面晚看到什么。
                     ProviderEvent::Message(mut m) => {
                         think_timer.stamp(&mut m, deps.clock.now_ms());
                         turn.push(m.clone());
-                        yield AgentEvent::Message(m);
+                        held.push(m);
                     }
                     // 可恢复错误先扣下，不进事件流。UI 一看到错误就会
                     // 结束渲染，而此时恢复循环还在跑，没人在听结果。
                     ProviderEvent::Error(e) if e.is_recoverable() => turn.withhold(e),
+                    ProviderEvent::Error(e)
+                        if is_stream_interruption(&e)
+                            && stream_retries < MAX_STREAM_RETRIES
+                            && !cancel.is_cancelled() =>
+                    {
+                        interrupted = Some(e);
+                        break 'stream;
+                    }
                     ProviderEvent::Error(e) => {
+                        for m in held.drain(..) {
+                            yield AgentEvent::Message(m);
+                        }
                         // 流中途断开时，provider 会先把解码器里攒了一半的
                         // assistant 消息吐出来（可能带完整的 tool_calls）
                         // 再报这个错，而宿主对着事件流逐条持久化 —— 那条
@@ -217,6 +261,26 @@ pub fn run_agent(
                 }
             }
             drop(model_stream);
+
+            // 流读到一半断了：半截输出整个丢掉（还没发出去，见上面压消息
+            // 那条），等一下原样重发。界面在 StreamRetry 的 RequestStart 上
+            // 清掉这次尝试画出来的东西。被取消就回到循环开头按中断收场。
+            if let Some(e) = interrupted {
+                stream_retries += 1;
+                turn.discard_for_retry();
+                tracing::warn!(attempt = stream_retries, error = %e, "流中途断开，重发这次请求");
+                yield AgentEvent::Retrying { attempt: stream_retries, max: MAX_STREAM_RETRIES };
+                tokio::select! {
+                    () = deps.clock.sleep_ms(stream_retry_delay_ms(stream_retries)) => {}
+                    () = cancel.cancelled() => {}
+                }
+                state.transition = Some(Transition::StreamRetry);
+                continue;
+            }
+            stream_retries = 0;
+            for m in held.drain(..) {
+                yield AgentEvent::Message(m);
+            }
 
             // 每次请求一行缓存账。前缀缓存退化时（有人往 system 里塞了会变
             // 的东西、工具列表变了、历史被改写）请求照发照回，只有这几个数

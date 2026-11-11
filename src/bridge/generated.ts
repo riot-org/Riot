@@ -79,6 +79,7 @@ export type Transition =
   | "next_turn"
   | "reactive_compact_retry"
   | "output_limit_recovery"
+  | "stream_retry"
   | "stop_hook_blocking"
   | "todo_reconcile"
   | "token_budget_nudge"

@@ -792,6 +792,15 @@ fn fold_live(live: &mut LiveStream, ev: &AgentEvent) {
             live.text.clear();
             live.thinking.clear();
         }
+        // 流断了重发：上一次尝试的半截作废。不清的话轮末「半截话定稿」
+        // 会把两次尝试拼成一段落盘。
+        AgentEvent::RequestStart {
+            after: Some(riot_protocol::event::Transition::StreamRetry),
+            ..
+        } => {
+            live.text.clear();
+            live.thinking.clear();
+        }
         _ => {}
     }
 }

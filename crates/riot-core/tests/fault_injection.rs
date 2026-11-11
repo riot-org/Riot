@@ -418,6 +418,97 @@ async fn 流中断留下的_tool_use_要补齐配对() {
     );
 }
 
+fn stream_broken() -> riot_protocol::provider::ProviderError {
+    riot_protocol::provider::ProviderError::Transport {
+        error: riot_protocol::ui_error!("kernel.provider.streamBroken"; "peer closed connection"),
+    }
+}
+
+/// 流读到一半断了：半截输出整个丢掉、原样重发，这一轮照常答完。
+///
+/// `[约束]` 半截消息绝不能先发出去 —— 宿主收到 Message 就落盘，重发成功
+/// 之后历史里会多出一条说到一半的回答（带着 tool_use 的话还是孤儿）。
+#[tokio::test]
+async fn 流中途断开_丢掉半截原样重发() {
+    use riot_protocol::event::Transition;
+    use riot_protocol::provider::ProviderEvent;
+
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        vec![
+            ProviderEvent::Message(riot_core::testing::assistant_tool_use(
+                "msg_half",
+                "tu_half",
+                "Read",
+                serde_json::json!({ "path": "a" }),
+            )),
+            ProviderEvent::Error(stream_broken()),
+        ],
+        vec![ProviderEvent::Message(riot_core::testing::assistant_text(
+            "msg_ok", "好了",
+        ))],
+    ]));
+    let tools = Arc::new(ScriptedToolRunner::new(Default::default()));
+    let deps = mock_deps_with(provider, tools, Arc::new(FakeCompactor::default()));
+
+    let events = collect(state(4), deps, CancellationToken::new()).await;
+
+    assert!(
+        matches!(
+            events.last(),
+            Some(AgentEvent::Done {
+                reason: TerminalReason::Completed
+            })
+        ),
+        "重发成功就该正常收场：{:?}",
+        events.last()
+    );
+    let t = transcript(&events);
+    assert!(
+        t.iter().all(|m| m.id().as_str() != "msg_half"),
+        "半截消息不该发出去：{t:?}"
+    );
+    assert!(t.iter().any(|m| m.id().as_str() == "msg_ok"));
+    assert!(events.contains(&AgentEvent::Retrying { attempt: 1, max: 3 }));
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            AgentEvent::RequestStart {
+                after: Some(Transition::StreamRetry),
+                ..
+            }
+        )),
+        "界面靠 StreamRetry 清掉上一次尝试画出来的东西"
+    );
+}
+
+/// 连着断：重发次数有上限，用完了照常报错收场。
+#[tokio::test]
+async fn 流反复断开_重试用完才报错() {
+    use riot_protocol::provider::ProviderEvent;
+
+    let provider = Arc::new(ScriptedProvider::new(
+        (0..4)
+            .map(|_| vec![ProviderEvent::Error(stream_broken())])
+            .collect(),
+    ));
+    let tools = Arc::new(ScriptedToolRunner::new(Default::default()));
+    let deps = mock_deps_with(provider, tools, Arc::new(FakeCompactor::default()));
+
+    let events = collect(state(4), deps, CancellationToken::new()).await;
+
+    let retries = events
+        .iter()
+        .filter(|e| matches!(e, AgentEvent::Retrying { .. }))
+        .count();
+    assert_eq!(retries, 3, "首发一次 + 重发三次");
+    assert!(matches!(
+        events.last(),
+        Some(AgentEvent::Done {
+            reason: TerminalReason::Error { .. }
+        })
+    ));
+}
+
 /// 空流：模型什么都没说就结束了。
 #[tokio::test]
 async fn 空响应也要干净收场() {

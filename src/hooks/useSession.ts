@@ -28,7 +28,11 @@ import {
 import { t } from "../i18n";
 import { PartialJsonObject, firstStringField } from "../lib/partialJson";
 import { PLAN_TOOL } from "../lib/plan";
-import { errorItem, restoreFailNotice, sendFailureItem } from "./session/errors";
+import {
+  errorItem,
+  restoreFailNotice,
+  sendFailureItem,
+} from "./session/errors";
 import {
   SEND_GRACE_MS,
   applyHistorySnap,
@@ -71,7 +75,13 @@ import {
 } from "./session/types";
 
 // 对外的类型和水合函数从这里转出，调用方不用知道内部怎么分的文件。
-export type { Item, QueuedItem, SessionState, TextItem, WithdrawnPrompt } from "./session/types";
+export type {
+  Item,
+  QueuedItem,
+  SessionState,
+  TextItem,
+  WithdrawnPrompt,
+} from "./session/types";
 export { messagesToItems } from "./session/history";
 
 /**
@@ -233,7 +243,9 @@ export function useSession(
     onPreviewFile?: (path: string) => void;
   },
 ) {
-  const [state, setState] = useState<SessionState>(() => touchSession(sessionId) ?? EMPTY_STATE);
+  const [state, setState] = useState<SessionState>(
+    () => touchSession(sessionId) ?? EMPTY_STATE,
+  );
   /** 历史快照到过（或缓存里已有）。没到之前不要把长会话画成空招呼页。 */
   const [ready, setReady] = useState(() => sessionCache.has(sessionId));
 
@@ -270,7 +282,13 @@ export function useSession(
    * 工具一开始就把当时的流式文本/思考落成条目。完整消息随后会把同样的块
    * 再给一遍 —— 靠这里去重，否则同一句话在界面上出现两次。
    */
-  const settled = useRef<{ text: string[]; thinking: string[] }>({ text: [], thinking: [] });
+  const settled = useRef<{ text: string[]; thinking: string[] }>({
+    text: [],
+    thinking: [],
+  });
+  /** 这次模型请求里工具卡片就地落定的条目 id。流断了重发时只摘掉这些 ——
+   *  按 id 而不是按条数截，中途切进来的观看者也不会误删历史。 */
+  const attemptItems = useRef(new Set<string>());
   const rafId = useRef(0);
   const onBrowserOpenRef = useRef(opts?.onBrowserOpen);
   onBrowserOpenRef.current = opts?.onBrowserOpen;
@@ -310,7 +328,12 @@ export function useSession(
   }, [state.tasks]);
   // send 在订阅 effect 之后才定义，Done 接力经 ref 调它。
   const sendRef = useRef<
-    ((text: string, images?: ImageInput[], refs?: string[]) => Promise<boolean>) | null
+    | ((
+        text: string,
+        images?: ImageInput[],
+        refs?: string[],
+      ) => Promise<boolean>)
+    | null
   >(null);
   /** 最近一次从这条会话的 Channel 收到事件（或刚挂上新出口）。 */
   const lastHeardAt = useRef(Date.now());
@@ -344,7 +367,13 @@ export function useSession(
       const chunks = pendingToolJson.current;
       const lines = pendingProgress.current;
       const taskViews = pendingTasks.current;
-      if (!txt && !k && chunks.length === 0 && lines.length === 0 && taskViews.length === 0) {
+      if (
+        !txt &&
+        !k &&
+        chunks.length === 0 &&
+        lines.length === 0 &&
+        taskViews.length === 0
+      ) {
         return;
       }
       pendingText.current = allTxt.slice(txt.length);
@@ -403,7 +432,8 @@ export function useSession(
         flush();
         return;
       }
-      if (!rafId.current) rafId.current = requestAnimationFrame(() => flush(true));
+      if (!rafId.current)
+        rafId.current = requestAnimationFrame(() => flush(true));
     }
 
     const onSubscribeError = (message: string) => {
@@ -446,7 +476,8 @@ export function useSession(
           } else if (event.kind === "thinking") {
             const c = thinkClocks.get(sessionId);
             // 停过之后又思考 = 新的一段（交错思考），重新起表。
-            if (!c || c.end !== undefined) thinkClocks.set(sessionId, { start: Date.now() });
+            if (!c || c.end !== undefined)
+              thinkClocks.set(sessionId, { start: Date.now() });
             pendingThinking.current += event.text;
             schedule();
           } else if (event.kind === "tool_start") {
@@ -459,8 +490,15 @@ export function useSession(
             const clock = thinkClocks.get(sessionId);
             const thinkMs = clock ? (clock.end ?? Date.now()) - clock.start : 0;
             thinkClocks.delete(sessionId);
+            for (const suffix of ["", "-k", "-t"]) {
+              attemptItems.current.add(`${event.tool_use_id}${suffix}`);
+            }
             setState((s) => {
-              if (s.items.some((it) => it.kind === "tool" && it.id === event.tool_use_id)) {
+              if (
+                s.items.some(
+                  (it) => it.kind === "tool" && it.id === event.tool_use_id,
+                )
+              ) {
                 return s;
               }
               const items = [...s.items];
@@ -512,14 +550,25 @@ export function useSession(
           }
           break;
 
-        case "request_start":
+        case "request_start": {
           toolJsonById.current.clear();
           // 上一轮的残留会让这一轮的同样一句话被误删。
           settled.current = { text: [], thinking: [] };
           busyRef.current = true;
+          // 流读到一半断了、内核在重发：上一次尝试画出来的半截（流式文字、
+          // 思考、工具卡）全部作废。内核没把那半截消息发出来，不清的话
+          // 它会一直挂在界面上，后面再接一份完整的。
+          const retry = event.after === "stream_retry";
+          if (retry) {
+            pendingText.current = "";
+            pendingThinking.current = "";
+            pendingToolJson.current = [];
+            thinkClocks.delete(sessionId);
+          }
           // 只补缺不重置：一轮里每次模型调用都发 request_start，
           // 中途重置会让状态行的秒数在轮内清零。
-          if (!waitStartAt.has(sessionId)) waitStartAt.set(sessionId, Date.now());
+          if (!waitStartAt.has(sessionId))
+            waitStartAt.set(sessionId, Date.now());
           // 请求开始意味着压缩这一段结束了 —— 成功如此，失败也如此
           // （失败没有事件，只有日志，但轮次照常用完整历史往下走）。
           //
@@ -527,21 +576,35 @@ export function useSession(
           // 是用户发的还是内核自己起的（后台任务唤醒），旧红卡都该收掉。
           // 轮内后续的请求不算 —— 中途的「等待授权超时」还没过时。
           reconnectingRef.current = false;
-          setState((s) => ({
-            ...s,
-            busy: true,
-            streamingPlan: null,
-            compacting: false,
-            reconnect: null,
-            items: event.turn === 0 ? dropErrors(s.items) : s.items,
-          }));
+          const stale = retry ? attemptItems.current : null;
+          attemptItems.current = new Set();
+          setState((s) => {
+            const items = stale
+              ? s.items.filter((it) => !stale.has(it.id))
+              : event.turn === 0
+                ? dropErrors(s.items)
+                : s.items;
+            return {
+              ...s,
+              busy: true,
+              streamingPlan: null,
+              compacting: false,
+              reconnect: null,
+              items,
+              ...(retry ? { streaming: "", thinking: "" } : {}),
+            };
+          });
           break;
+        }
 
         case "retrying":
           // 退避加重发能拖几十秒，一直写"正在生成"的话用户以为模型在想。
           // 计时不清零：用户要知道的是这一轮总共等了多久。
           reconnectingRef.current = true;
-          setState((s) => ({ ...s, reconnect: { attempt: event.attempt, max: event.max } }));
+          setState((s) => ({
+            ...s,
+            reconnect: { attempt: event.attempt, max: event.max },
+          }));
           break;
 
         case "message": {
@@ -581,7 +644,10 @@ export function useSession(
                 pendingPreviews.current.delete(c.tool_use_id);
                 if (!c.is_error) onPreviewFileRef.current?.(p);
               }
-              if (pendingShowBrowser.current.delete(c.tool_use_id) && !c.is_error) {
+              if (
+                pendingShowBrowser.current.delete(c.tool_use_id) &&
+                !c.is_error
+              ) {
                 onBrowserOpenRef.current?.();
               }
             }
@@ -601,10 +667,15 @@ export function useSession(
             const text =
               raw === undefined
                 ? undefined
-                : shownUserText(raw, event.content.some((c) => c.type === "attachment"));
+                : shownUserText(
+                    raw,
+                    event.content.some((c) => c.type === "attachment"),
+                  );
             const hit =
               queuedRef.current.find((q) => q.id === event.id) ??
-              (text !== undefined ? queuedRef.current.find((q) => q.text === text) : undefined);
+              (text !== undefined
+                ? queuedRef.current.find((q) => q.text === text)
+                : undefined);
             if (hit) {
               mutateQueued((q) => q.filter((x) => x !== hit));
               setState((s) => ({
@@ -615,7 +686,9 @@ export function useSession(
                     kind: "user",
                     id: event.id,
                     text: hit.text,
-                    images: hit.images.map((i) => `data:${i.mediaType};base64,${i.data}`),
+                    images: hit.images.map(
+                      (i) => `data:${i.mediaType};base64,${i.data}`,
+                    ),
                     ...(hit.refs.length ? { files: hit.refs } : {}),
                     ...stampOf(event.meta),
                   },
@@ -637,7 +710,10 @@ export function useSession(
         case "progress":
           // `line` 是工具的原始输出；`message` 是内核说的一句话（词典键），
           // 比如子 agent 的"[kind·model] 标题 启动"，按当前语言翻了再进同一条流。
-          if (event.payload.kind === "line" || event.payload.kind === "message") {
+          if (
+            event.payload.kind === "line" ||
+            event.payload.kind === "message"
+          ) {
             pendingProgress.current.push({
               id: event.tool_use_id,
               text:
@@ -657,7 +733,10 @@ export function useSession(
             if (s.asks.some((a) => a.requestId === event.request_id)) return s;
             return {
               ...s,
-              asks: [...s.asks, { requestId: event.request_id, detail: event.detail }],
+              asks: [
+                ...s.asks,
+                { requestId: event.request_id, detail: event.detail },
+              ],
             };
           });
           break;
@@ -669,7 +748,10 @@ export function useSession(
           break;
 
         case "mode_changed":
-          setState((s) => ({ ...s, hostMode: { mode: event.mode, seq: (s.hostMode?.seq ?? 0) + 1 } }));
+          setState((s) => ({
+            ...s,
+            hostMode: { mode: event.mode, seq: (s.hostMode?.seq ?? 0) + 1 },
+          }));
           break;
 
         case "background_task":
@@ -683,7 +765,8 @@ export function useSession(
           // 这段时间界面上只有那三个点在动。不说的话用户以为是模型变慢了，
           // 而实际上系统在做一件必要的事。
           // 手动 /compact 不开轮次、没有 request_start，等待起点在这里补。
-          if (!waitStartAt.has(sessionId)) waitStartAt.set(sessionId, Date.now());
+          if (!waitStartAt.has(sessionId))
+            waitStartAt.set(sessionId, Date.now());
           reconnectingRef.current = false;
           setState((s) => ({ ...s, compacting: true, reconnect: null }));
           break;
@@ -693,7 +776,9 @@ export function useSession(
           if (!busyRef.current) waitStartAt.delete(sessionId);
           // 旧消息还在界面上，划一条线就够了。再出一块提示等于把记录盖住。
           flush();
-          setState((s) => applyCompacted(s, event.after_tokens, `compact-${Date.now()}`));
+          setState((s) =>
+            applyCompacted(s, event.after_tokens, `compact-${Date.now()}`),
+          );
           // 和宿主对一次账。长压缩（>12s 静默）期间看门狗拉过快照，把
           // running 被占的 busy=true 吸了进来 —— 而手动压缩结束没有 Done，
           // 这个 busy 没有别的事件会来清，状态行卡在假的"正在生成"直到下
@@ -708,7 +793,9 @@ export function useSession(
           // 模型一个字都没给出就被停了，内核把这条提问从历史里删了。
           // 界面跟着撤气泡，并把原文交给输入框（Composer 消费 withdrawn）。
           flush();
-          setState((s) => applyWithdrawn(s, event.message_id, event.session_empty));
+          setState((s) =>
+            applyWithdrawn(s, event.message_id, event.session_empty),
+          );
           break;
 
         case "done": {
@@ -770,7 +857,11 @@ export function useSession(
       try {
         handle(event);
       } catch (e) {
-        console.error("[session] event handler threw; dropping this event", event.type, e);
+        console.error(
+          "[session] event handler threw; dropping this event",
+          event.type,
+          e,
+        );
       }
     };
 
@@ -939,7 +1030,10 @@ export function useSession(
       }
       const away = hiddenAt ? Date.now() - hiddenAt : 0;
       hiddenAt = 0;
-      if (away < AWAY_RESYNC_MS && Date.now() - lastHeardAt.current < SINK_STALE_MS) {
+      if (
+        away < AWAY_RESYNC_MS &&
+        Date.now() - lastHeardAt.current < SINK_STALE_MS
+      ) {
         return;
       }
       void ensureLive({ catchUp: true });
@@ -974,7 +1068,9 @@ export function useSession(
       if (busyRef.current || compactingRef.current) {
         // 轮子在跑时只换出口不盖条目：正在流的正文和工具输出别被快照冲掉。
         if (silence >= BUSY_SILENCE_MS) {
-          console.warn(`[session] busy but silent for ${Math.round(silence / 1000)}s; resyncing`);
+          console.warn(
+            `[session] busy but silent for ${Math.round(silence / 1000)}s; resyncing`,
+          );
           void ensureLive({ catchUp: false });
         }
         return;
@@ -1041,7 +1137,9 @@ export function useSession(
       // 定稿才回来，而气泡现在就要显示 —— 差的只是一次 IPC 往返。
       const sentAt = Date.now();
       const localId = `local-${sentAt}-${Math.random().toString(36).slice(2, 8)}`;
-      const dataUrls = images.map((i) => `data:${i.mediaType};base64,${i.data}`);
+      const dataUrls = images.map(
+        (i) => `data:${i.mediaType};base64,${i.data}`,
+      );
       // 立刻放上去（等宿主回声的话，用户会看到自己输入的内容凭空消失
       // 几百毫秒）：空闲 → 对话气泡；忙 → 排队面板。排队的插话在被
       // 内核注入之前**不进对话流** —— 气泡的位置意味着"模型看到了这句
@@ -1083,11 +1181,16 @@ export function useSession(
         if (queuedId != null) {
           if (inPanel) {
             // 面板条目换成宿主 id —— 注入回流的消息按它配对。
-            mutateQueued((q) => q.map((x) => (x.id === localId ? { ...x, id: queuedId } : x)));
+            mutateQueued((q) =>
+              q.map((x) => (x.id === localId ? { ...x, id: queuedId } : x)),
+            );
           } else if (!wasBusy) {
             // 乐观放的是气泡，宿主却说排队了（并发发送的竞态）：挪去面板。
             mutateQueued((q) => [...q, { id: queuedId, text, images, refs }]);
-            setState((s) => ({ ...s, items: s.items.filter((it) => it.id !== localId) }));
+            setState((s) => ({
+              ...s,
+              items: s.items.filter((it) => it.id !== localId),
+            }));
           } else {
             // 面板条目已经没了。两种可能：注入事件抢在返回之前按原文配上
             // 了（remove 落空，无害）；或者用户趁宿主 id 没就位时把它删了/
@@ -1116,7 +1219,10 @@ export function useSession(
           // 排队发送失败时上一轮还在跑，不能把它标成空闲 ——
           // 否则停止键消失了，输出却还在滚。
           busy: wasBusy,
-          items: [...s.items.filter((it) => it.id !== localId), sendFailureItem(e)],
+          items: [
+            ...s.items.filter((it) => it.id !== localId),
+            sendFailureItem(e),
+          ],
         }));
         return false;
       }
@@ -1143,10 +1249,17 @@ export function useSession(
    * 在途的那份由 send 的对账兜底清掉，不会双份。
    */
   const queueEdit = useCallback(
-    async (id: string): Promise<{ text: string; images: ImageInput[]; refs: string[] } | null> => {
+    async (
+      id: string,
+    ): Promise<{
+      text: string;
+      images: ImageInput[];
+      refs: string[];
+    } | null> => {
       const local = queuedRef.current.find((q) => q.id === id);
       if (!local) return null;
-      let took: { text: string; images: ImageInput[]; refs: string[] } | null = null;
+      let took: { text: string; images: ImageInput[]; refs: string[] } | null =
+        null;
       let takeFailed = false;
       try {
         took = await queueTake(sessionId, id);
@@ -1158,7 +1271,9 @@ export function useSession(
         return null;
       }
       mutateQueued((q) => q.filter((x) => x.id !== id));
-      return took ?? { text: local.text, images: local.images, refs: local.refs };
+      return (
+        took ?? { text: local.text, images: local.images, refs: local.refs }
+      );
     },
     [sessionId, mutateQueued],
   );
@@ -1174,7 +1289,8 @@ export function useSession(
     async (id: string) => {
       const local = queuedRef.current.find((q) => q.id === id);
       if (!local) return;
-      let took: { text: string; images: ImageInput[]; refs: string[] } | null = null;
+      let took: { text: string; images: ImageInput[]; refs: string[] } | null =
+        null;
       let takeFailed = false;
       try {
         took = await queueTake(sessionId, id);
@@ -1287,7 +1403,9 @@ export function useSession(
       setState((s) => ({
         ...s,
         items: s.items.filter((it) => it.id !== item.id),
-        withdrawn: giveBack ? (s.withdrawn ?? withdrawnOf(giveBack, item.id, empty)) : s.withdrawn,
+        withdrawn: giveBack
+          ? (s.withdrawn ?? withdrawnOf(giveBack, item.id, empty))
+          : s.withdrawn,
       }));
       return true;
     },
@@ -1337,7 +1455,9 @@ export function useSession(
           ? {
               ...item,
               text,
-              images: (images ?? []).map((i) => `data:${i.mediaType};base64,${i.data}`),
+              images: (images ?? []).map(
+                (i) => `data:${i.mediaType};base64,${i.data}`,
+              ),
             }
           : null,
       ),
@@ -1353,7 +1473,11 @@ export function useSession(
    * 套；失败拉快照回滚。
    */
   const resendEntry = useCallback(
-    async (item: TextItem, text: string, images?: ImageInput[]): Promise<boolean> => {
+    async (
+      item: TextItem,
+      text: string,
+      images?: ImageInput[],
+    ): Promise<boolean> => {
       if (busyRef.current) return false;
       let messageId: string;
       try {
@@ -1429,7 +1553,8 @@ export function useSession(
         const found = locateMessage(hist.messages, item);
         if (!found) {
           // 幽灵气泡：回退到它发出时 = 它从没被回答过，原文回输入框。
-          if (settlePhantom(item, hist, item.kind === "user" ? item : null)) return true;
+          if (settlePhantom(item, hist, item.kind === "user" ? item : null))
+            return true;
           throw new Error(t("transcript.session.messageGone"));
         }
         messageId = found;
@@ -1439,7 +1564,11 @@ export function useSession(
       }
       setState((s) => ({
         ...s,
-        items: trimThroughEdited(s.items, item.id, item.kind === "user" ? item.text : ""),
+        items: trimThroughEdited(
+          s.items,
+          item.id,
+          item.kind === "user" ? item.text : "",
+        ),
         streaming: "",
         thinking: "",
         streamingPlan: null,
@@ -1502,7 +1631,11 @@ export function useSession(
   /** 上下文删除：按轮成对删（这条气泡所属的提问连同全部回应）。 */
   const deleteEntry = useCallback(
     (item: TextItem) =>
-      mutateHistory(item, (messageId) => deleteMessageBridge(sessionId, messageId), null),
+      mutateHistory(
+        item,
+        (messageId) => deleteMessageBridge(sessionId, messageId),
+        null,
+      ),
     [sessionId, mutateHistory],
   );
 
@@ -1527,7 +1660,11 @@ export function useSession(
           streamingPlan: null,
           items: s.items.map((it) =>
             it.kind === "tool" && it.status === "running"
-              ? { ...it, status: "error" as const, result: t("transcript.session.unfinished") }
+              ? {
+                  ...it,
+                  status: "error" as const,
+                  result: t("transcript.session.unfinished"),
+                }
               : it,
           ),
         }));
@@ -1583,7 +1720,11 @@ export function useSession(
         setState((s) =>
           s.asks.some((a) => a.requestId === ask.requestId)
             ? s
-            : { ...s, asks: [ask, ...s.asks], items: [...s.items, errorItem(e)] },
+            : {
+                ...s,
+                asks: [ask, ...s.asks],
+                items: [...s.items, errorItem(e)],
+              },
         );
       }
     },

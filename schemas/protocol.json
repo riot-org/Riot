@@ -6059,6 +6059,11 @@
           "type": "string"
         },
         {
+          "const": "stream_retry",
+          "description": "流读到一半断了（网络抖动、网关掐连接），丢掉这次的半截输出、原样\n重发。界面和宿主收到它要清掉上一次尝试的流式内容。",
+          "type": "string"
+        },
+        {
           "const": "stop_hook_blocking",
           "description": "stop hook 拦下了结束，注入内容后继续。",
           "type": "string"
