@@ -51,8 +51,8 @@ export default {
   "settings.mcp.args.desc": "한 줄에 하나씩.",
   "settings.mcp.args.placeholder": "예:\n-y\n@modelcontextprotocol/server-filesystem\n/tmp",
   "settings.mcp.env": "환경 변수",
-  "settings.mcp.env.desc": "한 줄에 KEY=VALUE 하나씩.",
-  "settings.mcp.env.placeholder": "예:\nGITHUB_TOKEN=ghp_...",
+  "settings.mcp.env.desc": "한 줄에 KEY=VALUE 하나씩. 비밀 값은 「환경 변수」에 저장하고 여기서는 ${env:이름}으로 참조하면 설정 파일에 평문이 남지 않습니다.",
+  "settings.mcp.env.placeholder": "예:\nGITHUB_TOKEN=${env:GITHUB_TOKEN}",
   "settings.mcp.env.format": "환경 변수는 KEY=VALUE 형식이어야 합니다: “{line}”",
 
 

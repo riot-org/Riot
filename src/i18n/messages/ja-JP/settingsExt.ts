@@ -51,8 +51,8 @@ export default {
   "settings.mcp.args.desc": "1 行に 1 つ。",
   "settings.mcp.args.placeholder": "例：\n-y\n@modelcontextprotocol/server-filesystem\n/tmp",
   "settings.mcp.env": "環境変数",
-  "settings.mcp.env.desc": "1 行に 1 つ、KEY=VALUE 形式。",
-  "settings.mcp.env.placeholder": "例：\nGITHUB_TOKEN=ghp_...",
+  "settings.mcp.env.desc": "1 行に 1 つ、KEY=VALUE 形式。秘密の値は「環境変数」に保存し、ここでは ${env:名前} で参照すると設定ファイルに平文が残りません。",
+  "settings.mcp.env.placeholder": "例：\nGITHUB_TOKEN=${env:GITHUB_TOKEN}",
   "settings.mcp.env.format": "環境変数は KEY=VALUE 形式で書いてください：「{line}」",
 
 

@@ -25,7 +25,7 @@ Riot 会自动用新清单续一轮，不用请用户再发「继续」。
 | （对象的键） | 必填 | 变成服务器 id。字母数字、`-`、`_` 以外的字符导入时换成 `-` |
 | `command` | 必填 | **单个 token**：`npx` / `uvx` / 可执行文件路径。别把参数写进来 |
 | `args` | 可选 | 字符串数组，每个元素一个参数 |
-| `env` | 可选 | 对象。密钥和服务器要读的变量写这里，进 `config.json`（不是 `auth.json`）。设置 → 环境变量里的值**不会**传给 MCP 服务器 |
+| `env` | 可选 | 对象。服务器要读的变量写这里。值可以写 `${env:NAME}` 引用设置 → 环境变量里的变量，见下面「密钥」；没引用的环境变量**不会**传给 MCP 服务器 |
 | `disabled` | 可选 | `true` = 不启动。表单里对应「启用」开关（`enabled`） |
 
 表单比 JSON 多两个 Riot 自己的字段：`name`（显示名，空 = 显示 id；标准
@@ -57,7 +57,7 @@ Riot 用户级**只起 stdio 子进程**。三种常见写法：
       "command": "uv",
       "args": ["run", "--directory", "/path/to/my-mcp",
                "my-mcp", "--transport", "stdio"],
-      "env": { "MY_MCP_API_KEY": "<key>" }
+      "env": { "MY_MCP_API_KEY": "${env:MY_MCP_API_KEY}" }
     },
     "offline": {
       "command": "npx",
@@ -81,6 +81,35 @@ Riot 用户级**只起 stdio 子进程**。三种常见写法：
   一套系统变量）。用户 shell 里 export 的 `GITHUB_TOKEN` 之类**读不到**，
   服务器要的变量必须写进 `env`。「终端里能跑、Riot 里报缺 key」就是这个。
 
+## 密钥（API key、密码、主机、账号）
+
+**不要把值写进 `config.json`，也不要写脚本把环境变量抄进去。** `env` 的
+值写 `${env:NAME}`，Riot 起进程前从设置 → 环境变量（0600 的 `auth.json`）
+里取值替换，`config.json` 里只留名字：
+
+```json
+{"id": "ssh-prod", "command": "npx", "args": ["-y", "ssh-mcp"],
+ "env": {"SSH_HOST": "${env:SSH_PROD__HOST}",
+         "SSH_USER": "${env:SSH_PROD__USER}",
+         "SSH_PASSWORD": "${env:SSH_PROD__PASSWORD}"}}
+```
+
+1. 先调 `RequestEnv` 让用户填这些变量（已配好的会直接放行，不用先查）。
+2. 再 Edit `config.json` 写引用，调 `ReloadConfig`。
+3. 用户以后改了这些变量的值，引用它的服务器会自动重连。
+
+- 只在 `env` 的值里展开，`args` 不展开（参数在进程列表里谁都看得见）。
+  服务器只收命令行参数的话，看它支不支持从环境变量读；`mcp-remote` 的
+  `${VAR}` 是它自己从 `env` 里读的，配合用即可：
+  `"args": [..., "--header", "Authorization:${AUTH}"]`,
+  `"env": {"AUTH": "Bearer ${env:MY_TOKEN}"}`。
+- 一个值里可以夹别的文字（`"Bearer ${env:MY_TOKEN}"`）。名字不合法的
+  `${env:…}` 不算引用，原样传过去。
+- 引用的变量没配时服务器**不启动**，状态报「缺少环境变量 $NAME」。
+- 同类服务有多个实例（几台服务器、几个账号）时，变量名带上实例前缀，
+  如 `SSH_PROD__HOST` / `SSH_TEST__HOST`，别用 `SSH_HOST` 这种通用名 ——
+  用户在设置页得分得清哪个值属于哪台。
+
 ## 远程（HTTP / SSE）
 
 用户级**没有** `url` / `headers` 字段。远程有两条路，别走错：
@@ -95,13 +124,13 @@ Riot 用户级**只起 stdio 子进程**。三种常见写法：
       "command": "npx",
       "args": ["-y", "mcp-remote", "http://127.0.0.1:8080/mcp",
                "--header", "Authorization:${AUTH_HEADER}"],
-      "env": { "AUTH_HEADER": "Bearer <token>" }
+      "env": { "AUTH_HEADER": "Bearer ${env:LOCAL_MCP_TOKEN}" }
     },
     "cloud": {
       "command": "npx",
       "args": ["-y", "mcp-remote", "https://mcp.example.com/path",
                "--header", "X-api-key:${API_KEY}"],
-      "env": { "API_KEY": "<key>" }
+      "env": { "API_KEY": "${env:CLOUD_MCP_KEY}" }
     }
   }
 }

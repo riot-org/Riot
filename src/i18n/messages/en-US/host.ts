@@ -61,6 +61,7 @@ export default {
   "host.dir.permissionDenied": "No permission to read this directory.",
   "host.dir.readFailed": "Failed to read the directory.",
   "host.env.saveFailed": "Couldn't save the environment variable.",
+  "host.mcp.envMissing": "Missing environment variables {names}. Add them in Settings → Environment Variables and the server reconnects automatically.",
   "host.venv.invalid": "{path} does not look like a virtual environment: {python} not found. Enter the venv root (the directory created by python -m venv).",
   "host.term.spawnFailed": "Failed to start the terminal.",
   "host.term.closed": "Terminal {id} has been closed.",

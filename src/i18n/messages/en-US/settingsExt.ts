@@ -54,8 +54,8 @@ export default {
   "settings.mcp.args.desc": "One per line.",
   "settings.mcp.args.placeholder": "e.g.\n-y\n@modelcontextprotocol/server-filesystem\n/tmp",
   "settings.mcp.env": "Environment variables",
-  "settings.mcp.env.desc": "One KEY=VALUE per line.",
-  "settings.mcp.env.placeholder": "e.g.\nGITHUB_TOKEN=ghp_...",
+  "settings.mcp.env.desc": "One KEY=VALUE per line. For secrets, save them under Environment Variables and write ${env:NAME} here so the config file holds no plaintext.",
+  "settings.mcp.env.placeholder": "e.g.\nGITHUB_TOKEN=${env:GITHUB_TOKEN}",
   "settings.mcp.env.format": "Environment variables must be written as KEY=VALUE: \u201c{line}\u201d",
 
 

@@ -61,6 +61,7 @@ export default {
   "host.dir.permissionDenied": "이 폴더를 읽을 권한이 없습니다.",
   "host.dir.readFailed": "폴더를 읽을 수 없습니다.",
   "host.env.saveFailed": "환경 변수를 저장하지 못했습니다.",
+  "host.mcp.envMissing": "환경 변수 {names}이(가) 없습니다. 「설정 → 환경 변수」에서 추가하면 자동으로 다시 연결됩니다.",
   "host.venv.invalid": "{path}(은)는 가상 환경이 아닌 것 같습니다: {python}(을)를 찾을 수 없습니다. venv의 루트 폴더(python -m venv로 만든 폴더)를 지정해야 합니다.",
   "host.term.spawnFailed": "터미널을 시작할 수 없습니다.",
   "host.term.closed": "터미널 {id}(은)는 이미 닫혔습니다.",

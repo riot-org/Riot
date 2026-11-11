@@ -123,7 +123,12 @@ impl Tool for RequestEnv {
              You never see the values: reference them as `$NAME` in {BASH} commands and scripts, \
              and read them from the environment in code (`os.environ[\"NAME\"]`).\n\n\
              Use this instead of asking in chat. NEVER ask the user to paste a key, password or \
-             token into the conversation, and never write one into a file yourself.\n\n\
+             token into the conversation, and never write one into a file yourself. For an MCP \
+             server, put `${{env:NAME}}` in its `env` in config.json — Riot substitutes the value \
+             when it starts the server; do not copy values into the config with a script.\n\n\
+             When there are several instances of the same kind of service (servers, accounts), \
+             prefix the names per instance (`SSH_PROD__HOST`, `SSH_TEST__HOST`) so the user can \
+             tell which value belongs to which.\n\n\
              Call it when you are about to need the value, not before. If every variable you ask \
              for is already configured the call returns at once without bothering the user, so \
              you do not need to check first — and do not try to check with `echo $NAME`.\n\n\

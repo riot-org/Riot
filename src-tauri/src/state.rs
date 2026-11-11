@@ -413,6 +413,9 @@ struct Inner {
     /// 的一次 reconcile（用户顺手保存了一下设置）也不会把进程拉回来。
     /// 见 [`AppState::quiesce_plugin_mcp`]。
     mcp_quiesced: Mutex<HashSet<String>>,
+    /// `env` 里引用了还没配的环境变量、因此没有启动的 MCP 服务器：
+    /// id → 缺的变量名。内核不知道它们，状态由宿主补报。
+    mcp_env_missing: Mutex<Vec<(String, Vec<String>)>>,
 }
 
 /// 定时任务的内存状态。
@@ -460,6 +463,7 @@ impl Inner {
             pending_installs: Mutex::default(),
             market_cache: Mutex::default(),
             mcp_quiesced: Mutex::default(),
+            mcp_env_missing: Mutex::default(),
         }
     }
 }
@@ -2225,11 +2229,18 @@ impl AppState {
 
     /// 设置页显示用：名字 + 打码后的值。整值不出宿主。
     pub async fn user_env_names(&self) -> Vec<crate::config::UserEnvEntry> {
+        let config = self.config().await;
         self.user_env_vars()
             .await
             .into_iter()
             .map(|v| crate::config::UserEnvEntry {
                 masked: crate::config::mask_env_value(&v.value),
+                used_by: config
+                    .mcp_servers
+                    .iter()
+                    .filter(|s| s.env_ref_names().contains(&v.name.as_str()))
+                    .map(|s| s.id.clone())
+                    .collect(),
                 name: v.name,
             })
             .collect()
@@ -2249,6 +2260,17 @@ impl AppState {
         .await
         .map_err(|e| ui_error!("host.env.saveFailed"; e))??;
         self.push_user_env().await;
+        // 引用了它的 MCP 服务器要按新值重起（或因为删了而停下）。spec 变了
+        // reconcile 才会动它，没引用它的服务器不受影响。
+        let referenced = self
+            .config()
+            .await
+            .mcp_servers
+            .iter()
+            .any(|s| s.enabled && s.env_ref_names().contains(&name));
+        if referenced {
+            self.reconcile_mcp().await;
+        }
         Ok(())
     }
 
@@ -3140,22 +3162,49 @@ impl AppState {
     /// 连接进度通过 [`Self::mcp_statuses`] 查询。
     pub async fn reconcile_mcp(&self) {
         let config = self.config().await;
-        let mut servers: Vec<riot_protocol::rpc::McpServerSpec> = config
+        let user_env = self.user_env_vars().await;
+        let lookup = |name: &str| {
+            user_env
+                .iter()
+                .find(|v| v.name == name)
+                .map(|v| v.value.as_str())
+        };
+        let mut servers: Vec<riot_protocol::rpc::McpServerSpec> = Vec::new();
+        let mut env_missing: Vec<(String, Vec<String>)> = Vec::new();
+        // 空命令 = 刚添加还没填完的中间状态，跳过而不是报错 ——
+        // 校验放行它正是为了让"添加"按钮能落地（见 config::validate_mcp）。
+        for s in config
             .mcp_servers
             .iter()
-            // 空命令 = 刚添加还没填完的中间状态，跳过而不是报错 ——
-            // 校验放行它正是为了让"添加"按钮能落地（见 config::validate_mcp）。
             .filter(|s| s.enabled && !s.command.trim().is_empty())
-            .map(|s| riot_protocol::rpc::McpServerSpec {
+        {
+            let mut env = Vec::with_capacity(s.env.len());
+            let mut missing: Vec<String> = Vec::new();
+            for (k, v) in &s.env {
+                match crate::config::expand_env_refs(v, lookup) {
+                    Ok(v) => env.push((k.clone(), v)),
+                    Err(names) => missing.extend(names),
+                }
+            }
+            // 缺变量的不启动：带着字面量 `${env:…}` 起来，服务器只会报一个
+            // 指不到原因的认证失败。
+            if !missing.is_empty() {
+                missing.sort();
+                missing.dedup();
+                env_missing.push((s.id.clone(), missing));
+                continue;
+            }
+            servers.push(riot_protocol::rpc::McpServerSpec {
                 id: s.id.clone(),
                 transport: riot_protocol::rpc::McpTransport::Stdio {
                     command: s.command.clone(),
                     args: s.args.clone(),
-                    env: s.env.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+                    env,
                     cwd: None,
                 },
-            })
-            .collect();
+            });
+        }
+        *self.0.mcp_env_missing.lock().await = env_missing;
         // 插件带的服务器：按启用中的插件目录现读、派生，不写进配置。
         // 用户自己配的同 id 服务器优先（id 形状是 `<插件>--<名字>`，撞上
         // 只可能是故意的）。正在卸载 / 升级的插件跳过：它的目录马上要被
@@ -3168,8 +3217,16 @@ impl AppState {
         })
         .await
         .unwrap_or_default();
+        let env_missing_ids: Vec<String> = self
+            .0
+            .mcp_env_missing
+            .lock()
+            .await
+            .iter()
+            .map(|(id, _)| id.clone())
+            .collect();
         for spec in derived {
-            if !servers.iter().any(|s| s.id == spec.id) {
+            if !servers.iter().any(|s| s.id == spec.id) && !env_missing_ids.contains(&spec.id) {
                 servers.push(spec);
             }
         }
@@ -3205,14 +3262,37 @@ impl AppState {
 
     /// MCP 服务器的连接状态，给设置页看。
     pub async fn mcp_statuses(&self) -> Vec<riot_protocol::rpc::McpServerStatus> {
-        match self.kernel_call(RpcRequest::McpStatus).await {
+        let mut out = match self.kernel_call(RpcRequest::McpStatus).await {
             Ok(RpcResponse::McpStatuses { servers }) => servers,
             Ok(_) => Vec::new(),
             Err(e) => {
                 tracing::debug!(error = %e, "拿不到 MCP 状态(内核未运行?)");
                 Vec::new()
             }
+        };
+        for (id, names) in self.0.mcp_env_missing.lock().await.iter() {
+            let names = names
+                .iter()
+                .map(|n| format!("${n}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push(riot_protocol::rpc::McpServerStatus {
+                id: id.clone(),
+                state: "failed".into(),
+                detail: String::new(),
+                error: Some(ui_error!(
+                    "host.mcp.envMissing",
+                    names = &names;
+                    format!(
+                        "env 引用了没配置的环境变量 {names}。用 RequestEnv 请用户填，\
+                         或请用户在设置 → 环境变量里添加，然后再调 ReloadConfig"
+                    )
+                )),
+                tools: Vec::new(),
+            });
         }
+        out.sort_by(|a, b| a.id.cmp(&b.id));
+        out
     }
 
     /// 手动重连一个 MCP 服务器。

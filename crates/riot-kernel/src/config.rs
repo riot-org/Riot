@@ -1073,10 +1073,92 @@ pub fn save_user_env_at(p: &Path, name: &str, value: &str) -> Result<(), ConfigE
 
 /// 设置页里的一行：名字和打码后的值。整值只在宿主和内核之间走。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct UserEnvEntry {
     pub name: String,
     /// `sk-m••••7890` 这样：留头尾几位让人认得出是哪一把，中间打码。
     pub masked: String,
+    /// `env` 里引用了它的 MCP 服务器 id。删掉它这些服务器就起不来。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub used_by: Vec<String>,
+}
+
+/// MCP 服务器 `env` 值里引用用户环境变量的前缀：`${env:NAME}`。
+///
+/// 让 config.json 只存名字：值留在 0600 的 auth.json 里，宿主起进程前
+/// 才展开。没有它，模型配 MCP 时只能写脚本把值抄进 config.json —— 同一
+/// 份秘密多出一份明文，且落在保护更弱的文件里。
+const ENV_REF_OPEN: &str = "${env:";
+
+/// 值里引用到的变量名（去重、按出现顺序）。名字不合法的不算引用，原样留着。
+pub fn env_refs(value: &str) -> Vec<&str> {
+    let mut out: Vec<&str> = Vec::new();
+    let mut rest = value;
+    while let Some(i) = rest.find(ENV_REF_OPEN) {
+        let after = &rest[i + ENV_REF_OPEN.len()..];
+        let Some(end) = after.find('}') else { break };
+        let name = &after[..end];
+        if valid_env_name(name) {
+            if !out.contains(&name) {
+                out.push(name);
+            }
+            rest = &after[end + 1..];
+        } else {
+            rest = after;
+        }
+    }
+    out
+}
+
+/// 把值里的 `${env:NAME}` 换成 `lookup` 给的值。有引用查不到时返回
+/// 缺的名字，一个都不换 —— 半展开的值交给服务器只会换来一个更难懂的
+/// 认证失败。
+pub fn expand_env_refs<'a, F>(value: &str, lookup: F) -> Result<String, Vec<String>>
+where
+    F: Fn(&str) -> Option<&'a str>,
+{
+    let missing: Vec<String> = env_refs(value)
+        .into_iter()
+        .filter(|n| lookup(n).is_none())
+        .map(str::to_owned)
+        .collect();
+    if !missing.is_empty() {
+        return Err(missing);
+    }
+    // 一遍扫完：换进去的值里碰巧也有 `${env:…}` 时不能再展开它。
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(i) = rest.find(ENV_REF_OPEN) {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + ENV_REF_OPEN.len()..];
+        match after.find('}').map(|end| (&after[..end], end)) {
+            Some((name, end)) if valid_env_name(name) => {
+                out.push_str(lookup(name).unwrap_or_default());
+                rest = &after[end + 1..];
+            }
+            _ => {
+                out.push_str(ENV_REF_OPEN);
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
+impl McpServerConfig {
+    /// `env` 里引用到的全部用户环境变量名。
+    pub fn env_ref_names(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = Vec::new();
+        for v in self.env.values() {
+            for n in env_refs(v) {
+                if !out.contains(&n) {
+                    out.push(n);
+                }
+            }
+        }
+        out
+    }
 }
 
 /// 值的打码形状。短于 12 个字符的全部打码 —— 头尾各露 4 位时，密码
@@ -2109,6 +2191,31 @@ pub fn save_at(p: &Path, c: &AppConfig) -> Result<(), ConfigError> {
 #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn env_引用_展开_缺的报名字_不合法的原样留() {
+        let vars = [("SSH_PROD__PASSWORD", "p@ss"), ("TOKEN", "${env:X}")];
+        let look = |n: &str| vars.iter().find(|(k, _)| *k == n).map(|(_, v)| *v);
+
+        assert_eq!(
+            expand_env_refs("${env:SSH_PROD__PASSWORD}", look).unwrap(),
+            "p@ss"
+        );
+        assert_eq!(
+            expand_env_refs("Bearer ${env:TOKEN} / ${env:TOKEN}", look).unwrap(),
+            "Bearer ${env:X} / ${env:X}",
+            "换进去的值不再展开"
+        );
+        assert_eq!(
+            expand_env_refs("${HOME} ${env:bad-name} ${env:", look).unwrap(),
+            "${HOME} ${env:bad-name} ${env:"
+        );
+        assert_eq!(
+            expand_env_refs("${env:A}${env:TOKEN}${env:B}${env:A}", look).unwrap_err(),
+            ["A", "B"]
+        );
+        assert_eq!(env_refs("x ${env:A} ${env:A} ${env:B}"), ["A", "B"]);
+    }
 
     /// 造一个配好一家服务方的配置。测"配置好之后"的行为用它。
     fn one_provider() -> AppConfig {

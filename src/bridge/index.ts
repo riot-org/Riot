@@ -1092,6 +1092,8 @@ export function setConfig(config: AppConfig): Promise<ConfigStatus> {
 export interface UserEnvEntry {
   name: string;
   masked: string;
+  /** `env` 里用 `${env:NAME}` 引用了它的 MCP 服务器 id。 */
+  usedBy?: string[];
 }
 
 /** 用户配的环境变量（名字 + 打码值）。 */

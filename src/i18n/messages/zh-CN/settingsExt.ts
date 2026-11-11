@@ -52,8 +52,8 @@ export default {
   "settings.mcp.args.desc": "一行一个。",
   "settings.mcp.args.placeholder": "如：\n-y\n@modelcontextprotocol/server-filesystem\n/tmp",
   "settings.mcp.env": "环境变量",
-  "settings.mcp.env.desc": "一行一个 KEY=VALUE。",
-  "settings.mcp.env.placeholder": "如：\nGITHUB_TOKEN=ghp_...",
+  "settings.mcp.env.desc": "一行一个 KEY=VALUE。密钥建议先存进「环境变量」，这里写 ${env:名字} 引用，配置文件里就不留明文。",
+  "settings.mcp.env.placeholder": "如：\nGITHUB_TOKEN=${env:GITHUB_TOKEN}",
   "settings.mcp.env.format": "环境变量要写成 KEY=VALUE：「{line}」",
 
 
