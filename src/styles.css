@@ -1575,7 +1575,6 @@ html[data-host='web'] body {
 .project {
   display: flex;
   flex-direction: column;
-  gap: 1px;
 }
 
 /* 高度不定的开合：0fr → 1fr 能过渡，max-height 会按上限算时间。 */
@@ -1617,14 +1616,51 @@ html[data-host='web'] body {
   min-width: 0;
 }
 
-.project.collapsed {
-  gap: 0;
-}
-
 .project-threads-inner {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+}
+
+/* 侧栏里逐行的开合（项目、分组、整个「项目」区都用它）。
+ *
+ * 折起来的是「其它行」，当前会话那一行留在原地不动 —— 整块折叠再把它
+ * 另画一份的话，它会在两个位置之间跳。每行自己收高度 + 淡出，行距也
+ * 由行自己带着（下面的 margin），收起时一起收走，不会有一截间距突然没了。 */
+.fold-row {
+  display: grid;
+  grid-template-rows: 1fr;
+  /* 理由同 .smooth-fold：auto 列会被 nowrap 的标题撑宽。 */
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 0;
+  flex: none;
+  opacity: 1;
+  transition:
+    grid-template-rows var(--dur-3) var(--ease-fold),
+    opacity var(--dur-2) var(--ease-out);
+}
+
+.fold-row.folded {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.fold-row-inner {
+  /* flow-root 把下面的 margin 关在盒子里，0fr 时一起裁掉。 */
+  display: flow-root;
+  overflow: clip;
+  min-height: 0;
+  min-width: 0;
+}
+
+.fold-row-inner > * {
+  margin-bottom: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fold-row {
+    transition: none;
+  }
 }
 
 .project-toggle .chevron,
@@ -1648,6 +1684,8 @@ html[data-host='web'] body {
   display: flex;
   align-items: center;
   gap: 2px;
+  /* 和下面会话行之间的 1px（会话行自己带的那份在 .fold-row-inner 上）。 */
+  margin-bottom: 1px;
   padding: 2px 4px 2px 6px;
   border-radius: 8px;
   color: var(--text-dim);
@@ -7732,44 +7770,6 @@ button.ta-resize-grip:hover:not(:disabled),
   letter-spacing: 0.5px;
 }
 
-.set-row-ctl .env-name-input {
-  font-family: var(--mono);
-}
-
-/* ── 环境变量表单（RequestEnv） ───────────────────────────
-   选择题卡的壳，里面一个变量一组：变量名（等宽）+ 状态 + 获取链接，
-   一行说明，一个密码框。输入框照 .plan-feedback 的底和描边，和卡里
-   别的输入长一个样。 */
-.env-card-fields {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  margin: 0 2px 10px;
-}
-
-.env-card-field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-}
-
-.env-card-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.env-card-name {
-  font-family: var(--mono);
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text);
-}
-
-.env-card-set {
-  font-size: 11px;
 /* ── 环境变量：按组折叠的列表 ── */
 .env-toolbar {
   display: flex;
@@ -8011,10 +8011,10 @@ button.ta-resize-grip:hover:not(:disabled),
   }
 }
 
-  color: var(--ok);
+.set-row-ctl .env-name-input {
+  font-family: var(--mono);
 }
 
-.env-card-link {
 /* 添加表单：两个输入框同宽对齐，提交按钮单独一栏靠右。 */
 .env-add-form .set-row-ctl {
   width: min(360px, 55%);
@@ -8030,6 +8030,44 @@ button.ta-resize-grip:hover:not(:disabled),
   padding: 10px 16px;
 }
 
+/* ── 环境变量表单（RequestEnv） ───────────────────────────
+   选择题卡的壳，里面一个变量一组：变量名（等宽）+ 状态 + 获取链接，
+   一行说明，一个密码框。输入框照 .plan-feedback 的底和描边，和卡里
+   别的输入长一个样。 */
+.env-card-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0 2px 10px;
+}
+
+.env-card-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.env-card-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.env-card-name {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.env-card-set {
+  font-size: 11px;
+  color: var(--ok);
+}
+
+.env-card-link {
   margin-left: auto;
   padding: 0;
   border: none;
@@ -13180,9 +13218,8 @@ button.ctx-cat-line:focus-visible {
   display: flex;
   align-items: center;
   gap: 2px;
-  /* 右边多让出一个 .row-btn（22）+ 缝（2）：项目行是「计数 + …」，这里
-     只有「计数 +」，补齐后两边的 + 和计数各自竖着对齐。 */
-  padding: 2px 28px 2px 6px;
+  /* 和 .project-head 同样的右边距：+ 贴着最右，和项目行最右的键竖着对齐。 */
+  padding: 2px 4px 2px 6px;
   border-radius: 8px;
 }
 
@@ -13241,7 +13278,6 @@ button.ctx-cat-line:focus-visible {
 .section-body {
   display: flex;
   flex-direction: column;
-  gap: 1px;
 }
 
 /* 一级菜单项上的错过红点。 */

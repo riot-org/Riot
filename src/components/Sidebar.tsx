@@ -3,7 +3,7 @@
  * 宽度/开合等布局真值仍在 App，这里管分组折叠与每行的交互。
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useState } from "react";
 
 import { projectRootOf, type SessionInfo } from "../bridge";
 import { useImeGuard } from "../hooks/useImeGuard";
@@ -29,7 +29,11 @@ function loadCollapsedProjects(): Set<string> {
     const raw = localStorage.getItem(COLLAPSED_KEY);
     if (!raw) return new Set();
     const arr: unknown = JSON.parse(raw);
-    return new Set(Array.isArray(arr) ? arr.filter((x): x is string => typeof x === "string") : []);
+    return new Set(
+      Array.isArray(arr)
+        ? arr.filter((x): x is string => typeof x === "string")
+        : [],
+    );
   } catch {
     return new Set();
   }
@@ -50,7 +54,6 @@ function useSectionFold(key: string): [boolean, () => void] {
   }, [key]);
   return [folded, toggle];
 }
-
 
 export interface SidebarProps {
   /** 用户拖出来的宽度。真值和持久化都在 App 那层。 */
@@ -87,14 +90,21 @@ export interface SidebarProps {
 }
 
 export function Sidebar(props: SidebarProps) {
-  const { width, projects, sessions, active, onOpenProject, onSettings, onSchedules, onCollapse } =
-    props;
+  const {
+    width,
+    projects,
+    sessions,
+    active,
+    onOpenProject,
+    onSettings,
+    onSchedules,
+    onCollapse,
+  } = props;
   const { t, tn } = useT();
   const [collapsed, setCollapsed] = useState(loadCollapsedProjects);
-  const [projectsFolded, toggleProjectsFolded] = useSectionFold("riot.layout.projectsFold");
-  // 用来分辨「刚切到一个会话」和「本来就停在这个会话」。后者不能
-  // 强制展开 —— 用户把当前项目折起来是有意的。
-  const prevActive = useRef(active);
+  const [projectsFolded, toggleProjectsFolded] = useSectionFold(
+    "riot.layout.projectsFold",
+  );
 
   const toggleCollapsed = useCallback((root: string) => {
     setCollapsed((prev) => {
@@ -116,16 +126,6 @@ export function Sidebar(props: SidebarProps) {
     });
   }, []);
 
-  // 新会话从右键菜单、欢迎页进来时不会经过项目行上的 +，不展开的话
-  // 建出来的会话会藏在折叠组里，看起来像没建成功。
-  useEffect(() => {
-    if (active && active !== prevActive.current) {
-      const s = sessions.find((x) => x.id === active);
-      if (s) expandProject(projectRootOf(s));
-    }
-    prevActive.current = active;
-  }, [active, sessions, expandProject]);
-
   // worktree 会话归原项目（它的 root 是应用自己建的目录）。
   // 有会话但不在项目列表里的根也要显示（理论上不会发生，但真发生时
   // 隐藏会话比多显示一个组糟得多）。
@@ -134,6 +134,13 @@ export function Sidebar(props: SidebarProps) {
     const root = projectRootOf(s);
     if (!roots.includes(root)) roots.push(root);
   }
+  // 整个「项目」区收起时，其它项目逐个折走，当前会话所在的项目留在原位、
+  // 自己也收起来（只露当前会话那一行）—— 和 Claude 侧栏一样：折起来的
+  // 是其它的，不是你正在看的那个。
+  const activeSession = props.schedulesActive
+    ? undefined
+    : sessions.find((s) => s.id === active);
+  const activeRoot = activeSession ? projectRootOf(activeSession) : null;
 
   return (
     <aside className="sidebar" style={{ width }}>
@@ -159,7 +166,11 @@ export function Sidebar(props: SidebarProps) {
           等于白吃一行可视高度。 */}
       <nav className="threads">
         <button
-          className={props.schedulesActive ? "side-item side-nav active" : "side-item side-nav"}
+          className={
+            props.schedulesActive
+              ? "side-item side-nav active"
+              : "side-item side-nav"
+          }
           onClick={onSchedules}
         >
           <ClockIcon />
@@ -184,40 +195,51 @@ export function Sidebar(props: SidebarProps) {
             >
               <span className="section-name">{t("app.sidebar.projects")}</span>
               <Chevron open={!projectsFolded} solid />
-              {projectsFolded ? <span className="project-count">{roots.length}</span> : null}
+              {projectsFolded ? (
+                <span className="project-count">{roots.length}</span>
+              ) : null}
             </button>
-            <button className="row-btn" onClick={onOpenProject} title={t("app.openDir")}>
+            <button
+              className="row-btn"
+              onClick={onOpenProject}
+              title={t("app.openDir")}
+            >
               <PlusIcon />
             </button>
           </div>
         ) : null}
-        <div
-          className={projectsFolded ? "smooth-fold" : "smooth-fold open"}
-          inert={projectsFolded}
-          aria-hidden={projectsFolded}
-        >
-          <div className="smooth-fold-inner section-body">
-            {roots.map((root) => (
-              <ProjectGroup
-                key={root}
-                {...props}
-                root={root}
-                gone={props.missing.has(root)}
-                sessions={sessions.filter((s) => projectRootOf(s) === root)}
-                collapsed={collapsed.has(root)}
-                onToggle={() => toggleCollapsed(root)}
-                onExpand={() => expandProject(root)}
-              />
-            ))}
-          </div>
+        <div className="section-body">
+          {roots.map((root) => {
+            const pinned = projectsFolded && root === activeRoot;
+            return (
+              <FoldRow key={root} folded={projectsFolded && !pinned}>
+                <ProjectGroup
+                  {...props}
+                  root={root}
+                  gone={props.missing.has(root)}
+                  sessions={sessions.filter((s) => projectRootOf(s) === root)}
+                  collapsed={pinned || collapsed.has(root)}
+                  onToggle={
+                    pinned ? toggleProjectsFolded : () => toggleCollapsed(root)
+                  }
+                  onExpand={() => expandProject(root)}
+                />
+              </FoldRow>
+            );
+          })}
         </div>
       </nav>
 
       <div className="sidebar-foot">
         {props.orphanWorktrees > 0 ? (
-          <button className="side-item side-warn" onClick={props.onOrphanWorktrees}>
+          <button
+            className="side-item side-warn"
+            onClick={props.onOrphanWorktrees}
+          >
             <BranchIcon />
-            <span className="side-label">{tn("app.sidebar.orphanWorktrees", props.orphanWorktrees)}</span>
+            <span className="side-label">
+              {tn("app.sidebar.orphanWorktrees", props.orphanWorktrees)}
+            </span>
           </button>
         ) : null}
         <button className="side-item" onClick={onSettings}>
@@ -229,19 +251,24 @@ export function Sidebar(props: SidebarProps) {
   );
 }
 
-
 /**
  * 定时任务开的会话标题是「任务名 · MM-DD」（宿主 run_schedule 里定的）。
  * 拆开来：名字可以截断，日期放右边不截。不是这个形状就返回 null。
  */
-function splitRunTitle(title: string | null | undefined): { name: string; date: string } | null {
+function splitRunTitle(
+  title: string | null | undefined,
+): { name: string; date: string } | null {
   const m = title?.match(/^(.*\S) · (\d{2}-\d{2})$/);
   return m?.[1] && m[2] ? { name: m[1], date: m[2] } : null;
 }
 
 type Entry =
   | { kind: "one"; session: SessionInfo }
-  | { kind: "group"; name: string; runs: { session: SessionInfo; date: string }[] };
+  | {
+      kind: "group";
+      name: string;
+      runs: { session: SessionInfo; date: string }[];
+    };
 
 /** 同名的定时任务会话收成一组，组排在它最近那次的位置上。顺序沿用传入的（最近在上）。 */
 function groupRuns(ordered: SessionInfo[]): Entry[] {
@@ -309,6 +336,8 @@ function ProjectGroup(
     return b.seq - a.seq;
   });
   const busy = collapsed && ordered.some((s) => s.busy);
+  // 收起时当前会话不跟着藏：它留在原位，其它的各自折起来。
+  const activeId = schedulesActive ? null : active;
   // 定时任务每跑一次就新开一个「任务名 · MM-DD」会话。同名的收成一组：
   // 组头是任务名和次数，展开后每行只写日期 —— 不然侧栏被一模一样的
   // 标题刷满，截断后连日期都看不见。只有一个的不成组。
@@ -358,7 +387,11 @@ function ProjectGroup(
           {/* 正在跑的会话给个小圆点 —— 切走之后它还在干活，列表里
               得看得出来，不然用户以为它闲着。 */}
           {s.busy ? (
-            <span className="thread-busy" title={t("common.running")} aria-label={t("common.running")} />
+            <span
+              className="thread-busy"
+              title={t("common.running")}
+              aria-label={t("common.running")}
+            />
           ) : s.awaitingUser ? (
             // 停在等用户决定：不在跑，但得回来点卡片。
             <span
@@ -385,11 +418,16 @@ function ProjectGroup(
                   <BranchIcon size={12} />
                 </span>
               ) : null}
-              <span className="thread-title">{s.title ?? t("app.newSession")}</span>
+              <span className="thread-title">
+                {s.title ?? t("app.newSession")}
+              </span>
               {/* 在 worktree 里的：分支名是它和同名会话唯一的区别，放右边不参与截断。 */}
               {s.forkedFrom?.worktree ? (
                 <span className="thread-meta">
-                  <span className="thread-branch" title={s.forkedFrom.worktree.path}>
+                  <span
+                    className="thread-branch"
+                    title={s.forkedFrom.worktree.path}
+                  >
                     {s.forkedFrom.worktree.branch.replace(/^riot\//, "")}
                   </span>
                 </span>
@@ -397,13 +435,19 @@ function ProjectGroup(
             </>
           )}
         </button>
-        <button className="row-btn" onClick={(e) => onSessionMenu(e, s)} title={t("app.session.actions")}>
+        <button
+          className="row-btn"
+          onClick={(e) => onSessionMenu(e, s)}
+          title={t("app.session.actions")}
+        >
           <DotsIcon />
         </button>
       </div>
     );
   };
-  const foldState = t(collapsed ? "app.project.collapsed" : "app.project.expanded");
+  const foldState = t(
+    collapsed ? "app.project.collapsed" : "app.project.expanded",
+  );
 
   return (
     <div className={collapsed ? "project collapsed" : "project"}>
@@ -418,10 +462,13 @@ function ProjectGroup(
           type="button"
           className="project-toggle"
           aria-expanded={!collapsed}
-          aria-label={t(gone ? "app.project.ariaLabelGone" : "app.project.ariaLabel", {
-            name,
-            state: foldState,
-          })}
+          aria-label={t(
+            gone ? "app.project.ariaLabelGone" : "app.project.ariaLabel",
+            {
+              name,
+              state: foldState,
+            },
+          )}
           title={gone ? t("app.project.titleGone", { root }) : root}
           onClick={onToggle}
         >
@@ -463,19 +510,27 @@ function ProjectGroup(
         </button>
       </div>
 
-      <div
-        className={collapsed ? "smooth-fold" : "smooth-fold open"}
-        inert={collapsed}
-        aria-hidden={collapsed}
-      >
-        <div className="smooth-fold-inner project-threads-inner">
-          {entries.map((e) => {
-            if (e.kind === "one") return renderRow(e.session, null);
-            const open = openGroups.has(e.name) || e.runs.some((r) => r.session.id === active);
-            const busyRun = e.runs.some((r) => r.session.busy);
-            const waitingRun = e.runs.some((r) => r.session.awaitingUser);
+      <div className="project-threads-inner">
+        {entries.map((e) => {
+          if (e.kind === "one") {
             return (
-              <div key={`group:${e.name}`} className="thread-group">
+              <FoldRow
+                key={e.session.id}
+                folded={collapsed && e.session.id !== activeId}
+              >
+                {renderRow(e.session, null)}
+              </FoldRow>
+            );
+          }
+          const open = openGroups.has(e.name);
+          // 组里有当前会话时组头也留着：那一行只写日期，没有组头就认不出
+          // 是哪个任务。
+          const holdsActive = e.runs.some((r) => r.session.id === activeId);
+          const busyRun = e.runs.some((r) => r.session.busy);
+          const waitingRun = e.runs.some((r) => r.session.awaitingUser);
+          return (
+            <div key={`group:${e.name}`} className="thread-group">
+              <FoldRow folded={collapsed && !holdsActive}>
                 <div className="thread">
                   <button
                     type="button"
@@ -484,7 +539,11 @@ function ProjectGroup(
                     onClick={() => toggleGroup(e.name)}
                   >
                     {busyRun ? (
-                      <span className="thread-busy" title={t("common.running")} aria-label={t("common.running")} />
+                      <span
+                        className="thread-busy"
+                        title={t("common.running")}
+                        aria-label={t("common.running")}
+                      />
                     ) : waitingRun ? (
                       <span
                         className="thread-awaiting"
@@ -495,21 +554,50 @@ function ProjectGroup(
                     <span className="thread-title">{e.name}</span>
                     {/* 组头只挂次数：日期在展开后的每一行上，挂在这里只会把任务名挤短。 */}
                     <span className="thread-meta">
-                      <span className="thread-runs" title={t("app.session.runs", { count: e.runs.length })}>
+                      <span
+                        className="thread-runs"
+                        title={t("app.session.runs", { count: e.runs.length })}
+                      >
                         ×{e.runs.length}
                       </span>
                       <Chevron open={open} />
                     </span>
                   </button>
                 </div>
-                {open ? (
-                  <div className="thread-group-runs">{e.runs.map((r) => renderRow(r.session, r.date))}</div>
-                ) : null}
+              </FoldRow>
+              <div className="thread-group-runs">
+                {e.runs.map((r) => (
+                  <FoldRow
+                    key={r.session.id}
+                    folded={r.session.id !== activeId && (collapsed || !open)}
+                  >
+                    {renderRow(r.session, r.date)}
+                  </FoldRow>
+                ))}
               </div>
-            );
-          })}
-        </div>
+            </div>
+          );
+        })}
       </div>
+    </div>
+  );
+}
+
+/** 侧栏里逐行的开合：收高度 + 淡出，行在原位不动。样式见 `.fold-row`。 */
+function FoldRow({
+  folded,
+  children,
+}: {
+  folded: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className={folded ? "fold-row folded" : "fold-row"}
+      inert={folded}
+      aria-hidden={folded}
+    >
+      <div className="fold-row-inner">{children}</div>
     </div>
   );
 }
