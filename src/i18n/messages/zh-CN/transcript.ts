@@ -171,6 +171,8 @@ export default {
   "transcript.tool.tabs": "标签页: {action}",
   "transcript.tool.evaluate": "执行 JS: {expr}",
   "transcript.tool.cookies": "读 Cookie",
+  "transcript.tool.setCookie": "写 Cookie: {name}",
+  "transcript.tool.deleteCookie": "删 Cookie: {name}",
   "transcript.tool.network": "抓包: {action}",
   "transcript.tool.replay": "重放 {method} {url}",
   "transcript.tool.intercept": "拦截: {action}",

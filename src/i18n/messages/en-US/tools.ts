@@ -28,6 +28,7 @@ export default {
   "tools.ask.browser.evaluate": "Allow running a script on the current page?",
   "tools.ask.browser.upload": "Allow uploading local files to the current page?",
   "tools.ask.browser.cookies": "Allow reading the current page's cookies?",
+  "tools.ask.browser.setCookie": "Allow changing the current page's cookies?",
   "tools.ask.browser.handoff": "Please complete this in the browser panel: {prompt}\nClick \u201cAllow\u201d when you're done.",
   "tools.ask.browser.handoffAny":
     "Please complete a step in the browser panel that needs you personally.\nClick \u201cAllow\u201d when you're done.",
@@ -194,6 +195,8 @@ export default {
   "tools.browser.upload": "Upload {count} files",
   "tools.browser.uploadTo": "Upload {count} files to {target}",
   "tools.browser.cookies": "Read the current page's cookies",
+  "tools.browser.setCookie.set": "Set cookie `{name}`",
+  "tools.browser.setCookie.delete": "Delete cookie `{name}`",
   "tools.browser.network.list": "List network requests",
   "tools.browser.network.detail": "Inspect request #{id}",
   "tools.browser.network.audit": "Audit response-header security",

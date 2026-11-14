@@ -33,7 +33,7 @@ pub mod vision;
 pub mod web;
 
 pub use browser::{
-    Action as BrowserAction, BrowserAccess, BrowserUnavailable, Command as BrowserCommand,
+    Action as BrowserAction, BrowserAccess, BrowserUnavailable, Command as BrowserCommand, CookieOp,
     Event as BrowserEvent, InteractError, InterceptOp, Nav as BrowserNav, NetQuery, NoBrowser,
     Target as BrowserTarget, WaitCondition,
 };

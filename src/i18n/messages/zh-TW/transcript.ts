@@ -158,6 +158,8 @@ export default {
   "transcript.tool.tabs": "分頁: {action}",
   "transcript.tool.evaluate": "執行 JS: {expr}",
   "transcript.tool.cookies": "讀取 Cookie",
+  "transcript.tool.setCookie": "寫入 Cookie: {name}",
+  "transcript.tool.deleteCookie": "刪除 Cookie: {name}",
   "transcript.tool.network": "封包擷取: {action}",
   "transcript.tool.replay": "重放 {method} {url}",
   "transcript.tool.intercept": "攔截: {action}",

@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use riot_protocol::browser::Command;
+use riot_protocol::browser::{Command, CookieOp};
 use serde_json::{Value, json};
 
 use super::{BrowserError, Tab};
@@ -1423,6 +1423,228 @@ pub async fn cookies(tab: Tab<'_>) -> Result<String, BrowserError> {
     Ok(out)
 }
 
+/// 写入或删除当前页面的一条 Cookie。
+///
+/// 走 `Network.setCookie` / `Network.deleteCookies`，HttpOnly 的也能动 ——
+/// 那是页面脚本（`document.cookie`）碰不到的。
+///
+/// `[约束]` 回执里不带 cookie 的值:它是凭证，回执会进对话记录。
+pub async fn set_cookie(tab: Tab<'_>, op: CookieOp) -> Result<String, BrowserError> {
+    let url = url_of(tab).await;
+    let Some(host) = http_host(&url) else {
+        return Err(cookie_refused(
+            "当前页面不是 http(s) 页面，没有可以写 Cookie 的站点。先导航到目标站点。",
+        ));
+    };
+    let (name, domain, path) = match &op {
+        CookieOp::Set {
+            name, domain, path, ..
+        }
+        | CookieOp::Delete { name, domain, path } => {
+            (name.as_str(), domain.as_deref(), path.as_deref())
+        }
+    };
+    if name.is_empty() {
+        return Err(cookie_refused("要给 Cookie 的 name。"));
+    }
+    if let Some(d) = domain
+        && !domain_covers(&host, d)
+    {
+        return Err(cookie_refused(format!(
+            "domain `{d}` 和当前页面 {host} 不匹配。只能改当前页面用得上的 Cookie —— \
+             要改别的站点的，先导航过去。"
+        )));
+    }
+
+    let r = tab
+        .cdp("Network.getCookies", json!({ "urls": [url] }))
+        .await?;
+    let list = r["cookies"].as_array().cloned().unwrap_or_default();
+    let hits = matching_cookies(&list, name, domain, path);
+    if hits.len() > 1 {
+        let which: Vec<String> = hits
+            .iter()
+            .map(|c| {
+                format!(
+                    "domain={} path={}",
+                    c["domain"].as_str().unwrap_or(""),
+                    c["path"].as_str().unwrap_or("")
+                )
+            })
+            .collect();
+        return Err(cookie_refused(format!(
+            "当前页面有 {} 条名为 {name} 的 Cookie（{}）。用 domain / path 指定要动哪一条。",
+            hits.len(),
+            which.join("；")
+        )));
+    }
+    let existing = hits.first().copied();
+
+    match &op {
+        CookieOp::Set { .. } => {
+            let params = set_cookie_params(existing, &op, &url);
+            let r = tab.cdp("Network.setCookie", params.clone()).await?;
+            if r["success"].as_bool() == Some(false) {
+                return Err(cookie_refused(
+                    "浏览器拒绝了这条 Cookie。常见原因:SameSite=None 却没有 Secure；\
+                     在 http 页面上写 Secure 的 Cookie；domain 是公共后缀；\
+                     `__Host-` / `__Secure-` 前缀的属性要求没满足。",
+                ));
+            }
+            let verb = if existing.is_some() { "修改" } else { "新建" };
+            Ok(format!(
+                "已{verb} Cookie {name}{}",
+                cookie_attrs_suffix(&params)
+            ))
+        }
+        CookieOp::Delete { .. } => {
+            let Some(c) = existing else {
+                return Ok(format!("当前页面没有名为 {name} 的 Cookie，无需删除。"));
+            };
+            // 用查到的那一条的 domain / path 原样去删:deleteCookies 按它们
+            // 精确匹配，自己拼的话带不带前导点一错就删空。
+            let mut params = json!({ "name": name, "domain": c["domain"], "path": c["path"] });
+            if !c["partitionKey"].is_null() {
+                params["partitionKey"] = c["partitionKey"].clone();
+            }
+            tab.cdp("Network.deleteCookies", params.clone()).await?;
+            Ok(format!(
+                "已删除 Cookie {name}{}",
+                cookie_attrs_suffix(&params)
+            ))
+        }
+    }
+}
+
+fn cookie_refused(message: impl Into<String>) -> BrowserError {
+    BrowserError::Cdp {
+        method: "Network.setCookie".to_owned(),
+        message: message.into(),
+    }
+}
+
+/// http(s) 地址的 host（小写）。别的协议（about:、data:、file:）没有 cookie
+/// 可言，返回 `None`。
+fn http_host(url: &str) -> Option<String> {
+    let u = reqwest::Url::parse(url).ok()?;
+    if !matches!(u.scheme(), "http" | "https") {
+        return None;
+    }
+    u.host_str().map(str::to_ascii_lowercase)
+}
+
+/// cookie 的 domain 属性去掉前导点、转小写 —— 比较用。
+fn bare_domain(domain: &str) -> String {
+    domain.trim_start_matches('.').to_ascii_lowercase()
+}
+
+/// 一个 domain 属性的 cookie 会不会发给 `host`:相等，或 host 是它的子域。
+fn domain_covers(host: &str, domain: &str) -> bool {
+    let d = bare_domain(domain);
+    !d.is_empty() && (host == d || host.ends_with(&format!(".{d}")))
+}
+
+/// 列表里同名、且符合给定 domain / path 的那几条。
+fn matching_cookies<'a>(
+    list: &'a [Value],
+    name: &str,
+    domain: Option<&str>,
+    path: Option<&str>,
+) -> Vec<&'a Value> {
+    list.iter()
+        .filter(|c| {
+            c["name"].as_str() == Some(name)
+                && domain.is_none_or(|d| {
+                    c["domain"]
+                        .as_str()
+                        .is_some_and(|cd| bare_domain(cd) == bare_domain(d))
+                })
+                && path.is_none_or(|p| c["path"].as_str() == Some(p))
+        })
+        .collect()
+}
+
+/// 拼 `Network.setCookie` 的参数。
+///
+/// `[约束]` 没给的属性沿用已有那条的。setCookie 是整条覆盖，不沿用的话
+/// "只改个值"会把 HttpOnly / Secure / SameSite / 过期时间全部打回默认 ——
+/// 会话 cookie 悄悄变成脚本可读的，正是最不该发生的那种副作用。
+fn set_cookie_params(existing: Option<&Value>, op: &CookieOp, page_url: &str) -> Value {
+    let CookieOp::Set {
+        name,
+        value,
+        domain,
+        path,
+        http_only,
+        secure,
+        same_site,
+        expires,
+    } = op
+    else {
+        return Value::Null;
+    };
+    let old = |key: &str| existing.map(|c| c[key].clone()).filter(|v| !v.is_null());
+
+    let mut p = json!({ "name": name, "value": value });
+    // 没有 domain 时给 url，让浏览器建一条只属于当前 host 的 cookie。
+    match domain.as_ref().map(|d| json!(d)).or_else(|| old("domain")) {
+        Some(d) => p["domain"] = d,
+        None => p["url"] = json!(page_url),
+    }
+    p["path"] = path
+        .as_ref()
+        .map(|v| json!(v))
+        .or_else(|| old("path"))
+        .unwrap_or_else(|| json!("/"));
+    if let Some(v) = http_only.map(|v| json!(v)).or_else(|| old("httpOnly")) {
+        p["httpOnly"] = v;
+    }
+    if let Some(v) = secure.map(|v| json!(v)).or_else(|| old("secure")) {
+        p["secure"] = v;
+    }
+    if let Some(v) = same_site
+        .as_ref()
+        .map(|v| json!(v))
+        .or_else(|| old("sameSite"))
+    {
+        p["sameSite"] = v;
+    }
+    // 已有那条是会话 cookie 时 expires 是 -1，不能原样传回去（那是"已过期"）。
+    let old_expires = old("expires").filter(|v| v.as_f64().is_some_and(|t| t > 0.0));
+    if let Some(v) = expires.map(|v| json!(v)).or(old_expires) {
+        p["expires"] = v;
+    }
+    if let Some(v) = old("partitionKey") {
+        p["partitionKey"] = v;
+    }
+    p
+}
+
+/// 回执末尾的属性摘要，如 `  [HttpOnly, Secure, domain=.a.com, path=/]`。不含值。
+fn cookie_attrs_suffix(params: &Value) -> String {
+    let mut attrs = Vec::new();
+    if params["httpOnly"].as_bool() == Some(true) {
+        attrs.push("HttpOnly".to_owned());
+    }
+    if params["secure"].as_bool() == Some(true) {
+        attrs.push("Secure".to_owned());
+    }
+    if let Some(ss) = params["sameSite"].as_str() {
+        attrs.push(format!("SameSite={ss}"));
+    }
+    if let Some(d) = params["domain"].as_str() {
+        attrs.push(format!("domain={d}"));
+    }
+    if let Some(p) = params["path"].as_str() {
+        attrs.push(format!("path={p}"));
+    }
+    if attrs.is_empty() {
+        "。".to_owned()
+    } else {
+        format!("  [{}]", attrs.join(", "))
+    }
+}
+
 /// 在页面上下文里重放一个请求，返回整形后的结果文本。
 ///
 /// `[取舍]` 走页面的 `fetch` 而不是宿主的 HTTP 客户端:页面里发请求天然带
@@ -1614,6 +1836,113 @@ pub async fn install_console_hook(tab: Tab<'_>) -> Result<(), BrowserError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn set_value(name: &str, value: &str) -> CookieOp {
+        CookieOp::Set {
+            name: name.into(),
+            value: value.into(),
+            domain: None,
+            path: None,
+            http_only: None,
+            secure: None,
+            same_site: None,
+            expires: None,
+        }
+    }
+
+    /// 只改值时，已有 cookie 的安全属性必须原样带回去 —— setCookie 是整条
+    /// 覆盖，漏带一个 HttpOnly，会话令牌就变成页面脚本可读的了。
+    #[test]
+    fn 改cookie的值不丢原有属性() {
+        let old = json!({
+            "name": "sid", "value": "old", "domain": ".a.com", "path": "/app",
+            "httpOnly": true, "secure": true, "sameSite": "Lax", "expires": 1_900_000_000.0,
+        });
+        let p = set_cookie_params(Some(&old), &set_value("sid", "new"), "https://www.a.com/");
+        assert_eq!(p["value"], "new");
+        assert_eq!(p["domain"], ".a.com");
+        assert_eq!(p["path"], "/app");
+        assert_eq!(p["httpOnly"], true);
+        assert_eq!(p["secure"], true);
+        assert_eq!(p["sameSite"], "Lax");
+        assert_eq!(p["expires"], 1_900_000_000.0);
+        assert!(p["url"].is_null(), "有 domain 就不该再给 url");
+    }
+
+    /// 显式给的属性压过原有的；会话 cookie 的 expires=-1 不能传回去。
+    #[test]
+    fn 显式属性覆盖原值且会话cookie不带过期() {
+        let old = json!({
+            "name": "sid", "value": "old", "domain": "a.com", "path": "/",
+            "httpOnly": true, "secure": true, "expires": -1, "session": true,
+        });
+        let op = CookieOp::Set {
+            name: "sid".into(),
+            value: "v".into(),
+            domain: None,
+            path: None,
+            http_only: Some(false),
+            secure: None,
+            same_site: Some("Strict".into()),
+            expires: None,
+        };
+        let p = set_cookie_params(Some(&old), &op, "https://a.com/");
+        assert_eq!(p["httpOnly"], false);
+        assert_eq!(p["secure"], true);
+        assert_eq!(p["sameSite"], "Strict");
+        assert!(p["expires"].is_null(), "{p}");
+    }
+
+    /// 新建时落在当前页面的 host 上（给 url，不给 domain），path 默认 `/`。
+    #[test]
+    fn 新建cookie落在当前页面() {
+        let p = set_cookie_params(None, &set_value("k", "v"), "https://a.com/x/y");
+        assert_eq!(p["url"], "https://a.com/x/y");
+        assert!(p["domain"].is_null());
+        assert_eq!(p["path"], "/");
+        assert!(p["httpOnly"].is_null());
+    }
+
+    #[test]
+    fn domain只能是当前页面用得上的() {
+        assert!(domain_covers("www.a.com", ".a.com"));
+        assert!(domain_covers("www.a.com", "A.com"));
+        assert!(domain_covers("a.com", "a.com"));
+        assert!(!domain_covers("a.com", "www.a.com"));
+        assert!(!domain_covers("evila.com", "a.com"));
+        assert!(!domain_covers("a.com", "b.com"));
+        assert!(!domain_covers("a.com", "."));
+        assert_eq!(http_host("https://WWW.a.com:8443/p").as_deref(), Some("www.a.com"));
+        assert_eq!(http_host("data:text/html,x"), None);
+        assert_eq!(http_host("about:blank"), None);
+    }
+
+    /// 同名多条时靠 domain / path 缩到一条；domain 比较不看前导点。
+    #[test]
+    fn 同名cookie按domain和path区分() {
+        let list = vec![
+            json!({ "name": "t", "domain": ".a.com", "path": "/" }),
+            json!({ "name": "t", "domain": "www.a.com", "path": "/" }),
+            json!({ "name": "t", "domain": "www.a.com", "path": "/app" }),
+            json!({ "name": "other", "domain": ".a.com", "path": "/" }),
+        ];
+        assert_eq!(matching_cookies(&list, "t", None, None).len(), 3);
+        assert_eq!(matching_cookies(&list, "t", Some("a.com"), None).len(), 1);
+        assert_eq!(matching_cookies(&list, "t", Some("www.a.com"), Some("/app")).len(), 1);
+        assert!(matching_cookies(&list, "none", None, None).is_empty());
+    }
+
+    /// 回执只报属性，绝不带值。
+    #[test]
+    fn 回执不含cookie的值() {
+        let p = json!({
+            "name": "sid", "value": "s3cr3t-token", "domain": ".a.com", "path": "/",
+            "httpOnly": true,
+        });
+        let s = cookie_attrs_suffix(&p);
+        assert!(s.contains("HttpOnly") && s.contains("domain=.a.com"), "{s}");
+        assert!(!s.contains("s3cr3t"), "{s}");
+    }
 
     #[test]
     fn 结构性节点被滤掉() {

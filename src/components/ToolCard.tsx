@@ -598,6 +598,11 @@ export function summarize(tool: Tool): string {
       return t("transcript.tool.evaluate", { expr: clip(str("expression"), 60) });
     case "BrowserCookies":
       return t("transcript.tool.cookies");
+    case "BrowserSetCookie":
+      return t(
+        str("action") === "delete" ? "transcript.tool.deleteCookie" : "transcript.tool.setCookie",
+        { name: str("name") },
+      );
     case "BrowserNetwork": {
       const head = t("transcript.tool.network", { action: str("action") || "list" });
       return `${head}${str("filter") ? ` (${str("filter")})` : ""}`;

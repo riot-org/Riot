@@ -153,6 +153,17 @@ pub trait BrowserAccess: Send + Sync {
     /// 是残缺的一半。
     async fn cookies(&self) -> Result<String, InteractError>;
 
+    /// 写入或删除当前页面的一条 Cookie。见 [`CookieOp`]。
+    ///
+    /// `[约束]` 走 CDP（`Network.setCookie` / `Network.deleteCookies`）:页面
+    /// 脚本的 `document.cookie` 碰不了 HttpOnly 的 cookie，这是浏览器的规定，
+    /// 不是我们能在脚本里绕的。
+    ///
+    /// `[约束]` 只动**当前页面用得上**的 cookie —— 给了 domain 也必须和当前
+    /// 页面的 host 匹配。profile 是所有会话共用的，放开 domain 等于能改用户
+    /// 在任何站点上的登录态。
+    async fn set_cookie(&self, op: CookieOp) -> Result<String, InteractError>;
+
     /// 观察当前页面的网络流量。见 [`NetQuery`]。
     ///
     /// 被动观察:开 `Network.enable` 后累积请求/响应，供读回。这是渗透的
@@ -179,6 +190,65 @@ pub trait BrowserAccess: Send + Sync {
     /// 请求**等我们放行 —— 有 bug 漏放一个，页面就卡死。所以没规则时保持
     /// 关闭（零风险），事件循环里对不匹配的请求一律 continue。
     async fn intercept(&self, op: InterceptOp) -> Result<String, InteractError>;
+}
+
+/// 对当前页面一条 Cookie 的改动。
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+pub enum CookieOp {
+    /// 写入。同名 cookie 已存在时是**修改**:没给的属性沿用原来的（改一个
+    /// HttpOnly 会话 cookie 的值，不该顺手把它的 HttpOnly 弄丢）；不存在时
+    /// 新建，没给的属性用浏览器默认值。
+    Set {
+        name: String,
+        value: String,
+        domain: Option<String>,
+        path: Option<String>,
+        http_only: Option<bool>,
+        secure: Option<bool>,
+        /// `Strict` / `Lax` / `None`。
+        same_site: Option<String>,
+        /// 过期时间，Unix 秒。不给 = 沿用原来的，新建时是会话 cookie。
+        expires: Option<f64>,
+    },
+    /// 删除。domain / path 用来在同名的几条里指定一条。
+    Delete {
+        name: String,
+        domain: Option<String>,
+        path: Option<String>,
+    },
+}
+
+/// `[约束]` 手写而不是 derive:cookie 的值是凭证，Debug 会进日志和测试输出。
+impl std::fmt::Debug for CookieOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Set {
+                name,
+                domain,
+                path,
+                http_only,
+                secure,
+                same_site,
+                expires,
+                value: _,
+            } => f
+                .debug_struct("Set")
+                .field("name", name)
+                .field("domain", domain)
+                .field("path", path)
+                .field("http_only", http_only)
+                .field("secure", secure)
+                .field("same_site", same_site)
+                .field("expires", expires)
+                .finish_non_exhaustive(),
+            Self::Delete { name, domain, path } => f
+                .debug_struct("Delete")
+                .field("name", name)
+                .field("domain", domain)
+                .field("path", path)
+                .finish(),
+        }
+    }
 }
 
 /// 拦截规则的操作。
@@ -397,6 +467,9 @@ impl BrowserAccess for NoBrowser {
         Err(unavailable().into())
     }
     async fn cookies(&self) -> Result<String, InteractError> {
+        Err(unavailable().into())
+    }
+    async fn set_cookie(&self, _op: CookieOp) -> Result<String, InteractError> {
         Err(unavailable().into())
     }
     async fn network(&self, _query: NetQuery) -> Result<String, InteractError> {

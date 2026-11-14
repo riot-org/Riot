@@ -170,6 +170,8 @@ export default {
   "transcript.tool.tabs": "탭: {action}",
   "transcript.tool.evaluate": "JS 실행: {expr}",
   "transcript.tool.cookies": "Cookie 읽기",
+  "transcript.tool.setCookie": "Cookie 설정: {name}",
+  "transcript.tool.deleteCookie": "Cookie 삭제: {name}",
   "transcript.tool.network": "네트워크 캡처: {action}",
   "transcript.tool.replay": "{method} {url} 재전송",
   "transcript.tool.intercept": "가로채기: {action}",

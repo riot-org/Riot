@@ -18,7 +18,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::browser::{Action, InterceptOp, Nav, NetQuery, TabId, Target, WaitCondition};
+use crate::browser::{Action, CookieOp, InterceptOp, Nav, NetQuery, TabId, Target, WaitCondition};
 use crate::id::SessionId;
 use crate::terminal::TerminalInfo;
 
@@ -143,6 +143,9 @@ pub enum BrowserCall {
         paths: Vec<String>,
     },
     Cookies,
+    SetCookie {
+        op: CookieOp,
+    },
     Network {
         query: NetQuery,
     },

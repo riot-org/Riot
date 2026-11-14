@@ -66,6 +66,7 @@ pub const BROWSER_TABS: &str = "BrowserTabs";
 pub const BROWSER_EVALUATE: &str = "BrowserEvaluate";
 pub const BROWSER_UPLOAD: &str = "BrowserUpload";
 pub const BROWSER_COOKIES: &str = "BrowserCookies";
+pub const BROWSER_SET_COOKIE: &str = "BrowserSetCookie";
 pub const BROWSER_NETWORK: &str = "BrowserNetwork";
 pub const BROWSER_REPLAY: &str = "BrowserReplay";
 pub const BROWSER_INTERCEPT: &str = "BrowserIntercept";
@@ -169,6 +170,7 @@ mod tests {
             BROWSER_EVALUATE,
             BROWSER_UPLOAD,
             BROWSER_COOKIES,
+            BROWSER_SET_COOKIE,
             BROWSER_NETWORK,
             BROWSER_REPLAY,
             BROWSER_INTERCEPT,

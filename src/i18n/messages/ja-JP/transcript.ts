@@ -160,6 +160,8 @@ export default {
   "transcript.tool.tabs": "タブ: {action}",
   "transcript.tool.evaluate": "JS を実行: {expr}",
   "transcript.tool.cookies": "Cookie を読み取り",
+  "transcript.tool.setCookie": "Cookie を設定: {name}",
+  "transcript.tool.deleteCookie": "Cookie を削除: {name}",
   "transcript.tool.network": "ネットワーク: {action}",
   "transcript.tool.replay": "{method} {url} を再送",
   "transcript.tool.intercept": "インターセプト: {action}",

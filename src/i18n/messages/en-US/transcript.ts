@@ -176,6 +176,8 @@ export default {
   "transcript.tool.tabs": "Tabs: {action}",
   "transcript.tool.evaluate": "Run JS: {expr}",
   "transcript.tool.cookies": "Read cookies",
+  "transcript.tool.setCookie": "Set cookie: {name}",
+  "transcript.tool.deleteCookie": "Delete cookie: {name}",
   "transcript.tool.network": "Network: {action}",
   "transcript.tool.replay": "Replay {method} {url}",
   "transcript.tool.intercept": "Intercept: {action}",

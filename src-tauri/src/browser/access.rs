@@ -36,8 +36,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use riot_protocol::browser::{
-    Action, BLANK_PAGE, BrowserAccess, BrowserUnavailable, Command, InteractError, InterceptOp,
-    MarkedView, Nav, NetQuery, TabId, Target, WaitCondition,
+    Action, BLANK_PAGE, BrowserAccess, BrowserUnavailable, Command, CookieOp, InteractError,
+    InterceptOp, MarkedView, Nav, NetQuery, TabId, Target, WaitCondition,
 };
 use serde_json::Value;
 use tokio::sync::{Mutex, mpsc, oneshot};
@@ -1768,6 +1768,13 @@ impl BrowserAccess for HostBrowser {
     async fn cookies(&self) -> Result<String, InteractError> {
         let (b, id) = self.active().await.map_err(InteractError::Unavailable)?;
         ops::cookies(Tab { browser: &b, id })
+            .await
+            .map_err(eval_err)
+    }
+
+    async fn set_cookie(&self, op: CookieOp) -> Result<String, InteractError> {
+        let (b, id) = self.active().await.map_err(InteractError::Unavailable)?;
+        ops::set_cookie(Tab { browser: &b, id }, op)
             .await
             .map_err(eval_err)
     }

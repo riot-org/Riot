@@ -34,7 +34,7 @@ use std::sync::Arc;
 
 use riot_permissions::{MatchMode, RuleSet};
 use riot_protocol::browser::{
-    Action, BrowserUnavailable, InteractError, InterceptOp, Nav, NetQuery, Target, WaitCondition,
+    Action, BrowserUnavailable, CookieOp, InteractError, InterceptOp, Nav, NetQuery, Target, WaitCondition,
 };
 use riot_protocol::message::ToolResultContent;
 use riot_protocol::permission::{
@@ -52,8 +52,9 @@ use super::names::{
     BROWSER_EVALUATE, BROWSER_FILL_FORM, BROWSER_FUZZ, BROWSER_GO, BROWSER_HANDOFF, BROWSER_HAR,
     BROWSER_HOVER, BROWSER_INTERCEPT, BROWSER_KEY, BROWSER_NAVIGATE, BROWSER_NETWORK, BROWSER_PERF,
     BROWSER_READ_TAB, BROWSER_REPLAY, BROWSER_REPORT, BROWSER_SCREENSHOT, BROWSER_SCROLL,
-    BROWSER_SECRETS, BROWSER_SELECT, BROWSER_SNAPSHOT, BROWSER_SOURCE_OF, BROWSER_TABS,
-    BROWSER_TYPE, BROWSER_UPLOAD, BROWSER_VIEW, BROWSER_WAIT_FOR, SHOW_BROWSER, WEB_FETCH,
+    BROWSER_SECRETS, BROWSER_SELECT, BROWSER_SET_COOKIE, BROWSER_SNAPSHOT, BROWSER_SOURCE_OF,
+    BROWSER_TABS, BROWSER_TYPE, BROWSER_UPLOAD, BROWSER_VIEW, BROWSER_WAIT_FOR, SHOW_BROWSER,
+    WEB_FETCH,
 };
 use super::web::url as weburl;
 
@@ -2723,6 +2724,7 @@ impl Tool for BrowserCookies {
              \n\
              - Use it for login-state debugging and session security review — the \
              attributes are the point, and `document.cookie` cannot see HttpOnly ones.\n\
+             - To change or delete a cookie use {BROWSER_SET_COOKIE}.\n\
              - For `localStorage` or `sessionStorage` use {BROWSER_EVALUATE}.\n\
              - Cookie values are credentials. Do NOT echo them into your reply or into \
              a file; refer to a cookie by name and describe its attributes."
@@ -2757,6 +2759,161 @@ impl Tool for BrowserCookies {
 
     async fn call(&self, _input: serde_json::Value, ctx: ToolContext) -> ToolOutcome {
         match ctx.browser.cookies().await {
+            Ok(out) => ToolOutcome::ok_text(out),
+            Err(e) => ToolOutcome::failed(interact_hint(e)),
+        }
+    }
+}
+
+// ── 写 / 删 Cookie ────────────────────────────────────
+
+/// 写 / 删 Cookie 的入参。
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[allow(dead_code)]
+struct SetCookieInput {
+    /// set（写入，默认）或 delete（删除）。
+    #[serde(default)]
+    action: Option<String>,
+    /// Cookie 名。
+    name: String,
+    /// 新的值。set 必填。
+    #[serde(default)]
+    value: Option<String>,
+    /// Cookie 的 domain，必须和当前页面的 host 匹配。带前导点（`.example.com`）
+    /// 覆盖子域，不带则只属于那一个 host。不给:修改时沿用原来的，新建时是
+    /// 当前页面的 host。
+    #[serde(default)]
+    domain: Option<String>,
+    /// Cookie 的 path。不给:修改时沿用原来的，新建时是 `/`。
+    #[serde(default)]
+    path: Option<String>,
+    /// HttpOnly。不给:修改时沿用原来的。
+    #[serde(default)]
+    http_only: Option<bool>,
+    /// Secure。不给:修改时沿用原来的。
+    #[serde(default)]
+    secure: Option<bool>,
+    /// Strict、Lax 或 None。不给:修改时沿用原来的。
+    #[serde(default)]
+    same_site: Option<String>,
+    /// 过期时间，Unix 秒。不给:修改时沿用原来的，新建时是会话 Cookie。
+    #[serde(default)]
+    expires: Option<f64>,
+}
+
+pub struct BrowserSetCookie;
+
+#[async_trait::async_trait]
+impl Tool for BrowserSetCookie {
+    fn name(&self) -> &'static str {
+        BROWSER_SET_COOKIE
+    }
+
+    fn prompt(&self, _ctx: &PromptContext) -> String {
+        format!(
+            "Sets or deletes one cookie of the current page, HttpOnly ones included — \
+             page script (`document.cookie`) cannot touch those. `action` is `set` \
+             (default) or `delete`.\n\
+             \n\
+             - `set` on a cookie that already exists modifies it: every attribute you \
+             leave out (`domain`, `path`, `http_only`, `secure`, `same_site`, `expires`) \
+             keeps its current value. Pass only `name` and `value` to change just the \
+             value. On a name that does not exist it creates a host-only session cookie \
+             unless you say otherwise.\n\
+             - Only cookies that apply to the current page can be changed; `domain` must \
+             match the page's host. Navigate to the site first.\n\
+             - When several cookies share the name, pass `domain` and/or `path` to pick \
+             one. Read them with {BROWSER_COOKIES} first.\n\
+             - The page does not notice the change by itself. Reload it (or re-send the \
+             request) to see the effect.\n\
+             - Cookie values are credentials. Do NOT echo them into your reply or into \
+             a file."
+        )
+    }
+
+    fn input_schema(&self) -> schemars::Schema {
+        schemars::schema_for!(SetCookieInput)
+    }
+
+    fn describe(&self, input: &serde_json::Value) -> UiText {
+        let n = input.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        match input.get("action").and_then(|v| v.as_str()) {
+            Some("delete") => ui_text!("tools.browser.setCookie.delete", name = n),
+            _ => ui_text!("tools.browser.setCookie.set", name = n),
+        }
+    }
+
+    async fn validate_input(
+        &self,
+        input: &serde_json::Value,
+        _ctx: &ToolContext,
+    ) -> Result<(), ValidationError> {
+        if input
+            .get("name")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .is_none()
+        {
+            return Err(ValidationError::rejected("要给 Cookie 的 name。"));
+        }
+        match input.get("action").and_then(|v| v.as_str()) {
+            Some("delete") => Ok(()),
+            None | Some("set") => {
+                if input.get("value").and_then(|v| v.as_str()).is_none() {
+                    return Err(ValidationError::rejected("set 要给 value。"));
+                }
+                match input.get("same_site").and_then(|v| v.as_str()) {
+                    None | Some("Strict" | "Lax" | "None") => Ok(()),
+                    Some(_) => Err(ValidationError::rejected(
+                        "same_site 要是 Strict / Lax / None。",
+                    )),
+                }
+            }
+            Some(_) => Err(ValidationError::rejected("action 要是 set / delete。")),
+        }
+    }
+
+    fn check_permissions(
+        &self,
+        _input: &serde_json::Value,
+        ctx: &PermissionContext,
+    ) -> PermissionResult {
+        // 改 Cookie 能换掉登录态。和读分开问:允许看不等于允许改。
+        single_consent(
+            ctx,
+            self.name(),
+            ui_text!("tools.ask.browser.setCookie"),
+            "set_cookie",
+        )
+    }
+
+    async fn call(&self, input: serde_json::Value, ctx: ToolContext) -> ToolOutcome {
+        let text = |key: &str| {
+            input
+                .get(key)
+                .and_then(|v| v.as_str())
+                .map(ToOwned::to_owned)
+        };
+        let name = text("name").unwrap_or_default();
+        let op = match input.get("action").and_then(|v| v.as_str()) {
+            Some("delete") => CookieOp::Delete {
+                name,
+                domain: text("domain"),
+                path: text("path"),
+            },
+            None | Some("set") => CookieOp::Set {
+                name,
+                value: text("value").unwrap_or_default(),
+                domain: text("domain"),
+                path: text("path"),
+                http_only: input.get("http_only").and_then(serde_json::Value::as_bool),
+                secure: input.get("secure").and_then(serde_json::Value::as_bool),
+                same_site: text("same_site"),
+                expires: input.get("expires").and_then(serde_json::Value::as_f64),
+            },
+            Some(other) => return ToolOutcome::failed(format!("不认识的 action: {other}")),
+        };
+        match ctx.browser.set_cookie(op).await {
             Ok(out) => ToolOutcome::ok_text(out),
             Err(e) => ToolOutcome::failed(interact_hint(e)),
         }
@@ -4141,6 +4298,7 @@ pub fn tools() -> Vec<Arc<dyn Tool>> {
         Arc::new(BrowserEvaluate),
         Arc::new(BrowserUpload),
         Arc::new(BrowserCookies),
+        Arc::new(BrowserSetCookie),
         Arc::new(BrowserNetwork),
         Arc::new(BrowserReplay),
         Arc::new(BrowserIntercept),
@@ -4822,6 +4980,48 @@ mod tests {
         let calls = b.calls.lock().expect("calls");
         assert_eq!(calls[0], "eval 1+1");
         assert_eq!(calls[1], "cookies");
+    }
+
+    /// 写 / 删 cookie 的参数原样到宿主；值不出现在 Debug 里（它会进日志）。
+    #[tokio::test]
+    async fn 写和删cookie路由正确() {
+        let b = interactive(Ok("ok"));
+        let _ = BrowserSetCookie
+            .call(
+                serde_json::json!({ "name": "sid", "value": "s3cr3t", "http_only": true }),
+                ctx_browser(Arc::clone(&b), FakeVision::Direct, Arc::new(NullFs)),
+            )
+            .await;
+        let _ = BrowserSetCookie
+            .call(
+                serde_json::json!({ "action": "delete", "name": "sid", "path": "/app" }),
+                ctx_browser(Arc::clone(&b), FakeVision::Direct, Arc::new(NullFs)),
+            )
+            .await;
+        let calls = b.calls.lock().expect("calls");
+        assert!(calls[0].starts_with("set_cookie Set"), "{}", calls[0]);
+        assert!(calls[0].contains("http_only: Some(true)"), "{}", calls[0]);
+        assert!(!calls[0].contains("s3cr3t"), "值不该进 Debug：{}", calls[0]);
+        assert_eq!(
+            calls[1],
+            "set_cookie Delete { name: \"sid\", domain: None, path: Some(\"/app\") }"
+        );
+    }
+
+    /// 改 cookie 每次都要过同意（规划模式交给决策链），和读 cookie 的授权分开。
+    #[test]
+    fn 写cookie要单独同意() {
+        let ask = BrowserSetCookie.check_permissions(
+            &serde_json::json!({ "name": "sid", "value": "v" }),
+            &PermissionContext::default(),
+        );
+        let PermissionResult::Ask { suggestions, .. } = ask else {
+            panic!("应该问：{ask:?}");
+        };
+        assert!(
+            matches!(&suggestions[0], PermissionUpdate::AddRule { tool, .. } if tool == BROWSER_SET_COOKIE),
+            "{suggestions:?}"
+        );
     }
 
     /// evaluate 默认问一次、理由是 Consent（放行模式能压过），规划模式不抢答。

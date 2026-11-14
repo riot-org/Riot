@@ -4100,6 +4100,7 @@ async fn browser_call(
         C::SnapshotTab { tab } => text(b.snapshot_tab(tab).await),
         C::Upload { target, paths } => text(b.upload(target, paths).await),
         C::Cookies => text(b.cookies().await),
+        C::SetCookie { op } => text(b.set_cookie(op).await),
         C::Network { query } => text(b.network(query).await),
         C::Replay {
             url,

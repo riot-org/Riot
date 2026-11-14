@@ -18,8 +18,8 @@ use async_trait::async_trait;
 use tokio::sync::{Mutex, oneshot};
 
 use riot_protocol::browser::{
-    Action, BrowserAccess, BrowserUnavailable, InteractError, InterceptOp, MarkedView, Nav,
-    NetQuery, TabId, Target, WaitCondition,
+    Action, BrowserAccess, BrowserUnavailable, CookieOp, InteractError, InterceptOp, MarkedView,
+    Nav, NetQuery, TabId, Target, WaitCondition,
 };
 use riot_protocol::env::{EnvProbe, EnvSnapshot};
 use riot_protocol::hostcall::{
@@ -440,6 +440,10 @@ impl BrowserAccess for RemoteBrowser {
 
     async fn cookies(&self) -> Result<String, InteractError> {
         self.text(BrowserCall::Cookies).await
+    }
+
+    async fn set_cookie(&self, op: CookieOp) -> Result<String, InteractError> {
+        self.text(BrowserCall::SetCookie { op }).await
     }
 
     async fn network(&self, query: NetQuery) -> Result<String, InteractError> {

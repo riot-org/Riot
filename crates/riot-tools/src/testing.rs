@@ -680,6 +680,12 @@ impl riot_protocol::browser::BrowserAccess for FakeBrowser {
     async fn cookies(&self) -> Result<String, riot_protocol::browser::InteractError> {
         self.interaction("cookies".to_owned())
     }
+    async fn set_cookie(
+        &self,
+        op: riot_protocol::browser::CookieOp,
+    ) -> Result<String, riot_protocol::browser::InteractError> {
+        self.interaction(format!("set_cookie {op:?}"))
+    }
     async fn network(
         &self,
         query: riot_protocol::browser::NetQuery,
