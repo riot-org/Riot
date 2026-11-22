@@ -3,7 +3,7 @@
 
 # Riot
 
-**Codex 的开源替代。** Rust 内核，本地执行。
+**接任何模型、装在自己机器上的 AI 编程 Agent。** 源码公开，Rust 内核，本地执行。
 
 中文 · [English](README.en.md)
 
@@ -23,20 +23,33 @@
 
 ## 功能
 
-不只写代码。网页、文档、定时任务也能做。
+**一句话：能接任何模型、能装在自己机器或服务器上的 AI 编程 Agent。** Claude、GPT、DeepSeek、GLM、Kimi 等都能用，同一个界面里随时切换；代码和数据不经过任何第三方中转。
+
+### 写代码
+
+- **代码智能（LSP）**：接入本机装好的 rust-analyzer、typescript-language-server、pyright，跳转定义、查引用、看类型、列符号；改完文件自动附上新出现的错误。
+- **自动记忆**：你纠正过的做法、确认过的偏好，Agent 会按项目记下来，下次会话自动带上；在「设置 → 记忆」里查看和修改。
+- **GitHub 闭环**：内置 `pr`、`fix-ci`、`address-comments` 技能，用 `gh` 开 PR、读 CI 失败日志并修复、逐条处理审查评论。
+- **多 Agent 协作**：检索、分析、实现分给后台子 Agent，主任务负责协调。
+- **命令行 / CI**：`riot exec "任务"` 不开界面跑完一个任务就退出，可接管道、出 JSON，见[命令行](#命令行riot-exec)。
+
+### 不只写代码
+
+- **内置浏览器**：Agent 导航、点击、填表、截图，每一步都显示在浏览器面板上；点一下页面元素，选择器和结构就附进对话。
+- **文档能力**：直接生成和修改 Word、Excel、PPT、PDF，公式计算和排版渲染都在本机完成。
+- **定时任务**：每天、工作日、每周或指定时间自动跑，错过的运行会补上；可设跳过时段。
+- **安全测试**：内置爬取、Fuzz、密钥泄露扫描，结果整理成带证据和修复建议的报告。只用于你有权测试的目标。
+
+### 部署
 
 - **远程连接**：用手机或另一台电脑的浏览器连上正在运行的 Riot，任务还在原来那台机器上跑。
-- **多 Agent 协作**：检索、分析、实现分给后台子 Agent，主任务负责协调。
-- **定时任务**：每天、工作日、每周或指定时间自动跑，错过的运行会补上；可设跳过时段（午休、收盘后、周末），时段内到点不开对话。
-- **文档能力**：直接生成和修改 Word、Excel、PPT、PDF，公式计算和排版渲染都在本机完成。
-- **内置浏览器**：Agent 导航、点击、填表、截图，每一步都显示在浏览器面板上。
-- **DOM 拾取**：点一下页面元素，选择器和结构就附进对话。
 - **服务器部署**：部署到 Linux 服务器，电脑合上了任务照样跑。
-- **安全渗透**：内置爬取、Fuzz、密钥泄露扫描，结果整理成带证据和修复建议的报告。
-- **代码智能（LSP）**：接入本机装好的 rust-analyzer、typescript-language-server、pyright，跳转定义、查引用、看类型、列符号；改完文件自动附上新出现的错误。
-- **自动记忆**：你纠正过的做法、确认过的偏好，Agent 会记下来，下次会话自动带上。记忆按项目存在 Riot 配置目录，随时可删。
-- **GitHub 闭环**：内置 `pr`、`fix-ci`、`address-comments` 技能，用 `gh` 开 PR、读 CI 失败日志并修复、逐条处理审查评论。
-- **命令行 / CI**：`riot-server exec "任务"` 不开界面跑完一个任务就退出，可接管道、出 JSON，适合脚本和 CI。
+
+### 安全
+
+- **命令沙箱**：macOS、Linux 默认开启，Agent 跑的命令只能写项目目录；Windows 需要在「设置 → 权限」里装一次。默认权限模式跟着沙箱走：有沙箱的平台默认放行，Windows 默认 Auto（明显安全的自动放行，其余询问）。
+- **项目信任**：项目自带的 `.riot/hooks.json`、技能和命令，要你点过「信任此项目」才会加载 —— hooks 会在你的电脑上直接执行命令，克隆来的陌生仓库不能借它跑代码。
+- 「设置 → 通用 → 运行环境」一次看清沙箱、git、gh、语言服务器能不能用，缺了怎么装。
 
 ## 下载
 
@@ -110,20 +123,33 @@ docker rm -f riot
 
 镜像里只有基本命令行工具。agent 要用 node、python、编译器这类运行时，就基于这个镜像再写一层 `FROM` 装上。自己构建镜像、不用 Docker 的 systemd 部署，以及原理说明，见 [REMOTE_ACCESS.md](docs/REMOTE_ACCESS.md#9-无界面宿主riot-server)。
 
-## 命令行（`riot-server exec`）
+## 命令行（`riot exec`）
 
-不开界面跑一个任务，跑完退出。用的是和桌面版同一份模型配置。
+不开界面跑一个任务，跑完退出。和桌面版同一个内核、同一份模型配置。
+
+- 桌面版：主程序就是命令行入口。macOS 可以链一个短名：`ln -s /Applications/Riot.app/Contents/MacOS/Riot ~/.local/bin/riot`，之后用 `riot exec`。
+- 服务器 / Docker：`riot-server exec`，参数完全相同。
 
 ```bash
-riot-server exec "修复 issue #42 并跑测试"
-git diff | riot-server exec --mode plan "审查这个改动，只指出 bug"
-riot-server exec --json "..." > events.jsonl
+riot exec "修复 issue #42 并跑测试"
+git diff | riot exec --mode plan "审查这个改动，只指出 bug"
+riot exec --json "..." > events.jsonl
 ```
 
 - 默认 `auto` 模式：明显安全的操作自动放行，其余需要人确认的一律拒绝并告诉模型"无人值守"，退出前在 stderr 列出被拒的操作。要全部放开用 `--mode bypass`。
+- 项目自带的 hooks / 技能 / 命令默认不加载（没被信任），加 `--trust` 只对这一次运行信任它。
 - stdout 只有最终回答（`--json` 时是一行一个事件），过程写 stderr。
 - 退出码：0 完成，1 出错，2 参数错误，3 停下来等人，124 超时，130 被中断。
 - 会话存在配置目录下的 `exec-sessions/`，和桌面版的会话分开。
+
+**在 CI 里用**：CI 机器上没有配置好的应用，用参数临时定义服务方。不写盘，key 从环境变量读：
+
+```bash
+riot-server exec --protocol anthropic --model claude-sonnet-5-5 \
+  --api-key-env ANTHROPIC_API_KEY --trust --mode bypass "修复失败的测试"
+```
+
+`--protocol` 是 `anthropic` 或 `openai`（OpenAI 兼容的服务，如 DeepSeek，再加 `--base-url https://api.deepseek.com`）。GitHub Actions 里可以直接用 `ghcr.io/riot-org/riot-server` 镜像跑这条命令。
 
 ## 开发
 
@@ -138,6 +164,8 @@ pnpm tauri dev
 
 测试、打包和发版见 [DEVELOPMENT.md](docs/DEVELOPMENT.md)，架构见 [ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
+效果评测：`python3 evals/run.py` 用 `riot exec` 跑 `evals/tasks/` 下的任务，按隐藏的验收测试判对错，输出通过率、耗时和 token 用量（`-- --model xxx` 换模型对比）。见 [evals/run.py](evals/run.py)。
+
 ## 许可
 
-[PolyForm Noncommercial 1.0.0](LICENSE)：个人与非营利用途免费，商业使用需另行授权。
+[PolyForm Noncommercial 1.0.0](LICENSE)：源码公开，个人与非营利用途免费，商业使用需另行授权。它不是 OSI 定义的开源许可证。

@@ -702,7 +702,7 @@
 | `docs/VERIFICATION.md` | 与 A2 的 invariants.rs 对照(已在 A2 做过则抽查) |
 | `docs/ENV_DESIGN.md` | 与 E3 env.rs 对照 |
 | `docs/SANDBOX_WINDOWS.md` | 与 B3 对照(已做过则跳过) |
-| `README.md` / `AGENT_DESIGN.md` | 快速过,找过时描述 |
+| `README.md` | 快速过,找过时描述 |
 
 **审查要点**
 - 文档声称但代码未实现的(虚假承诺)、代码实现但文档未提的(隐藏行为)

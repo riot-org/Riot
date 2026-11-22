@@ -3,7 +3,7 @@
 
 # Riot
 
-**An open-source alternative to Codex.** Rust core. Runs on your machine.
+**An AI coding agent that works with any model and runs on your own machine.** Source-available. Rust core.
 
 [中文](README.md) · English
 
@@ -23,20 +23,33 @@
 
 ## Features
 
-Not only code. Web pages, documents, and scheduled tasks too.
+**In one line: an AI coding agent that works with any model and runs on your own machine or server.** Claude, GPT, DeepSeek, GLM, Kimi and others, switchable in the same window; your code and data don't pass through any third-party relay.
+
+### Coding
+
+- **Code intelligence (LSP)**: Uses the rust-analyzer, typescript-language-server, or pyright already on your machine to go to definitions, find references, show types, and list symbols. New errors are attached after each edit.
+- **Auto memory**: Corrections and confirmed preferences are saved per project and loaded into later sessions; review and edit them in Settings → Memory.
+- **GitHub loop**: Built-in `pr`, `fix-ci`, and `address-comments` skills use `gh` to open PRs, fix failing CI from its logs, and work through review comments.
+- **Multi-agent**: Search, analysis, and implementation go to background sub-agents. The main task coordinates.
+- **CLI / CI**: `riot exec "task"` runs one task without a UI and exits. See [Command line](#command-line-riot-exec).
+
+### Beyond code
+
+- **Built-in browser**: The agent navigates, clicks, fills forms, and takes screenshots, each step shown in the browser panel. Click an element to attach its selector and structure to the chat.
+- **Documents**: Create and edit Word, Excel, PowerPoint, and PDF. Formulas and layout render on the machine.
+- **Schedules**: Run daily, on weekdays, weekly, or at a set time. Missed runs are caught up.
+- **Security testing**: Built-in crawl, fuzz, and secret-leak scans with an evidence-backed report. Only for targets you're authorized to test.
+
+### Deployment
 
 - **Remote access**: Open a running Riot from a phone or another computer's browser. The task stays on the original machine.
-- **Multi-agent**: Search, analysis, and implementation go to background sub-agents. The main task coordinates.
-- **Schedules**: Run daily, on weekdays, weekly, or at a set time. Missed runs are caught up.
-- **Documents**: Create and edit Word, Excel, PowerPoint, and PDF. Formulas and layout render on the machine.
-- **Built-in browser**: The agent navigates, clicks, fills forms, and takes screenshots. Each step shows in the browser panel.
-- **DOM picker**: Click an element. Its selector and structure are attached to the chat.
 - **Server deploy**: Run it on a Linux server. Close the laptop and the task keeps going.
-- **Security testing**: Built-in crawl, fuzz, and secret-leak scans. Findings become a report with evidence and fixes.
-- **Code intelligence (LSP)**: Uses the rust-analyzer, typescript-language-server, or pyright already installed on your machine to go to definitions, find references, show types, and list symbols. After an edit, new errors are attached to the result.
-- **Auto memory**: Corrections and confirmed preferences are saved per project and loaded into later sessions. Notes live in Riot's config directory and can be deleted any time.
-- **GitHub loop**: Built-in `pr`, `fix-ci`, and `address-comments` skills use `gh` to open PRs, fix failing CI from its logs, and work through review comments.
-- **CLI / CI**: `riot-server exec "task"` runs one task without a UI and exits. It reads stdin, can print JSON, and fits scripts and CI.
+
+### Safety
+
+- **Command sandbox**: On by default on macOS and Linux; commands the agent runs can only write to the project. On Windows, install it once in Settings → Permissions. The default permission mode follows the sandbox: allow-all where the sandbox is on, Auto on Windows (clearly safe actions run, the rest ask).
+- **Project trust**: A project's own `.riot/hooks.json`, skills, and commands load only after you click "Trust this project". Hooks run commands directly on your computer, so a cloned repository can't use them to run code.
+- Settings → General → Environment shows at a glance whether the sandbox, git, gh, and language servers work, and how to install what's missing.
 
 ## Download
 
@@ -110,20 +123,33 @@ Start it again with the command in step 1. Data stays in the `riot-home` volume,
 
 The image only has basic command-line tools. If the agent needs Node, Python, or a compiler, write another image `FROM` this one and install them. Building your own image, a systemd deploy without Docker, and how it works are in [REMOTE_ACCESS.md](docs/REMOTE_ACCESS.md#9-无界面宿主riot-server).
 
-## Command line (`riot-server exec`)
+## Command line (`riot exec`)
 
-Run one task without a UI and exit. It uses the same model settings as the app.
+Run one task without a UI and exit. Same kernel and model settings as the app.
+
+- Desktop: the app binary is the CLI. On macOS, link a short name: `ln -s /Applications/Riot.app/Contents/MacOS/Riot ~/.local/bin/riot`, then use `riot exec`.
+- Server / Docker: `riot-server exec`, with the same options.
 
 ```bash
-riot-server exec "fix issue #42 and run the tests"
-git diff | riot-server exec --mode plan "review this change; only point out bugs"
-riot-server exec --json "..." > events.jsonl
+riot exec "fix issue #42 and run the tests"
+git diff | riot exec --mode plan "review this change; only point out bugs"
+riot exec --json "..." > events.jsonl
 ```
 
 - Default mode is `auto`: clearly safe actions run; anything that still needs a person is denied, the agent is told nobody is there, and the denied actions are listed on stderr. Use `--mode bypass` to allow them.
+- A project's own hooks, skills, and commands aren't loaded until the project is trusted; `--trust` trusts it for this run only.
 - stdout has only the final answer (one event per line with `--json`); progress goes to stderr.
 - Exit codes: 0 done, 1 error, 2 bad arguments, 3 stopped to ask the user, 124 timed out, 130 interrupted.
 - Sessions are kept in `exec-sessions/` under the config directory, apart from the app's sessions.
+
+**In CI**, where there's no configured app, define the provider with flags. Nothing is written to disk; the key comes from an environment variable:
+
+```bash
+riot-server exec --protocol anthropic --model claude-sonnet-5-5 \
+  --api-key-env ANTHROPIC_API_KEY --trust --mode bypass "fix the failing tests"
+```
+
+`--protocol` is `anthropic` or `openai` (for OpenAI-compatible services such as DeepSeek, add `--base-url https://api.deepseek.com`). In GitHub Actions you can run it in the `ghcr.io/riot-org/riot-server` image.
 
 ## Development
 
@@ -138,6 +164,8 @@ pnpm tauri dev
 
 Tests, packaging, and releases are in [DEVELOPMENT.md](docs/DEVELOPMENT.md). Architecture is in [ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+Evaluation: `python3 evals/run.py` runs the tasks in `evals/tasks/` through `riot exec`, grades them with hidden acceptance tests, and reports pass rate, time, and tokens (`-- --model xxx` to compare models). See [evals/run.py](evals/run.py).
+
 ## License
 
-[PolyForm Noncommercial 1.0.0](LICENSE): free for personal and noncommercial use. Commercial use needs a separate license.
+[PolyForm Noncommercial 1.0.0](LICENSE): source-available, free for personal and noncommercial use; commercial use needs a separate license. It is not an OSI-approved open-source license.

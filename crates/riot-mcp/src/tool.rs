@@ -46,7 +46,7 @@ const MAX_NAME: usize = 64;
 
 /// 对外工具名：`mcp__<server>__<tool>`。
 ///
-/// `[约束]` 权限规则按**全名**匹配（AGENT_DESIGN §8.1 的教训）：光用远端
+/// `[约束]` 权限规则按**全名**匹配：光用远端
 /// 名字的话，某个服务器起一个叫 `Write` 的工具就顶了内置 Write 的规则。
 ///
 /// `[约束]` 同一个 `(server_id, remote_name)` 永远得到同一个名字，
@@ -441,7 +441,7 @@ impl Tool for McpTool {
 
         let mut text = join_text(&rendered.text, &trailer(skipped, &notes));
         if text.is_empty() {
-            // 空结果会让一部分模型误以为该停了（AGENT_DESIGN 的坑清单）。
+            // 空结果会让一部分模型误以为该停了，于是提前结束这一轮。
             text = format!("（{} 执行完成，没有输出）", self.remote_name);
         }
         ToolOutcome::Ok {
