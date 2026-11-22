@@ -849,6 +849,28 @@ export function crashLatest(): Promise<string | null> {
   return invoke<string | null>("crash_latest");
 }
 
+/** 命令行工具 `riot` 的状态。 */
+export interface CliStatus {
+  /** 安装包里有没有启动器。 */
+  available: boolean;
+  /** `riot` 入口已经指向这一份应用。 */
+  installed: boolean;
+  /** 入口所在目录在 PATH 上。 */
+  onPath: boolean;
+  path: string;
+  /** 不在 PATH 上时的建议。 */
+  hint?: string | null;
+}
+
+export function cliStatus(): Promise<CliStatus> {
+  return invoke<CliStatus>("cli_status");
+}
+
+/** 装上（或修好）`riot` 命令行入口。 */
+export function cliInstall(): Promise<CliStatus> {
+  return invoke<CliStatus>("cli_install", undefined, T_SLOW);
+}
+
 /** 运行环境检查的一项。 */
 export interface ToolCheck {
   /** `git` / `gh` / `node` / `rust-analyzer` / `typescript-language-server` / `pyright`。 */

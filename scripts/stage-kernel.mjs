@@ -5,6 +5,9 @@
 // Contents/MacOS/riot-kernel,恰好在宿主可执行文件旁边 —— locate_kernel
 // 就按这个约定找)。
 //
+// 命令行启动器 riot-cli 同理(见 crates/riot-cli):它和主程序放在同一个目录,
+// 「安装命令行工具」再把它链 / 复制成用户 PATH 上的 `riot`。
+//
 // 用法:node scripts/stage-kernel.mjs [debug|release]
 
 import { execSync } from 'node:child_process';
@@ -16,7 +19,7 @@ const profile = process.argv[2] === 'release' ? 'release' : 'debug';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ext = process.platform === 'win32' ? '.exe' : '';
 
-execSync(`cargo build -p riot-kernel${profile === 'release' ? ' --release' : ''}`, {
+execSync(`cargo build -p riot-kernel -p riot-cli${profile === 'release' ? ' --release' : ''}`, {
   cwd: root,
   stdio: 'inherit',
 });
@@ -46,9 +49,11 @@ function cargoTargetDir() {
 }
 
 const triple = hostTriple();
-const src = path.join(cargoTargetDir(), profile, `riot-kernel${ext}`);
 const destDir = path.join(root, 'src-tauri', 'binaries');
 fs.mkdirSync(destDir, { recursive: true });
-const dest = path.join(destDir, `riot-kernel-${triple}${ext}`);
-fs.copyFileSync(src, dest);
-console.log(`内核已就位:${path.relative(root, dest)}(${profile})`);
+for (const name of ['riot-kernel', 'riot-cli']) {
+  const src = path.join(cargoTargetDir(), profile, `${name}${ext}`);
+  const dest = path.join(destDir, `${name}-${triple}${ext}`);
+  fs.copyFileSync(src, dest);
+  console.log(`${name} 已就位:${path.relative(root, dest)}(${profile})`);
+}

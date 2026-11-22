@@ -127,7 +127,7 @@ The image only has basic command-line tools. If the agent needs Node, Python, or
 
 Run one task without a UI and exit. Same kernel and model settings as the app.
 
-- Desktop: the app binary is the CLI. On macOS, link a short name: `ln -s /Applications/Riot.app/Contents/MacOS/Riot ~/.local/bin/riot`, then use `riot exec`.
+- Desktop: click Install for the command line tool in Settings → General → Environment, then use `riot exec` in a terminal. It's a small console program that hands the task to the app, so terminals wait for it and exit codes, pipes, and Ctrl-C behave like any command (Windows included).
 - Server / Docker: `riot-server exec`, with the same options.
 
 ```bash

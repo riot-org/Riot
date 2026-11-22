@@ -1,6 +1,14 @@
 import { useEffect, useState } from "react";
 
-import { type SandboxStatus, type ToolCheck, sandboxStatus, toolchainCheck } from "../../bridge";
+import {
+  type CliStatus,
+  type SandboxStatus,
+  type ToolCheck,
+  cliInstall,
+  cliStatus,
+  sandboxStatus,
+  toolchainCheck,
+} from "../../bridge";
 import { type MessageKey } from "../../i18n";
 import { FieldSelect } from "../FieldSelect";
 import { LOCALE_NAMES, LOCALES, isLocale, setLocaleChoice, useLocaleChoice, useT } from "../../i18n";
@@ -66,15 +74,20 @@ function EnvironmentGroup({ activeRoot }: { activeRoot: string | null }) {
   const { t } = useT();
   const [tools, setTools] = useState<ToolCheck[] | null>(null);
   const [sbx, setSbx] = useState<SandboxStatus | null>(null);
+  const [cli, setCli] = useState<CliStatus | null>(null);
+  const [cliError, setCliError] = useState("");
   const [busy, setBusy] = useState(false);
 
   const refresh = () => {
     setBusy(true);
-    void Promise.allSettled([toolchainCheck(activeRoot), sandboxStatus()]).then(([a, b]) => {
-      setTools(a.status === "fulfilled" ? a.value : []);
-      setSbx(b.status === "fulfilled" ? b.value : null);
-      setBusy(false);
-    });
+    void Promise.allSettled([toolchainCheck(activeRoot), sandboxStatus(), cliStatus()]).then(
+      ([a, b, c]) => {
+        setTools(a.status === "fulfilled" ? a.value : []);
+        setSbx(b.status === "fulfilled" ? b.value : null);
+        setCli(c.status === "fulfilled" ? c.value : null);
+        setBusy(false);
+      },
+    );
   };
   useEffect(refresh, [activeRoot]);
 
@@ -99,6 +112,40 @@ function EnvironmentGroup({ activeRoot }: { activeRoot: string | null }) {
                 : t("settings.env.check.sandbox.notReady")
           }
         />
+        {cli?.available ? (
+          <Row
+            title={<StatusTitle ok={cli.installed && cli.onPath} name={t("settings.env.cli")} />}
+            desc={
+              <>
+                {cli.installed
+                  ? cli.onPath
+                    ? t("settings.env.cli.ready", { path: cli.path })
+                    : t("settings.env.cli.notOnPath", { path: cli.path })
+                  : t("settings.env.cli.missing")}
+                {cli.installed && !cli.onPath && cli.hint ? (
+                  <>
+                    <br />
+                    <code className="env-fix">{cli.hint}</code>
+                  </>
+                ) : null}
+                {cliError ? <span className="form-error"> {cliError}</span> : null}
+              </>
+            }
+          >
+            {!cli.installed ? (
+              <button
+                onClick={() => {
+                  setCliError("");
+                  void cliInstall()
+                    .then(setCli)
+                    .catch((e: unknown) => setCliError(String(e)));
+                }}
+              >
+                {t("settings.env.cli.install")}
+              </button>
+            ) : null}
+          </Row>
+        ) : null}
         {tools === null ? (
           <CardBlock>
             <p className="hint" style={{ margin: 0 }}>

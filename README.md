@@ -127,7 +127,7 @@ docker rm -f riot
 
 不开界面跑一个任务，跑完退出。和桌面版同一个内核、同一份模型配置。
 
-- 桌面版：主程序就是命令行入口。macOS 可以链一个短名：`ln -s /Applications/Riot.app/Contents/MacOS/Riot ~/.local/bin/riot`，之后用 `riot exec`。
+- 桌面版：在「设置 → 通用 → 运行环境」里点「安装」命令行工具，之后终端里就能用 `riot exec`。它是一个很小的控制台程序，转给桌面主程序执行 —— 终端会等它跑完，退出码、管道、Ctrl-C 都和普通命令一样（Windows 上也是）。
 - 服务器 / Docker：`riot-server exec`，参数完全相同。
 
 ```bash

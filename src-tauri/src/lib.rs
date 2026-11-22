@@ -33,6 +33,7 @@ pub use askpass::run_client as run_askpass;
 pub use gui_env::print_process_env;
 
 pub mod dir_browse;
+pub mod cli_install;
 pub mod crash_log;
 pub mod env_probe;
 pub mod exec;
@@ -432,6 +433,18 @@ async fn global_agents_write(content: String) -> HostResult<()> {
             .and_then(|()| std::fs::write(&p, content))
     };
     r.map_err(|e| ui_error!("host.memory.failed"; e).into())
+}
+
+/// 命令行工具 `riot` 装没装、在不在 PATH 上。
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn cli_status() -> cli_install::CliStatus {
+    cli_install::status()
+}
+
+/// 装上 `riot` 命令行入口（见 [`cli_install`]）。
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn cli_install() -> HostResult<cli_install::CliStatus> {
+    cli_install::install().map_err(|e| ui_error!("host.cli.installFailed"; e).into())
 }
 
 /// 最近一次崩溃记录（本地 crash.log 的最后一条）。「反馈问题」用。
@@ -2136,6 +2149,8 @@ pub fn run() {
             project_trust_set,
             toolchain_check,
             crash_latest,
+            cli_status,
+            cli_install,
             global_agents_read,
             global_agents_write,
             search_files,

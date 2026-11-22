@@ -1,0 +1,16 @@
+[package]
+name = "riot-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "命令行入口 `riot`：控制台程序，转给桌面主程序的 exec 子命令"
+
+# 刻意不依赖 workspace 里的任何 crate：它只负责找到主程序、交出标准输入
+# 输出、等它结束、带回退出码。逻辑都在主程序里，这里只有几百 KB。
+[[bin]]
+name = "riot-cli"
+path = "src/main.rs"
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true }

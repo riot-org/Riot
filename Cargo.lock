@@ -3939,6 +3939,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "riot-cli"
+version = "0.1.16"
+dependencies = [
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "riot-core"
 version = "0.1.16"
 dependencies = [

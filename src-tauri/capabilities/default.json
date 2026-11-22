@@ -126,6 +126,8 @@
     "allow-project-trust-set",
     "allow-toolchain-check",
     "allow-crash-latest",
+    "allow-cli-status",
+    "allow-cli-install",
     "allow-global-agents-read",
     "allow-global-agents-write",
     "allow-search-files",

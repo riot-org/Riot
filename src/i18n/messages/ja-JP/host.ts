@@ -9,6 +9,7 @@ export default {
   "host.kernel.io": "カーネルとの通信に失敗しました。",
   "host.memory.failed": "メモリを保存できませんでした：{detail}",
   "host.trust.failed": "プロジェクトの信頼を更新できませんでした：{detail}",
+  "host.cli.installFailed": "コマンドラインツールをインストールできませんでした：{detail}",
   "host.kernel.rpc": "カーネルがエラーを返しました。",
   "host.kernel.unexpectedReply": "カーネルが {method} に対して予期しない形式の応答を返しました。",
   "host.kernel.gone": "カーネルプロセスが予期せず終了し、このターンの実行状態は失われました。次のメッセージ送信時にカーネルは自動的に再起動されます。",

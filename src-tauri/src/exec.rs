@@ -1,11 +1,11 @@
-//! `riot-server exec`：不开界面跑一个任务，跑完退出。
+//! `riot exec`（服务器上是 `riot-server exec`）：不开界面跑一个任务，跑完退出。
 //!
 //! 给脚本、CI、GitHub Action 用 —— 和 `codex exec`、`claude -p` 同一类入口：
 //!
 //! ```text
-//! riot-server exec "修复 issue #42 并跑测试"
-//! git diff | riot-server exec --mode plan "审查这个改动" -
-//! riot-server exec --json "..." | jq 'select(.kind == "message")'
+//! riot exec "修复 issue #42 并跑测试"
+//! git diff | riot exec --mode plan "审查这个改动" -
+//! riot exec --json "..." | jq 'select(.kind == "message")'
 //! ```
 //!
 //! # 和桌面版是同一套
@@ -52,14 +52,15 @@ use crate::ipc::{Channel, InvokeResponseBody};
 use crate::state::AppState;
 
 pub const HELP: &str = "\
-riot-server exec — run one task without a UI and exit
+riot exec — run one task without a UI and exit
 
 USAGE:
-    riot-server exec [OPTIONS] <PROMPT>
-    riot-server exec [OPTIONS] -          (read the prompt from stdin)
+    riot exec [OPTIONS] <PROMPT>
+    riot exec [OPTIONS] -          (read the prompt from stdin)
 
+On a server, the same command is `riot-server exec`.
 When both stdin is piped and PROMPT is given, stdin is appended to the prompt
-as context (e.g. `git diff | riot-server exec \"review this\"`).
+as context (e.g. `git diff | riot exec \"review this\"`).
 
 OPTIONS:
     -C, --cwd DIR        Project directory [default: current directory]
@@ -268,7 +269,7 @@ pub fn run_cli(args: Vec<String>) -> u8 {
         Ok(Some(o)) => o,
         Ok(None) => return 0,
         Err(msg) => {
-            eprintln!("riot-server exec: {msg}\n\n{HELP}");
+            eprintln!("riot exec: {msg}\n\n{HELP}");
             return 2;
         }
     };
@@ -283,7 +284,7 @@ pub fn run_cli(args: Vec<String>) -> u8 {
         }
     }
     if opts.prompt.trim().is_empty() {
-        eprintln!("riot-server exec: no prompt given\n\n{HELP}");
+        eprintln!("riot exec: no prompt given\n\n{HELP}");
         return 2;
     }
     if opts.trust {
@@ -309,7 +310,7 @@ pub fn run_cli(args: Vec<String>) -> u8 {
     {
         Ok(rt) => rt,
         Err(e) => {
-            eprintln!("riot-server exec: cannot start the async runtime: {e}");
+            eprintln!("riot exec: cannot start the async runtime: {e}");
             return 1;
         }
     };
@@ -343,13 +344,13 @@ async fn run(state: AppState, opts: Options, sessions_dir: PathBuf) -> u8 {
         })) {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("riot-server exec: bad provider definition: {e}");
+                eprintln!("riot exec: bad provider definition: {e}");
                 return 2;
             }
         };
         if std::env::var(&a.api_key_env).map_or(true, |v| v.trim().is_empty()) {
             eprintln!(
-                "riot-server exec: ${} is not set (it should hold the API key)",
+                "riot exec: ${} is not set (it should hold the API key)",
                 a.api_key_env
             );
             return 2;
@@ -367,7 +368,7 @@ async fn run(state: AppState, opts: Options, sessions_dir: PathBuf) -> u8 {
     if !opts.trust && !untrusted.is_empty() && !riot_kernel::trust::is_trusted(&opts.cwd) {
         let what: Vec<&str> = untrusted.iter().map(|i| i.kind.as_str()).collect();
         eprintln!(
-            "riot-server exec: this project has its own Riot config ({}) that is not loaded \
+            "riot exec: this project has its own Riot config ({}) that is not loaded \
              because the project is not trusted. Pass --trust to load it.",
             what.join(", ")
         );
@@ -375,13 +376,13 @@ async fn run(state: AppState, opts: Options, sessions_dir: PathBuf) -> u8 {
     let info = match state.create_session(&root).await {
         Ok(i) => i,
         Err(e) => {
-            eprintln!("riot-server exec: cannot open {root}: {e}");
+            eprintln!("riot exec: cannot open {root}: {e}");
             return 1;
         }
     };
     let sid = info.id.clone();
     if let Err(e) = state.set_mode(&sid, opts.mode).await {
-        eprintln!("riot-server exec: cannot set mode: {e}");
+        eprintln!("riot exec: cannot set mode: {e}");
         return 1;
     }
     if opts.adhoc.is_none() && (opts.model.is_some() || opts.provider.is_some()) {
@@ -389,7 +390,7 @@ async fn run(state: AppState, opts: Options, sessions_dir: PathBuf) -> u8 {
         let provider = opts.provider.clone().unwrap_or(cfg.active_provider.clone());
         let model = opts.model.clone().unwrap_or(cfg.active_model.clone());
         if let Err(e) = state.set_session_model(&sid, provider, model).await {
-            eprintln!("riot-server exec: {e}");
+            eprintln!("riot exec: {e}");
             return 2;
         }
     }
@@ -411,7 +412,7 @@ async fn run(state: AppState, opts: Options, sessions_dir: PathBuf) -> u8 {
         .send_turn(&sid, &opts.prompt, Vec::new(), Vec::new(), None)
         .await
     {
-        eprintln!("riot-server exec: cannot start the turn: {e}");
+        eprintln!("riot exec: cannot start the turn: {e}");
         state.shutdown().await;
         return 1;
     }
@@ -430,17 +431,17 @@ async fn run(state: AppState, opts: Options, sessions_dir: PathBuf) -> u8 {
             r = next => r,
             _ = tokio::signal::ctrl_c() => {
                 let _ = state.interrupt(&sid).await;
-                eprintln!("riot-server exec: interrupted");
+                eprintln!("riot exec: interrupted");
                 break 130u8;
             }
         };
         let Some(ev) = ev else {
-            eprintln!("riot-server exec: timed out");
+            eprintln!("riot exec: timed out");
             let _ = state.interrupt(&sid).await;
             break 124;
         };
         let Some(Incoming::Event(ev)) = ev else {
-            eprintln!("riot-server exec: the kernel stopped sending events");
+            eprintln!("riot exec: the kernel stopped sending events");
             break 1;
         };
         out.event(&ev);
@@ -467,23 +468,23 @@ async fn run(state: AppState, opts: Options, sessions_dir: PathBuf) -> u8 {
                     TerminalReason::Completed => 0,
                     TerminalReason::AwaitingUser { .. } => {
                         eprintln!(
-                            "riot-server exec: the agent stopped to ask the user; nobody can \
+                            "riot exec: the agent stopped to ask the user; nobody can \
                              answer in a non-interactive run"
                         );
                         3
                     }
                     TerminalReason::MaxTurns { limit } => {
-                        eprintln!("riot-server exec: reached the turn limit ({limit})");
+                        eprintln!("riot exec: reached the turn limit ({limit})");
                         1
                     }
                     TerminalReason::Aborted { .. } | TerminalReason::AbortedTools { .. } => 130,
                     TerminalReason::StopHookPrevented { message } => {
-                        eprintln!("riot-server exec: a stop hook ended the turn: {message}");
+                        eprintln!("riot exec: a stop hook ended the turn: {message}");
                         1
                     }
                     TerminalReason::Error { error } => {
                         eprintln!(
-                            "riot-server exec: {}",
+                            "riot exec: {}",
                             serde_json::to_string(&error).unwrap_or_default()
                         );
                         1
@@ -497,7 +498,7 @@ async fn run(state: AppState, opts: Options, sessions_dir: PathBuf) -> u8 {
     out.finish();
     if !denied.is_empty() {
         eprintln!(
-            "riot-server exec: {} action(s) were denied because they needed approval \
+            "riot exec: {} action(s) were denied because they needed approval \
              (rerun with --mode bypass to allow them):",
             denied.len()
         );
@@ -506,7 +507,7 @@ async fn run(state: AppState, opts: Options, sessions_dir: PathBuf) -> u8 {
         }
     }
     eprintln!(
-        "riot-server exec: session {sid} saved in {}",
+        "riot exec: session {sid} saved in {}",
         sessions_dir.display()
     );
     if tokio::time::timeout(Duration::from_secs(10), state.shutdown())

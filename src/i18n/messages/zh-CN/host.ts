@@ -11,6 +11,7 @@ export default {
   "host.kernel.io": "和内核通信失败。",
   "host.memory.failed": "记忆没能保存：{detail}",
   "host.trust.failed": "没能更新项目信任：{detail}",
+  "host.cli.installFailed": "命令行工具没装上：{detail}",
   "host.kernel.rpc": "内核返回了错误。",
   "host.kernel.unexpectedReply": "内核对 {method} 回了意外形状的应答。",
   "host.kernel.gone": "内核进程意外退出，这一轮的运行状态已丢失。下一条消息会自动重启内核。",

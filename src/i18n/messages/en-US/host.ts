@@ -9,6 +9,7 @@ export default {
   "host.kernel.io": "Failed to communicate with the kernel.",
   "host.memory.failed": "Could not save the memory: {detail}",
   "host.trust.failed": "Could not update project trust: {detail}",
+  "host.cli.installFailed": "Could not install the command line tool: {detail}",
   "host.kernel.rpc": "The kernel returned an error.",
   "host.kernel.unexpectedReply": "The kernel replied to {method} with an unexpected shape.",
   "host.kernel.gone": "The kernel process exited unexpectedly; this turn's state is lost. The next message will restart the kernel automatically.",

@@ -62,6 +62,8 @@ process-wrap = { version = "9", features = ["tokio1"] }
 # 保持同一 minor，免得解析出两份。
 windows = { version = "0.62", features = [
     "Win32_System_Threading",
+    # riot-cli（控制台启动器）转发 Ctrl-C：SetConsoleCtrlHandler。
+    "Win32_System_Console",
     # 沙箱（Low IL 受限令牌）：建 token、改完整性级别、打目录标签。
     # 见 docs/SANDBOX_WINDOWS.md。
     "Win32_Security",
