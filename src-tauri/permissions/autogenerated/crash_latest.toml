@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-crash-latest"
+description = "Enables the crash_latest command without any pre-configured scope."
+commands.allow = ["crash_latest"]
+
+[[permission]]
+identifier = "deny-crash-latest"
+description = "Denies the crash_latest command without any pre-configured scope."
+commands.deny = ["crash_latest"]

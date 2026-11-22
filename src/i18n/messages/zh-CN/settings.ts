@@ -140,6 +140,14 @@ export default {
   "settings.about.err.noRelease": "还没有发布过正式版本。",
   "settings.about.err.offline": "现在连不上更新服务。",
   "settings.about.config": "配置文件",
+  "settings.about.feedback": "反馈",
+  "settings.about.feedback.title": "报告问题",
+  "settings.about.feedback.desc": "打开 GitHub 的新建 issue 页面，预填版本和系统信息。不会自动上传任何内容，提交前你可以检查和修改。",
+  "settings.about.feedback.withCrash": "打开 GitHub 的新建 issue 页面，预填版本、系统和最近一次崩溃记录（来自本地 crash.log，可能含路径）。不会自动上传，提交前请检查。",
+  "settings.about.feedback.open": "报告问题",
+  "settings.about.feedback.tpl.what": "发生了什么",
+  "settings.about.feedback.tpl.expected": "期望的结果",
+  "settings.about.feedback.tpl.steps": "复现步骤",
   "settings.about.config.desc": "API key 不在这里，单独存在同目录的 {file}。",
 
   // 多个分区共用的短词

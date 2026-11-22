@@ -1,6 +1,9 @@
+import { useEffect, useState } from "react";
+
 import {
   type ConfigStatus,
   type UpdateInfo,
+  crashLatest,
   openInBrowser,
   revealInFinder,
 } from "../../bridge";
@@ -87,6 +90,8 @@ export function AboutPane({
         </Card>
       </Group>
 
+      <FeedbackGroup version={version} />
+
       <Group title={t("settings.about.config")}>
         <Card>
           <Row
@@ -116,5 +121,53 @@ function AboutMark() {
         <path d="M11.6 12.6l5 4.9-2.7 2.3" />
       </g>
     </svg>
+  );
+}
+
+const ISSUES_URL = "https://github.com/riot-org/Riot/issues/new";
+
+/**
+ * 反馈问题：打开 GitHub 的新建 issue 页，预填版本、系统和最近一次崩溃。
+ *
+ * `[约束]` 不自动上传任何东西。内容先出现在用户自己的浏览器编辑框里，
+ * 崩溃记录里可能有路径（用户名、项目名），发不发、删哪几行由用户决定。
+ */
+function FeedbackGroup({ version }: { version: string }) {
+  const { t } = useT();
+  const [crash, setCrash] = useState<string | null>(null);
+  useEffect(() => {
+    void crashLatest()
+      .then(setCrash)
+      .catch(() => setCrash(null));
+  }, []);
+
+  const open = () => {
+    const env = `Riot ${version} · ${navigator.platform} · ${navigator.userAgent}`;
+    const parts = [
+      `**${t("settings.about.feedback.tpl.what")}**\n\n\n`,
+      `**${t("settings.about.feedback.tpl.expected")}**\n\n\n`,
+      `**${t("settings.about.feedback.tpl.steps")}**\n\n1. \n\n`,
+      `---\n${env}`,
+    ];
+    if (crash) parts.push(`\n\n<details><summary>crash.log</summary>\n\n\`\`\`\n${crash.slice(0, 4000)}\n\`\`\`\n</details>`);
+    const url = `${ISSUES_URL}?body=${encodeURIComponent(parts.join(""))}`;
+    void openInBrowser(url);
+  };
+
+  return (
+    <Group title={t("settings.about.feedback")}>
+      <Card>
+        <Row
+          title={t("settings.about.feedback.title")}
+          desc={
+            crash
+              ? t("settings.about.feedback.withCrash")
+              : t("settings.about.feedback.desc")
+          }
+        >
+          <button onClick={open}>{t("settings.about.feedback.open")}</button>
+        </Row>
+      </Card>
+    </Group>
   );
 }

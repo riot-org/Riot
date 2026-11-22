@@ -33,6 +33,7 @@ pub use askpass::run_client as run_askpass;
 pub use gui_env::print_process_env;
 
 pub mod dir_browse;
+pub mod crash_log;
 pub mod env_probe;
 pub mod exec;
 pub mod headless;
@@ -387,6 +388,11 @@ async fn hooks_list(
     ))
 }
 
+/// 最近一次崩溃记录（本地 crash.log 的最后一条）。「反馈问题」用。
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn crash_latest() -> Option<String> {
+    crash_log::latest()
+}
 
 /// 设置页「运行环境」：git、gh、node 和各语言服务器能不能用。
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -1771,11 +1777,9 @@ fn log_filter(riot_log: Option<String>, rust_log: Option<String>) -> String {
 fn install_panic_hook() {
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        tracing::error!(
-            panic = %info,
-            backtrace = %std::backtrace::Backtrace::force_capture(),
-            "thread panicked"
-        );
+        let backtrace = std::backtrace::Backtrace::force_capture();
+        tracing::error!(panic = %info, backtrace = %backtrace, "thread panicked");
+        crash_log::record("host", &info.to_string(), Some(&backtrace.to_string()));
         default(info);
     }));
 }
@@ -2085,6 +2089,7 @@ pub fn run() {
             project_trust_status,
             project_trust_set,
             toolchain_check,
+            crash_latest,
             search_files,
             list_dir,
             schedule_list,

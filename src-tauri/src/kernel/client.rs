@@ -396,6 +396,9 @@ fn spawn_dispatch(
                         }
                         Ok(RpcNotification::KernelError { message, fatal }) => {
                             tracing::error!(fatal, "内核报告错误:{message}");
+                            if fatal {
+                                crate::crash_log::record("kernel", &message, None);
+                            }
                         }
                         Err(e) => tracing::warn!(error = %e, "内核通知解析失败"),
                     }

@@ -125,6 +125,7 @@
     "allow-project-trust-status",
     "allow-project-trust-set",
     "allow-toolchain-check",
+    "allow-crash-latest",
     "allow-search-files",
     "allow-list-dir",
     "allow-schedule-list",

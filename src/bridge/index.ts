@@ -830,6 +830,11 @@ export function hooksList(root: string | null): Promise<HookInfo[]> {
 }
 
 
+/** 本地 crash.log 的最后一条（没有就是 null）。只读本地文件，不上传。 */
+export function crashLatest(): Promise<string | null> {
+  return invoke<string | null>("crash_latest");
+}
+
 /** 运行环境检查的一项。 */
 export interface ToolCheck {
   /** `git` / `gh` / `node` / `rust-analyzer` / `typescript-language-server` / `pyright`。 */

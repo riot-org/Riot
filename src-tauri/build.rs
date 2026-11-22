@@ -120,6 +120,7 @@ const COMMANDS: &[&str] = &[
     "project_trust_status",
     "project_trust_set",
     "toolchain_check",
+    "crash_latest",
     "search_files",
     "list_dir",
     "schedule_list",
