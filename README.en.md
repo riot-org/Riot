@@ -61,11 +61,16 @@
 
 After install, add a model API key in Settings.
 
-The macOS build is unsigned. If the first launch is blocked, right-click the app in Finder and choose Open, or:
+**If the system blocks the first launch**: the builds aren't signed and notarized by Apple yet, so the first launch is blocked. Allow it once and it won't ask again.
+
+- "cannot verify the developer" or "Apple could not verify it is free of malware": double-click once so it gets blocked, then open System Settings → Privacy & Security, scroll to the bottom, click Open Anyway next to Riot, and confirm with your password. Since macOS 15 (Sequoia), Control-click → Open in Finder no longer bypasses this; this is the only way.
+- "is damaged and can't be opened": Settings won't offer Open Anyway in this case. Run this in Terminal, then open the app:
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/Riot.app
 ```
+
+If Windows SmartScreen blocks the installer ("Windows protected your PC"), click More info → Run anyway.
 
 ## Linux server
 
