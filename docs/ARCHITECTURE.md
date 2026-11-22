@@ -159,6 +159,7 @@ Riot/
 │   ├── riot-permissions/      # 权限决策 + Bash AST 分析
 │   ├── riot-store/            # JSONL transcript 持久化
 │   ├── riot-mcp/              # MCP 客户端
+│   ├── riot-lsp/              # LSP 客户端（代码智能：定义/引用/符号/诊断）
 │   ├── riot-runtime/          # 文件系统 / 进程 / 网络的真实实现
 │   ├── riot-kernel/           # 内核二进制:会话装配、配置、插件、子 agent
 │   └── riot-browser/          # CEF 离屏浏览器（独立 workspace）

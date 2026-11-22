@@ -4340,6 +4340,7 @@ impl Session {
             riot_tools::tools::web::date::year_month(riot_protocol::tool::Clock::now_ms(&clock));
 
         let mut tools = riot_tools::tools::builtin();
+        crate::code_intel::decorate_edits(&mut tools);
         tools.push(Arc::new(riot_tools::tools::schedule::ScheduleTool::new(
             self.schedule_access(),
         )));
@@ -4559,6 +4560,7 @@ impl Session {
         // 的（两个 MCP 服务器的 id 消毒后相同），配置错误不能把应用带崩。
         let profile = crate::adapt::profile_for(&model);
         let mut tools = riot_tools::tools::builtin();
+        crate::code_intel::decorate_edits(&mut tools);
         let subagent_deps = crate::subagent::SubagentDeps {
             provider: Arc::clone(&provider),
             model: model.model.clone(),

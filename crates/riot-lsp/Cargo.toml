@@ -1,0 +1,28 @@
+[package]
+name = "riot-lsp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "LSP 客户端：拉起用户已装的语言服务器，给模型查定义、引用、符号和诊断"
+
+[dependencies]
+riot-protocol = { workspace = true }
+# 只用 tools::path：路径解析和围栏检查和内置工具走同一套。依赖方向无环
+# （tools 不依赖 lsp），kernel 同时依赖两者 —— 和 riot-mcp 同一个形状。
+riot-tools = { workspace = true }
+async-trait = { workspace = true }
+process-wrap = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true }
+
+[dev-dependencies]
+riot-tools = { workspace = true, features = ["testing"] }
+tempfile = { workspace = true }

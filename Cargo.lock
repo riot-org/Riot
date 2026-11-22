@@ -4031,6 +4031,7 @@ dependencies = [
  "regex-lite",
  "reqwest 0.12.28",
  "riot-core",
+ "riot-lsp",
  "riot-mcp",
  "riot-permissions",
  "riot-protocol",
@@ -4052,6 +4053,24 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+]
+
+[[package]]
+name = "riot-lsp"
+version = "0.1.16"
+dependencies = [
+ "async-trait",
+ "process-wrap",
+ "riot-protocol",
+ "riot-tools",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "url",
+ "windows 0.62.2",
 ]
 
 [[package]]

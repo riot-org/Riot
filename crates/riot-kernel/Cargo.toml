@@ -13,6 +13,7 @@ srt-win = { path = "../../vendor/srt-win" }
 
 [dependencies]
 riot-core = { workspace = true }
+riot-lsp = { workspace = true }
 riot-mcp = { workspace = true }
 riot-permissions = { workspace = true }
 riot-protocol = { workspace = true }

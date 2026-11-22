@@ -446,6 +446,9 @@ impl SessionManager {
             known_mcp,
             session.mcp_refresh(),
         )));
+        // 代码智能。永远注册（没装服务器时调用会明说怎么装），追加在
+        // 末尾不动前缀。
+        extra_tools.push(crate::code_intel::tool());
         let plugins = session.load_plugins().await;
         let skills = crate::skills::discover(&session.cwd, &plugins);
         let model_cards = skills.model_cards();
@@ -813,6 +816,7 @@ impl SessionManager {
             s.flush_log().await;
         }
         self.mcp.shutdown().await;
+        crate::code_intel::shutdown().await;
         // 回收本进程写下的沙箱授权。会话级（沙箱 Drop）不再各自撤 —— Windows
         // 上 holder 是内核 pid、多会话共享，会话级撤会连累并发会话（见
         // riot_runtime 的 sandbox_win）。所以在这里、所有 turn 都停掉之后撤

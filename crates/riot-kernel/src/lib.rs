@@ -31,6 +31,7 @@ pub mod bridge;
 pub mod changes;
 pub mod checkpoint;
 pub mod classifier;
+pub mod code_intel;
 pub mod config;
 pub mod content;
 pub mod digest;

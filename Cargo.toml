@@ -27,6 +27,7 @@ riot-core = { path = "crates/riot-core" }
 riot-tools = { path = "crates/riot-tools" }
 riot-providers = { path = "crates/riot-providers" }
 riot-mcp = { path = "crates/riot-mcp" }
+riot-lsp = { path = "crates/riot-lsp" }
 riot-permissions = { path = "crates/riot-permissions" }
 riot-store = { path = "crates/riot-store" }
 riot-runtime = { path = "crates/riot-runtime" }
