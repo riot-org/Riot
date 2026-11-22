@@ -103,6 +103,14 @@ const BUILTIN_SKILLS: &[(&str, &str)] = &[
         "create-plugin",
         include_str!("../builtin/skills/create-plugin/SKILL.md"),
     ),
+    // GitHub 闭环：开 PR、修 CI、处理审查评论。都靠 gh CLI，经 Bash 走
+    // 正常的权限确认 —— 不另开一条直连 GitHub API 的通道。
+    ("pr", include_str!("../builtin/skills/pr/SKILL.md")),
+    ("fix-ci", include_str!("../builtin/skills/fix-ci/SKILL.md")),
+    (
+        "address-comments",
+        include_str!("../builtin/skills/address-comments/SKILL.md"),
+    ),
 ];
 
 /// 发现结果：能用的进工具，有问题的报给设置页。
