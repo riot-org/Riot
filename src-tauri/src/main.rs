@@ -23,6 +23,12 @@ fn main() {
         Some(a) if a == srt_win::SRT_WIN_DISPATCH_ARG1 => {
             std::process::exit(srt_win::run_from_args(std::env::args_os()));
         }
-        _ => riot_host_lib::run(),
+        // `Riot exec …`：不开窗口跑一个任务（同 `riot-server exec`）。桌面
+        // 安装包里没有 riot-server，命令行入口就在主程序上。
+        Some("exec") => {
+            let code = riot_host_lib::exec::run_cli(args.collect());
+            std::process::exit(i32::from(code));
+        }
+                _ => riot_host_lib::run(),
     }
 }

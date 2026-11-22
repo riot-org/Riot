@@ -74,6 +74,14 @@ OPTIONS:
                          Riot config is skipped.
     -h, --help           Show this help
 
+PROVIDER ON THE COMMAND LINE (CI, no configured app):
+  Nothing is written to disk; the key is read from an environment variable.
+    --protocol P         anthropic | openai               [env: RIOT_PROTOCOL]
+    --base-url URL       API host [default: the vendor's] [env: RIOT_BASE_URL]
+    --api-key-env NAME   Variable holding the key         [env: RIOT_API_KEY_ENV]
+                         [default: ANTHROPIC_API_KEY / OPENAI_API_KEY]
+    --model is required here (env: RIOT_MODEL).
+
 EXIT CODES:
     0 done · 1 error or turn limit · 2 bad arguments · 3 stopped to ask the user
     124 timed out · 130 interrupted
@@ -91,7 +99,47 @@ struct Options {
     json: bool,
     timeout: Option<Duration>,
     trust: bool,
+    /// 命令行上临时定义的服务方（CI 用）。
+    adhoc: Option<AdHocProvider>,
 }
+
+#[derive(Debug, Clone, PartialEq)]
+struct AdHocProvider {
+    protocol: String,
+    base_url: String,
+    api_key_env: String,
+}
+
+impl AdHocProvider {
+    /// 命令行参数优先，其次环境变量；没给协议就不启用。
+    fn resolve(
+        protocol: Option<String>,
+        base_url: Option<String>,
+        key_env: Option<String>,
+        env: impl Fn(&str) -> Option<String>,
+    ) -> Result<Option<Self>, String> {
+        let Some(protocol) = protocol.or_else(|| env("RIOT_PROTOCOL")) else {
+            return Ok(None);
+        };
+        let (default_url, default_key) = match protocol.as_str() {
+            "anthropic" => ("https://api.anthropic.com", "ANTHROPIC_API_KEY"),
+            "openai" => ("https://api.openai.com", "OPENAI_API_KEY"),
+            other => return Err(format!("--protocol is anthropic or openai, got `{other}`")),
+        };
+        Ok(Some(Self {
+            base_url: base_url
+                .or_else(|| env("RIOT_BASE_URL"))
+                .unwrap_or_else(|| default_url.to_owned()),
+            api_key_env: key_env
+                .or_else(|| env("RIOT_API_KEY_ENV"))
+                .unwrap_or_else(|| default_key.to_owned()),
+            protocol,
+        }))
+    }
+}
+
+/// 临时服务方的 id。和用户配置里的撞不上（用户的 id 由设置页生成）。
+const ADHOC_ID: &str = "riot-exec";
 
 fn parse_mode(s: &str) -> Result<PermissionMode, String> {
     Ok(match s {
@@ -114,6 +162,9 @@ fn parse(args: Vec<String>) -> Result<Option<Options>, String> {
     let mut json = false;
     let mut timeout = None;
     let mut trust = false;
+    let mut protocol = None;
+    let mut base_url = None;
+    let mut key_env = None;
     let mut it = args.into_iter();
     let mut rest_is_prompt = false;
     while let Some(a) = it.next() {
@@ -134,6 +185,9 @@ fn parse(args: Vec<String>) -> Result<Option<Options>, String> {
             "--provider" => provider = Some(value("--provider")?),
             "--json" => json = true,
             "--trust" => trust = true,
+            "--protocol" => protocol = Some(value("--protocol")?),
+            "--base-url" => base_url = Some(value("--base-url")?),
+            "--api-key-env" => key_env = Some(value("--api-key-env")?),
             "--timeout" => {
                 let v = value("--timeout")?;
                 let secs: u64 = v
@@ -148,6 +202,9 @@ fn parse(args: Vec<String>) -> Result<Option<Options>, String> {
                     "--mode" => mode = parse_mode(v)?,
                     "--model" => model = Some(v.to_owned()),
                     "--provider" => provider = Some(v.to_owned()),
+                    "--protocol" => protocol = Some(v.to_owned()),
+                    "--base-url" => base_url = Some(v.to_owned()),
+                    "--api-key-env" => key_env = Some(v.to_owned()),
                     "--timeout" => {
                         timeout =
                             Some(Duration::from_secs(v.parse().map_err(|_| {
@@ -169,6 +226,15 @@ fn parse(args: Vec<String>) -> Result<Option<Options>, String> {
     let wants_stdin = prompt_parts.iter().any(|p| p == "-");
     prompt_parts.retain(|p| p != "-");
     let prompt = prompt_parts.join(" ");
+    let env = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
+    let adhoc = AdHocProvider::resolve(protocol, base_url, key_env, env)?;
+    let model = model.or_else(|| adhoc.as_ref().and_then(|_| env("RIOT_MODEL")));
+    if adhoc.is_some() && model.is_none() {
+        return Err("--protocol needs --model (or RIOT_MODEL)".to_owned());
+    }
+    if adhoc.is_some() && provider.is_some() {
+        return Err("--provider and --protocol don't go together".to_owned());
+    }
     let cwd = match cwd {
         Some(c) => c,
         None => std::env::current_dir().map_err(|e| format!("cannot read current dir: {e}"))?,
@@ -186,17 +252,24 @@ fn parse(args: Vec<String>) -> Result<Option<Options>, String> {
         json,
         timeout,
         trust,
+        adhoc,
     }))
 }
 
 /// 入口。`args` 是 `exec` 之后的参数。
 pub fn main(args: Vec<String>) -> ExitCode {
+    ExitCode::from(run_cli(args))
+}
+
+/// 和 [`main`] 一样，返回原始退出码。桌面主程序（`Riot exec …`）用它：
+/// 那边的 `main` 不返回 `ExitCode`，只能 `process::exit`。
+pub fn run_cli(args: Vec<String>) -> u8 {
     let mut opts = match parse(args) {
         Ok(Some(o)) => o,
-        Ok(None) => return ExitCode::SUCCESS,
+        Ok(None) => return 0,
         Err(msg) => {
             eprintln!("riot-server exec: {msg}\n\n{HELP}");
-            return ExitCode::from(2);
+            return 2;
         }
     };
     if opts.wants_stdin || !std::io::stdin().is_terminal() {
@@ -211,7 +284,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
     }
     if opts.prompt.trim().is_empty() {
         eprintln!("riot-server exec: no prompt given\n\n{HELP}");
-        return ExitCode::from(2);
+        return 2;
     }
     if opts.trust {
         // SAFETY: 这时还没有任何别的线程（runtime 在下面才建，init_process
@@ -237,7 +310,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
         Ok(rt) => rt,
         Err(e) => {
             eprintln!("riot-server exec: cannot start the async runtime: {e}");
-            return ExitCode::FAILURE;
+            return 1;
         }
     };
     rt.block_on(run(state, opts, sessions_dir))
@@ -252,9 +325,42 @@ enum Incoming {
     Event(Box<AgentEvent>),
 }
 
-async fn run(state: AppState, opts: Options, sessions_dir: PathBuf) -> ExitCode {
+async fn run(state: AppState, opts: Options, sessions_dir: PathBuf) -> u8 {
     crate::start_exec_background(&state);
     state.reconcile_mcp().await;
+
+    // 命令行上定义的服务方：只进内存（set_config 不写盘），钉成这次的
+    // 活动服务方 —— create_session 会把它钉在会话上。
+    if let Some(a) = &opts.adhoc {
+        let model = opts.model.clone().unwrap_or_default();
+        let provider: crate::config::ProviderConfig = match serde_json::from_value(serde_json::json!({
+            "id": ADHOC_ID,
+            "name": ADHOC_ID,
+            "protocol": a.protocol,
+            "baseUrl": a.base_url,
+            "apiKeyEnv": a.api_key_env,
+            "models": [{ "id": model }],
+        })) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("riot-server exec: bad provider definition: {e}");
+                return 2;
+            }
+        };
+        if std::env::var(&a.api_key_env).map_or(true, |v| v.trim().is_empty()) {
+            eprintln!(
+                "riot-server exec: ${} is not set (it should hold the API key)",
+                a.api_key_env
+            );
+            return 2;
+        }
+        let mut cfg = state.config().await;
+        cfg.providers.retain(|p| p.id != ADHOC_ID);
+        cfg.providers.push(provider);
+        cfg.active_provider = ADHOC_ID.to_owned();
+        cfg.active_model = model;
+        state.set_config(cfg).await;
+    }
 
     let root = opts.cwd.display().to_string();
     let untrusted = riot_kernel::trust::project_config(&opts.cwd);
@@ -270,21 +376,21 @@ async fn run(state: AppState, opts: Options, sessions_dir: PathBuf) -> ExitCode 
         Ok(i) => i,
         Err(e) => {
             eprintln!("riot-server exec: cannot open {root}: {e}");
-            return ExitCode::FAILURE;
+            return 1;
         }
     };
     let sid = info.id.clone();
     if let Err(e) = state.set_mode(&sid, opts.mode).await {
         eprintln!("riot-server exec: cannot set mode: {e}");
-        return ExitCode::FAILURE;
+        return 1;
     }
-    if opts.model.is_some() || opts.provider.is_some() {
+    if opts.adhoc.is_none() && (opts.model.is_some() || opts.provider.is_some()) {
         let cfg = state.config().await;
         let provider = opts.provider.clone().unwrap_or(cfg.active_provider.clone());
         let model = opts.model.clone().unwrap_or(cfg.active_model.clone());
         if let Err(e) = state.set_session_model(&sid, provider, model).await {
             eprintln!("riot-server exec: {e}");
-            return ExitCode::from(2);
+            return 2;
         }
     }
 
@@ -307,7 +413,7 @@ async fn run(state: AppState, opts: Options, sessions_dir: PathBuf) -> ExitCode 
     {
         eprintln!("riot-server exec: cannot start the turn: {e}");
         state.shutdown().await;
-        return ExitCode::FAILURE;
+        return 1;
     }
 
     let mut out = Output::new(opts.json);
@@ -409,7 +515,7 @@ async fn run(state: AppState, opts: Options, sessions_dir: PathBuf) -> ExitCode 
     {
         tracing::warn!("kernel did not stop in time; exiting anyway");
     }
-    ExitCode::from(code)
+    code
 }
 
 /// stdout / stderr 的排版。
@@ -548,6 +654,28 @@ mod tests {
         assert_eq!(o.mode, PermissionMode::Auto);
         assert!(parse(args(&["--frobnicate", "x"])).is_err());
         assert!(parse(args(&["--mode", "yolo", "x"])).is_err());
+    }
+
+    #[test]
+    fn 命令行服务方_参数优先于环境变量() {
+        let env = |k: &str| match k {
+            "RIOT_PROTOCOL" => Some("openai".to_owned()),
+            "RIOT_BASE_URL" => Some("https://gw.example.com".to_owned()),
+            _ => None,
+        };
+        let a = AdHocProvider::resolve(None, None, None, env).unwrap().unwrap();
+        assert_eq!(a.protocol, "openai");
+        assert_eq!(a.base_url, "https://gw.example.com");
+        assert_eq!(a.api_key_env, "OPENAI_API_KEY");
+
+        let a = AdHocProvider::resolve(Some("anthropic".into()), None, Some("MY_KEY".into()), |_| None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(a.base_url, "https://api.anthropic.com");
+        assert_eq!(a.api_key_env, "MY_KEY");
+
+        assert!(AdHocProvider::resolve(None, None, None, |_| None).unwrap().is_none());
+        assert!(AdHocProvider::resolve(Some("gemini".into()), None, None, |_| None).is_err());
     }
 
     #[test]

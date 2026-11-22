@@ -1279,7 +1279,11 @@ pub const fn default_compact_threshold_tokens() -> u32 {
 /// 在无脑点了，而无脑点的人在真正危险的那一次也会点。真正的边界交给它下面
 /// 两层：命令隔离（[`SandboxMode`]，macOS 默认开着）和对放行免疫的安全检查。
 pub const fn default_permission_mode() -> riot_protocol::permission::PermissionMode {
-    riot_protocol::permission::PermissionMode::BypassPermissions
+    if cfg!(windows) {
+        riot_protocol::permission::PermissionMode::Auto
+    } else {
+        riot_protocol::permission::PermissionMode::BypassPermissions
+    }
 }
 
 /// [`AppConfig::default_mode`] 的 serde 默认。字段是 `Option` 只为了让
