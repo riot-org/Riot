@@ -81,6 +81,9 @@ pub struct ResumeSnapshot {
     pub redo_available: bool,
 }
 
+/// 关闭时 SessionEnd hooks 合计最多等多久。见 [`SessionManager::shutdown`]。
+const SESSION_END_BUDGET: std::time::Duration = std::time::Duration::from_secs(4);
+
 /// 活会话注册表。内核 bin 持有一个。
 pub struct SessionManager {
     sessions: Mutex<HashMap<String, Arc<Session>>>,
@@ -311,6 +314,17 @@ impl SessionManager {
         if let Some(s) = &removed {
             s.abort_turn().await;
             s.close_log().await;
+        }
+        // SessionEnd 在删文件**之前**跑：脚本最常做的就是把 transcript
+        // 归档到别处，删完再跑它就无物可存了。
+        let transcript = self.transcripts.path_of(&id);
+        match (&removed, &root) {
+            (Some(s), _) => s.run_session_end("delete", Some(&transcript)).await,
+            (None, Some(root)) => {
+                crate::hooks::session_end_for(root, session_id, &[], "delete", Some(&transcript))
+                    .await;
+            }
+            (None, None) => {}
         }
         // 不在内存的会话也要删文件：没打开过就没有句柄，直接删是安全的。
         // 以前这里只删活会话的，删一个没点开过的会话会把 transcript 留在
@@ -818,6 +832,20 @@ impl SessionManager {
         }
         for s in &sessions {
             s.flush_log().await;
+        }
+        // SessionEnd：只对这次运行里对话过的会话，全部并行，合计最多等
+        // SESSION_END_BUDGET。宿主只给内核 5 秒退出（ARCHITECTURE.md §2.3），
+        // 超过就被强杀 —— 那样 MCP 和沙箱的收尾也一起没了。
+        let ends = sessions.iter().filter(|s| s.talked()).map(|s| {
+            let transcript = self.transcripts.path_of(&s.id);
+            let s = Arc::clone(s);
+            async move { s.run_session_end("shutdown", Some(&transcript)).await }
+        });
+        if tokio::time::timeout(SESSION_END_BUDGET, futures::future::join_all(ends))
+            .await
+            .is_err()
+        {
+            tracing::warn!("SessionEnd hooks 没在时限内跑完，不等了");
         }
         self.mcp.shutdown().await;
         crate::code_intel::shutdown().await;

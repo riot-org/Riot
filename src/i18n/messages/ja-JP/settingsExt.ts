@@ -97,6 +97,8 @@ export default {
   "settings.hooks.event.postToolUse": "ツール実行後。モデルにフィードバック（フォーマット確認、lint）",
   "settings.hooks.event.stop": "モデルが終了しようとしたとき。exit 2 = 停止を許さず、理由を添えてもう 1 ターン実行",
   "settings.hooks.event.userPromptSubmit": "メッセージ送信前。exit 2 = このメッセージをブロック",
+  "settings.hooks.event.sessionStart": "セッション開始時（圧縮後にも再実行）。出力はコンテキストとしてモデルに渡され、ブロックはできません",
+  "settings.hooks.event.sessionEnd": "セッション終了時：削除（delete、ファイル削除の前に実行）またはアプリ終了（shutdown、終了時は合計最大 4 秒）。後片付け用で、ブロックはできません",
 
   "settings.remote.webNotice": "このマシン上の Riot を Web 経由で使用しています。ここでの変更はホスト側に適用されます。スイッチをオフにするとこのページは切断されます。",
   "settings.remote.managed":

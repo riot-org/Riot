@@ -16,7 +16,9 @@
 //!   "PreToolUse": [
 //!     { "matcher": "Bash|Write", "hooks": [ { "type": "command", "command": "./check.sh", "timeout": 30 } ] }
 //!   ],
-//!   "PostToolUse": [...], "Stop": [...], "UserPromptSubmit": [...]
+//!   "PostToolUse": [...], "Stop": [...], "UserPromptSubmit": [...],
+//!   "SessionStart": [ { "matcher": "startup", "hooks": [ ... ] } ],
+//!   "SessionEnd": [ { "matcher": "delete", "hooks": [ ... ] } ]
 //! }
 //! ```
 //!
@@ -29,7 +31,17 @@
 //! - stdin 收一行 JSON：公共字段 `session_id` `cwd` `hook_event_name` +
 //!   事件字段（PreToolUse: `tool_name/tool_input/tool_use_id`，PostToolUse:
 //!   另加 `tool_response/is_error`，Stop: `stop_hook_active`，
-//!   UserPromptSubmit: `prompt`）；
+//!   UserPromptSubmit: `prompt`，SessionStart: `source`，
+//!   SessionEnd: `reason` / `transcript_path`）；
+//! - SessionStart 在会话第一条消息前跑（`source: "startup"`），压缩把
+//!   开头吞掉之后再跑一次（`source: "compact"`）；`matcher` 匹配的是
+//!   source。它的输出（纯文本 stdout 或 `additionalContext`）作为上下文
+//!   交给模型；它**拦不住**会话开始 —— exit 2 只记日志；
+//! - SessionEnd 在会话结束时跑：用户删除会话（`reason: "delete"`，此时
+//!   transcript 还在、跑完才删），或应用 / 内核关闭（`reason: "shutdown"`，
+//!   只对这次运行里真的对话过的会话）。matcher 匹配 reason。输出没人看，
+//!   也拦不住任何事 —— 它只用来收尾（归档 transcript、写日志、清临时资源）。
+//!   关闭时所有会话的 SessionEnd 合计最多等 4 秒（宿主只给内核 5 秒退出）；
 //! - exit 0 = 通过（stdout 以 `{` 开头则按 JSON 解析高级输出）；
 //!   exit 2 = **阻断**（stderr 作为理由）；其它 = 非阻塞错误，只记日志；
 //! - stdout JSON 认这些字段：`decision`（approve/block）、`reason`、
@@ -74,11 +86,17 @@ pub struct HooksFile {
     pub stop: Vec<MatcherGroup>,
     #[serde(default, rename = "UserPromptSubmit")]
     pub user_prompt_submit: Vec<MatcherGroup>,
+    #[serde(default, rename = "SessionStart")]
+    pub session_start: Vec<MatcherGroup>,
+    #[serde(default, rename = "SessionEnd")]
+    pub session_end: Vec<MatcherGroup>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct MatcherGroup {
     /// 工具名匹配：空/`*` = 全部；`A|B` = 精确列表；其它 = 正则。
+    /// SessionStart 匹配的是 source（`startup` / `compact`），SessionEnd 匹配
+    /// reason（`delete` / `shutdown`）。
     /// Stop / UserPromptSubmit 没有匹配对象，这个字段被忽略。
     #[serde(default)]
     pub matcher: String,
@@ -121,7 +139,8 @@ pub struct Problem {
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HookInfo {
-    /// `PreToolUse` / `PostToolUse` / `Stop` / `UserPromptSubmit`。
+    /// `PreToolUse` / `PostToolUse` / `Stop` / `UserPromptSubmit` /
+    /// `SessionStart` / `SessionEnd`。
     pub event: String,
     /// 空 = 匹配全部工具（或该事件没有匹配对象）。
     pub matcher: String,
@@ -147,6 +166,8 @@ pub fn list(project_root: Option<&Path>, plugins: &[crate::plugins::Loaded]) -> 
             ("PostToolUse", f.post_tool_use),
             ("Stop", f.stop),
             ("UserPromptSubmit", f.user_prompt_submit),
+            ("SessionStart", f.session_start),
+            ("SessionEnd", f.session_end),
         ] {
             for g in groups {
                 for h in g.hooks {
@@ -202,6 +223,8 @@ fn plugin_hooks(p: &crate::plugins::Loaded, problems: &mut Vec<Problem>) -> Hook
             .chain(f.post_tool_use.iter_mut())
             .chain(f.stop.iter_mut())
             .chain(f.user_prompt_submit.iter_mut())
+            .chain(f.session_start.iter_mut())
+            .chain(f.session_end.iter_mut())
         {
             for h in &mut group.hooks {
                 h.command = p.vars.expand(&h.command);
@@ -276,6 +299,8 @@ fn merge(mut a: HooksFile, b: HooksFile) -> HooksFile {
     a.post_tool_use.extend(b.post_tool_use);
     a.stop.extend(b.stop);
     a.user_prompt_submit.extend(b.user_prompt_submit);
+    a.session_start.extend(b.session_start);
+    a.session_end.extend(b.session_end);
     a
 }
 
@@ -299,6 +324,27 @@ pub enum Outcome {
     Rewrite { input: serde_json::Value },
     /// 附加上下文，给模型看的段落。
     Context { text: String },
+}
+
+/// 对一个会话跑 SessionEnd。活会话和"没在内存里"的会话（删一个没点开过
+/// 的会话）共用：后者没有插件清单，只跑全局 + 项目的 hooks。
+pub async fn session_end_for(
+    cwd: &Path,
+    session_id: &str,
+    plugins: &[crate::plugins::Loaded],
+    reason: &str,
+    transcript: Option<&Path>,
+) {
+    let engine = HookEngine::load(cwd, session_id, plugins);
+    if !engine.has_session_end() {
+        return;
+    }
+    tracing::info!(session = session_id, reason, "跑 SessionEnd hooks");
+    for o in engine.session_end(reason, transcript).await {
+        if let Outcome::Block { reason } = o {
+            tracing::warn!(%reason, "SessionEnd hook 想阻断；会话结束拦不住，只记日志");
+        }
+    }
 }
 
 /// 会话级 hooks 引擎。每轮现装（配置中途改了下一轮生效，和 caps 一条规矩）。
@@ -376,6 +422,41 @@ impl HookEngine {
             .user_prompt_submit
             .iter()
             .any(|g| !g.hooks.is_empty())
+    }
+
+    pub fn has_session_start(&self) -> bool {
+        self.cfg.session_start.iter().any(|g| !g.hooks.is_empty())
+    }
+
+    /// SessionStart：`source` 是 `startup`（会话第一条消息前）或 `compact`
+    /// （压缩吞掉开头之后）。matcher 按 source 匹配。
+    pub async fn session_start(&self, source: &str) -> Vec<Outcome> {
+        let payload = serde_json::json!({
+            "hook_event_name": "SessionStart",
+            "session_id": self.session_id,
+            "cwd": self.cwd.display().to_string(),
+            "source": source,
+        });
+        self.run_matching(&self.cfg.session_start, Some(source), &payload)
+            .await
+    }
+
+    pub fn has_session_end(&self) -> bool {
+        self.cfg.session_end.iter().any(|g| !g.hooks.is_empty())
+    }
+
+    /// SessionEnd：`reason` 是 `delete` 或 `shutdown`；matcher 按 reason 匹配。
+    /// `transcript_path` 是会话记录（JSONL），删除时脚本跑完它才被删。
+    pub async fn session_end(&self, reason: &str, transcript_path: Option<&Path>) -> Vec<Outcome> {
+        let payload = serde_json::json!({
+            "hook_event_name": "SessionEnd",
+            "session_id": self.session_id,
+            "cwd": self.cwd.display().to_string(),
+            "reason": reason,
+            "transcript_path": transcript_path.map(|p| p.display().to_string()),
+        });
+        self.run_matching(&self.cfg.session_end, Some(reason), &payload)
+            .await
     }
 
     /// PreToolUse：工具名匹配的全部 hook 并行跑。
@@ -844,6 +925,64 @@ mod tests {
 
         fn engine(json: serde_json::Value, dir: &Path) -> HookEngine {
             HookEngine::from_config(cfg(json), dir)
+        }
+
+        #[tokio::test]
+        async fn session_start_按_source_匹配_输出当上下文() {
+            let dir = tempfile::tempdir().expect("目录");
+            let e = engine(
+                serde_json::json!({
+                    "SessionStart": [
+                        { "matcher": "startup",
+                          "hooks": [{ "type": "command",
+                                      "command": "grep -o '\"source\":\"[a-z]*\"'" }] },
+                        { "matcher": "compact",
+                          "hooks": [{ "type": "command", "command": "echo 压缩后重注" }] }
+                    ]
+                }),
+                dir.path(),
+            );
+            assert!(e.has_session_start());
+            assert_eq!(
+                e.session_start("startup").await,
+                vec![Outcome::Context {
+                    text: "\"source\":\"startup\"".into()
+                }],
+                "stdin 里带着 source，stdout 原样当上下文"
+            );
+            assert_eq!(
+                e.session_start("compact").await,
+                vec![Outcome::Context {
+                    text: "压缩后重注".into()
+                }]
+            );
+            assert!(HookEngine::empty().session_start("startup").await.is_empty());
+        }
+
+        #[tokio::test]
+        async fn session_end_按_reason_匹配_收到_transcript_路径() {
+            let dir = tempfile::tempdir().expect("目录");
+            let out = dir.path().join("ended.txt");
+            let e = engine(
+                serde_json::json!({
+                    "SessionEnd": [
+                        { "matcher": "delete",
+                          "hooks": [{ "type": "command",
+                                      "command": format!("cat >> {}", out.display()) }] }
+                    ]
+                }),
+                dir.path(),
+            );
+            assert!(e.has_session_end());
+            // shutdown 不匹配 delete，不该跑
+            e.session_end("shutdown", None).await;
+            assert!(!out.exists(), "matcher 只认 delete");
+
+            e.session_end("delete", Some(Path::new("/s/abc.jsonl"))).await;
+            let got = std::fs::read_to_string(&out).expect("hook 跑过");
+            assert!(got.contains("\"reason\":\"delete\""), "{got}");
+            assert!(got.contains("\"transcript_path\":\"/s/abc.jsonl\""), "{got}");
+            assert!(got.contains("\"hook_event_name\":\"SessionEnd\""), "{got}");
         }
 
         #[tokio::test]

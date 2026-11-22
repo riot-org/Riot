@@ -100,6 +100,8 @@ export default {
   "settings.hooks.event.postToolUse": "After a tool runs. Feedback goes to the model (formatting, lint)",
   "settings.hooks.event.stop": "When the model wants to finish. Exit 2 = don't stop, run another turn with the reason",
   "settings.hooks.event.userPromptSubmit": "Before a message is sent. Exit 2 = block this message",
+  "settings.hooks.event.sessionStart": "When a session starts (and again after compaction). Output is given to the model as context; it can't block",
+  "settings.hooks.event.sessionEnd": "When a session ends: deleted (delete, runs before its files are removed) or the app quits (shutdown, at most 4 seconds in total). For cleanup; it can't block",
 
   "settings.remote.webNotice":
     "You're using Riot on this machine through the browser. Changes here apply to the host; turning the switch off will disconnect this page.",

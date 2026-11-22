@@ -608,6 +608,8 @@ pub struct Session {
     /// （见 [`AgentEvent::PromptWithdrawn`]）；关应用则什么都不该动 ——
     /// 用户下次打开必须还看得见自己发过什么。每轮起跑时清零。
     stopped_by_user: AtomicBool,
+    /// 这次内核运行里跑过至少一轮（见 [`Self::talked`]）。
+    talked: AtomicBool,
     /// 跑轮中用户插话的队列。入队与否的判定必须在 `running` 锁下做
     /// （见 [`Self::try_enqueue`]），否则消息会卡在一个没人 drain 的队列里。
     queue: Arc<HostInputQueue>,
@@ -1115,6 +1117,7 @@ impl Session {
             history: Mutex::new(Vec::new()),
             running: Mutex::new(None),
             stopped_by_user: AtomicBool::new(false),
+            talked: AtomicBool::new(false),
             queue: Arc::new(HostInputQueue::default()),
             tasks,
             sink,
@@ -1183,6 +1186,7 @@ impl Session {
             history: Mutex::new(Vec::new()),
             running: Mutex::new(None),
             stopped_by_user: AtomicBool::new(false),
+            talked: AtomicBool::new(false),
             queue: Arc::new(HostInputQueue::default()),
             tasks,
             sink,
@@ -3398,6 +3402,9 @@ impl Session {
         if let Some(note) = self.session_id_note() {
             out.push(UserContent::Attachment(note));
         }
+        if let Some(ctx) = self.session_start_context("startup").await {
+            out.push(UserContent::Attachment(ctx));
+        }
 
         // git 快照放这里而不是 system prompt：分支和工作区脏不脏是会变的，
         // 而 system prompt 是 prompt cache 的前缀 —— 把变化的东西写进去，
@@ -3409,6 +3416,54 @@ impl Session {
             }));
         }
         out
+    }
+
+    /// 这次内核运行里有没有跑过一轮。只是被点开看过历史的会话不算。
+    pub fn talked(&self) -> bool {
+        self.talked.load(Ordering::Relaxed)
+    }
+
+    /// 跑 SessionEnd hooks。只收尾：输出不进任何地方，block 只记日志。
+    pub async fn run_session_end(&self, reason: &str, transcript: Option<&std::path::Path>) {
+        let plugins = self.load_plugins().await;
+        crate::hooks::session_end_for(&self.cwd, self.id.as_str(), &plugins, reason, transcript)
+            .await;
+    }
+
+    /// 跑 SessionStart hooks，把输出收成一段给模型的上下文。
+    ///
+    /// 拦不住会话：exit 2 / block 只记日志 —— 用户已经发出了消息，
+    /// 一个检查脚本把整个会话挡在门外只会让人以为应用坏了。
+    async fn session_start_context(&self, source: &str) -> Option<Attachment> {
+        let plugins = self.load_plugins().await;
+        let engine = crate::hooks::HookEngine::load(&self.cwd, self.id.as_str(), &plugins);
+        if !engine.has_session_start() {
+            return None;
+        }
+        let texts: Vec<String> = engine
+            .session_start(source)
+            .await
+            .into_iter()
+            .filter_map(|o| match o {
+                crate::hooks::Outcome::Context { text } => Some(text),
+                crate::hooks::Outcome::Block { reason } => {
+                    tracing::warn!(%reason, "SessionStart hook 想阻断会话；它拦不住，只记日志");
+                    None
+                }
+                _ => None,
+            })
+            .filter(|t| !t.trim().is_empty())
+            .collect();
+        if texts.is_empty() {
+            return None;
+        }
+        tracing::info!(count = texts.len(), source, "注入 SessionStart hook 上下文");
+        Some(Attachment::SystemReminder {
+            text: format!(
+                "Context from the SessionStart hook ({source}):\n{}",
+                texts.join("\n\n")
+            ),
+        })
     }
 
     /// 「你是哪个会话」—— 历史会话回忆开着时，首条消息（和压缩后的续接
@@ -3743,6 +3798,11 @@ impl Session {
         // 会话 id 同理：首条消息被吞了，模型不再知道自己是哪个会话。
         if let Some(note) = self.session_id_note() {
             memory.push(note);
+        }
+        // SessionStart hook 同理：它给的是"开工前该知道的事"，开头被吞了
+        // 就重跑一次（source = compact，脚本可以据此给不同的内容）。
+        if let Some(ctx) = self.session_start_context("compact").await {
+            memory.push(ctx);
         }
         // git 快照同理，而且重注的这份是**新的** —— 压缩前的那几十轮里
         // 分支和工作区多半已经变了，照抄旧快照比不给还糟。
@@ -4424,6 +4484,8 @@ impl Session {
         cancel: CancellationToken,
         limits: TurnLimits,
     ) -> Result<Option<riot_protocol::event::TerminalReason>, UiError> {
+        // 这次运行里真的对话过（SessionEnd 的 shutdown 只对这些会话跑）。
+        self.talked.store(true, Ordering::Relaxed);
         #[cfg(test)]
         let built = match self.test_provider.get() {
             Some(p) => Ok(Arc::clone(p)),

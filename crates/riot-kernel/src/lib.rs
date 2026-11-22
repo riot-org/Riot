@@ -591,6 +591,50 @@ mod tests {
         assert_eq!(err["args"]["id"], "nope", "{out}");
     }
 
+    /// 删除会话时 SessionEnd（reason = delete）在删 transcript **之前**跑，
+    /// 脚本拿得到 reason 和 transcript 路径。
+    // 豁免理由：hook 是真实子进程，写的是真实文件，测试只能从磁盘上看结果。
+    #[cfg(unix)]
+    #[allow(clippy::disallowed_methods)]
+    #[tokio::test]
+    async fn 删除会话时跑_session_end_hook() {
+        let project = tempfile::tempdir().expect("项目目录");
+        let sessions = tempfile::tempdir().expect("会话目录");
+        let out = project.path().join("ended.json");
+        std::fs::create_dir_all(project.path().join(".riot")).expect("建 .riot");
+        std::fs::write(
+            project.path().join(".riot/hooks.json"),
+            serde_json::json!({
+                "SessionEnd": [{ "matcher": "delete", "hooks": [{
+                    "type": "command",
+                    "command": format!("cat > {}", out.display())
+                }]}]
+            })
+            .to_string(),
+        )
+        .expect("写 hooks.json");
+        let (out_tx, _rx) = mpsc::unbounded_channel();
+        let mgr = manager::SessionManager::new(
+            out_tx.clone(),
+            sessions.path().to_path_buf(),
+            bridge::HostBridge::new(out_tx),
+        );
+        let sid = mgr.create(project.path().to_path_buf()).await;
+        mgr.delete(sid.as_str()).await;
+
+        let got = std::fs::read_to_string(&out).expect("SessionEnd hook 应该跑过");
+        let v: Value = serde_json::from_str(&got).expect("stdin 是一行 JSON");
+        assert_eq!(v["hook_event_name"], "SessionEnd");
+        assert_eq!(v["reason"], "delete");
+        assert_eq!(v["session_id"], sid.as_str());
+        assert!(
+            v["transcript_path"]
+                .as_str()
+                .is_some_and(|p| p.ends_with(&format!("{}.jsonl", sid.as_str()))),
+            "{got}"
+        );
+    }
+
     /// 前端靠这个 false 收掉残留的忙碌（结束事件丢在了换订阅的缝里）。
     /// 回一个笼统的 ok 的话宿主只能当成"停到了"，界面就一直等 Done。
     #[tokio::test]

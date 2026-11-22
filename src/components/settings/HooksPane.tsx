@@ -15,6 +15,8 @@ const HOOK_EVENT_HINT: Record<string, MessageKey> = {
   PostToolUse: "settings.hooks.event.postToolUse",
   Stop: "settings.hooks.event.stop",
   UserPromptSubmit: "settings.hooks.event.userPromptSubmit",
+  SessionStart: "settings.hooks.event.sessionStart",
+  SessionEnd: "settings.hooks.event.sessionEnd",
 };
 
 export function HooksPane({ status, activeRoot }: { status: ConfigStatus; activeRoot: string | null }) {

@@ -97,6 +97,8 @@ export default {
   "settings.hooks.event.postToolUse": "도구 실행 후. 모델에 피드백 (형식 검사, lint)",
   "settings.hooks.event.stop": "모델이 마무리하려 할 때. exit 2 = 멈추지 않고 이유와 함께 한 턴 더 실행",
   "settings.hooks.event.userPromptSubmit": "메시지 전송 전. exit 2 = 이 메시지 차단",
+  "settings.hooks.event.sessionStart": "세션 시작 시(압축 후 다시 실행). 출력은 모델에 컨텍스트로 전달되며 차단할 수 없음",
+  "settings.hooks.event.sessionEnd": "세션 종료 시: 삭제(delete, 파일 삭제 전에 실행) 또는 앱 종료(shutdown, 종료 시 합계 최대 4초). 정리용이며 차단할 수 없음",
 
   "settings.remote.webNotice": "지금 웹 페이지를 통해 이 컴퓨터의 Riot에 접근하고 있습니다. 여기서 바꾼 내용은 호스트에 적용되며, 스위치를 끄면 현재 페이지의 연결이 끊어집니다.",
   "settings.remote.managed":
