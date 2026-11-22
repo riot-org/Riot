@@ -99,6 +99,8 @@ export default {
   "settings.hooks.event.userPromptSubmit": "訊息送出前。exit 2 = 攔下這則訊息",
   "settings.hooks.event.sessionStart": "工作階段開始時（壓縮後再跑一次）。輸出作為上下文交給模型，不能阻斷",
   "settings.hooks.event.sessionEnd": "工作階段結束時：刪除工作階段（delete，在刪檔前執行），或應用關閉（shutdown，關閉時合計最多等 4 秒）。用來收尾，不能阻斷",
+  "settings.hooks.untrusted": "未信任，不會執行",
+  "settings.hooks.untrusted.hint": "專案還沒被信任，這條 hook 不會執行。在對話輸入框上方的提示裡可以信任它。",
 
   "settings.remote.webNotice": "你正透過網頁存取這台機器上的 Riot。這裡的變更作用在主機上；關掉開關會讓目前頁面斷線。",
   "settings.remote.managed":

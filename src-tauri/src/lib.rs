@@ -387,6 +387,32 @@ async fn hooks_list(
     ))
 }
 
+
+/// 项目信任状态：信没信任、项目里带了哪些要信任才加载的配置。
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectTrust {
+    trusted: bool,
+    items: Vec<riot_kernel::trust::ProjectConfigItem>,
+}
+
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn project_trust_status(root: String) -> HostResult<ProjectTrust> {
+    let root = std::path::Path::new(&root);
+    Ok(ProjectTrust {
+        trusted: riot_kernel::trust::is_trusted(root),
+        items: riot_kernel::trust::project_config(root),
+    })
+}
+
+/// 用户在提示条上点了「信任」（或在设置里取消）。下一轮起生效 —— hooks、
+/// 技能、命令都是每轮现读的。
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn project_trust_set(root: String, trusted: bool) -> HostResult<()> {
+    riot_kernel::trust::set_trusted(std::path::Path::new(&root), trusted)
+        .map_err(|e| ui_error!("host.trust.failed"; e).into())
+}
+
 /// 设置页「记忆」：所有有记忆的项目，外加当前项目（即使还没有记忆）。
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1898,6 +1924,12 @@ pub fn start_background(state: &AppState) {
     // 定时任务的调度循环（20 秒一查）。调度权威在宿主，
     // 只在宿主运行时生效；错过的到点由启动对账收进补跑提示。
     schedule::spawn_ticker(state.clone());
+    // 项目信任清单的升级迁移：第一次运行带信任机制的版本时，把已经在用的
+    // 项目记为信任，否则老用户项目里的 hooks / 技能 / 命令会悄悄失效。
+    let s = state.clone();
+    ipc::spawn(async move {
+        riot_kernel::trust::migrate_existing(&s.config().await.projects);
+    });
     let s = state.clone();
     ipc::spawn(async move {
         // 先把旧的能力包目录迁成插件，再连 MCP：插件带的服务器由
@@ -2044,6 +2076,8 @@ pub fn run() {
             memory_list,
             memory_save,
             memory_delete,
+            project_trust_status,
+            project_trust_set,
             search_files,
             list_dir,
             schedule_list,

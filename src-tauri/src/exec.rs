@@ -69,6 +69,9 @@ OPTIONS:
     --provider ID        Provider id for --model [default: the active provider]
     --json               Print every event as one JSON object per line on stdout
     --timeout SECS       Give up after SECS seconds (exit 124)
+    --trust              Trust the project for this run: load its .riot/hooks.json,
+                         skills and commands. Without it, an untrusted project's own
+                         Riot config is skipped.
     -h, --help           Show this help
 
 EXIT CODES:
@@ -87,6 +90,7 @@ struct Options {
     provider: Option<String>,
     json: bool,
     timeout: Option<Duration>,
+    trust: bool,
 }
 
 fn parse_mode(s: &str) -> Result<PermissionMode, String> {
@@ -109,6 +113,7 @@ fn parse(args: Vec<String>) -> Result<Option<Options>, String> {
     let mut provider = None;
     let mut json = false;
     let mut timeout = None;
+    let mut trust = false;
     let mut it = args.into_iter();
     let mut rest_is_prompt = false;
     while let Some(a) = it.next() {
@@ -128,6 +133,7 @@ fn parse(args: Vec<String>) -> Result<Option<Options>, String> {
             "--model" => model = Some(value("--model")?),
             "--provider" => provider = Some(value("--provider")?),
             "--json" => json = true,
+            "--trust" => trust = true,
             "--timeout" => {
                 let v = value("--timeout")?;
                 let secs: u64 = v
@@ -179,6 +185,7 @@ fn parse(args: Vec<String>) -> Result<Option<Options>, String> {
         provider,
         json,
         timeout,
+        trust,
     }))
 }
 
@@ -205,6 +212,13 @@ pub fn main(args: Vec<String>) -> ExitCode {
     if opts.prompt.trim().is_empty() {
         eprintln!("riot-server exec: no prompt given\n\n{HELP}");
         return ExitCode::from(2);
+    }
+    if opts.trust {
+        // SAFETY: 这时还没有任何别的线程（runtime 在下面才建，init_process
+        // 也还没跑）。内核子进程继承环境，读到它就把这个目录当作信任。
+        unsafe {
+            std::env::set_var(riot_kernel::trust::ENV_VAR, &opts.cwd);
+        }
     }
     crate::init_process_stderr();
 
@@ -243,6 +257,15 @@ async fn run(state: AppState, opts: Options, sessions_dir: PathBuf) -> ExitCode 
     state.reconcile_mcp().await;
 
     let root = opts.cwd.display().to_string();
+    let untrusted = riot_kernel::trust::project_config(&opts.cwd);
+    if !opts.trust && !untrusted.is_empty() && !riot_kernel::trust::is_trusted(&opts.cwd) {
+        let what: Vec<&str> = untrusted.iter().map(|i| i.kind.as_str()).collect();
+        eprintln!(
+            "riot-server exec: this project has its own Riot config ({}) that is not loaded \
+             because the project is not trusted. Pass --trust to load it.",
+            what.join(", ")
+        );
+    }
     let info = match state.create_session(&root).await {
         Ok(i) => i,
         Err(e) => {

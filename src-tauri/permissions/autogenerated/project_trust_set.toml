@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-project-trust-set"
+description = "Enables the project_trust_set command without any pre-configured scope."
+commands.allow = ["project_trust_set"]
+
+[[permission]]
+identifier = "deny-project-trust-set"
+description = "Denies the project_trust_set command without any pre-configured scope."
+commands.deny = ["project_trust_set"]

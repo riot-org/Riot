@@ -196,6 +196,10 @@ pub async fn dispatch(
         )
         .await),
         "memory_delete" => ok(crate::memory_delete(a.take("key")?, a.take("name")?).await),
+        "project_trust_status" => ok(crate::project_trust_status(a.take("root")?).await),
+        "project_trust_set" => {
+            ok(crate::project_trust_set(a.take("root")?, a.take("trusted")?).await)
+        }
         "skills_list" => ok(crate::skills_list(st, a.take("root")?).await),
         "search_files" => {
             ok(

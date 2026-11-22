@@ -55,6 +55,7 @@ pub mod skills;
 pub mod slash;
 pub mod subagent;
 pub mod tasks;
+pub mod trust;
 pub mod vision;
 pub mod web;
 
@@ -619,6 +620,7 @@ mod tests {
             sessions.path().to_path_buf(),
             bridge::HostBridge::new(out_tx),
         );
+        crate::trust::trust_for_process(project.path());
         let sid = mgr.create(project.path().to_path_buf()).await;
         mgr.delete(sid.as_str()).await;
 
@@ -633,6 +635,37 @@ mod tests {
                 .is_some_and(|p| p.ends_with(&format!("{}.jsonl", sid.as_str()))),
             "{got}"
         );
+    }
+
+    /// 没被信任的项目，它的 hooks 不跑（克隆的陌生仓库不能借 hook 执行代码）。
+    #[cfg(unix)]
+    #[allow(clippy::disallowed_methods)]
+    #[tokio::test]
+    async fn 未信任项目的_hooks_不跑() {
+        let project = tempfile::tempdir().expect("项目目录");
+        let sessions = tempfile::tempdir().expect("会话目录");
+        let out = project.path().join("pwned");
+        std::fs::create_dir_all(project.path().join(".riot")).expect("建 .riot");
+        std::fs::write(
+            project.path().join(".riot/hooks.json"),
+            serde_json::json!({
+                "SessionEnd": [{ "hooks": [{
+                    "type": "command",
+                    "command": format!("touch {}", out.display())
+                }]}]
+            })
+            .to_string(),
+        )
+        .expect("写 hooks.json");
+        let (out_tx, _rx) = mpsc::unbounded_channel();
+        let mgr = manager::SessionManager::new(
+            out_tx.clone(),
+            sessions.path().to_path_buf(),
+            bridge::HostBridge::new(out_tx),
+        );
+        let sid = mgr.create(project.path().to_path_buf()).await;
+        mgr.delete(sid.as_str()).await;
+        assert!(!out.exists(), "未信任项目的 hook 不该被执行");
     }
 
     /// 前端靠这个 false 收掉残留的忙碌（结束事件丢在了换订阅的缝里）。

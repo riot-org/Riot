@@ -799,11 +799,37 @@ export interface HookInfo {
   /** `source === "plugin"` 时是插件 id。 */
   plugin?: string;
   error?: UiErrorPayload | null;
+  /** 项目级 hook，但项目没被信任：列出来，不会运行。 */
+  untrusted?: boolean;
 }
 
 /** hooks.json 里配了什么（含解析失败的文件）。 */
 export function hooksList(root: string | null): Promise<HookInfo[]> {
   return invoke<HookInfo[]>("hooks_list", { root });
+}
+
+
+/** 项目里一项要信任才加载的配置。 */
+export interface ProjectConfigItem {
+  /** `hooks` / `skills` / `commands`。 */
+  kind: string;
+  path: string;
+  count: number;
+}
+
+export interface ProjectTrust {
+  trusted: boolean;
+  items: ProjectConfigItem[];
+}
+
+/** 这个项目信没信任、带了哪些要信任才加载的配置。 */
+export function projectTrustStatus(root: string): Promise<ProjectTrust> {
+  return invoke<ProjectTrust>("project_trust_status", { root });
+}
+
+/** 信任 / 取消信任一个项目。下一轮起生效。 */
+export function projectTrustSet(root: string, trusted: boolean): Promise<void> {
+  return invoke<void>("project_trust_set", { root, trusted });
 }
 
 /** 一条自动记忆。 */

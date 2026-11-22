@@ -67,7 +67,7 @@ pub fn memory_dir(project_root: &Path) -> PathBuf {
 /// 同一个项目 —— 按 worktree 路径分开存的话，worktree 一删记忆就丢了。
 ///
 /// worktree 的 `.git` 是个文件：`gitdir: <主仓库>/.git/worktrees/<名字>`。
-fn main_checkout(root: &Path) -> PathBuf {
+pub(crate) fn main_checkout(root: &Path) -> PathBuf {
     let Ok(raw) = std::fs::read_to_string(root.join(".git")) else {
         return root.to_path_buf();
     };

@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useId, useRef, useState } from "react";
 
+import { TrustBanner } from "./TrustBanner";
 import {
   type BackgroundTaskView,
   clipboardPaths,
@@ -1338,6 +1339,8 @@ export function ComposerDock({
           <div className="drop-veil-card">{t("composer.drop.hint")}</div>
         </div>
       ) : null}
+
+      {!workspaceMissing ? <TrustBanner workspace={workspace} /> : null}
 
       {workspaceMissing ? (
         <button className="key-banner" onClick={onMissingWorkspace}>

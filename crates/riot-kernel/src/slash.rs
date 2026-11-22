@@ -118,7 +118,10 @@ pub fn discover(
     plugins: &[crate::plugins::Loaded],
 ) -> Vec<SlashCommand> {
     let mut out = builtin();
-    if let Some(root) = project_root {
+    // 项目命令要项目被信任才加载（见 crate::trust）。
+    if let Some(root) = project_root
+        && (!project_dir(root).is_dir() || crate::trust::allow_project_config(root, "commands"))
+    {
         scan(&project_dir(root), "project", None, &mut out);
     }
     scan(&global_dir(), "global", None, &mut out);
@@ -503,6 +506,8 @@ mod tests {
     fn 只有模型加载不了的技能才就地展开() {
         let t = tempfile::tempdir().expect("临时目录");
         let root = t.path();
+        // 项目级配置要项目被信任才加载；测试里只信任这个临时目录。
+        crate::trust::trust_for_process(root);
         let base = root.join(".riot/skills");
 
         for (name, front) in [
@@ -536,6 +541,8 @@ mod tests {
     fn 同名时斜杠命令压过技能() {
         let t = tempfile::tempdir().expect("临时目录");
         let root = t.path();
+        // 项目级配置要项目被信任才加载；测试里只信任这个临时目录。
+        crate::trust::trust_for_process(root);
 
         let sk = root.join(".riot/skills/dup");
         std::fs::create_dir_all(&sk).expect("建目录");
@@ -584,6 +591,8 @@ mod tests {
     fn 技能在命令清单里带着自己的层级() {
         let t = tempfile::tempdir().expect("临时目录");
         let root = t.path();
+        // 项目级配置要项目被信任才加载；测试里只信任这个临时目录。
+        crate::trust::trust_for_process(root);
         let dir = root.join(".riot/skills/mine");
         std::fs::create_dir_all(&dir).expect("建目录");
         std::fs::write(

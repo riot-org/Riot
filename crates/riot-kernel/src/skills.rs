@@ -193,7 +193,15 @@ pub fn project_dir(root: &Path) -> PathBuf {
 /// 软链在 Windows 上还要开开发者模式，而两者都会让"插件里有什么技能"和
 /// "全局目录里有什么"漂移。就地扫的话，装上即出现、卸掉即消失。
 pub fn discover(project_root: &Path, plugins: &[crate::plugins::Loaded]) -> Discovered {
-    discover_in(&project_dir(project_root), &global_dir(), plugins)
+    // 项目技能要项目被信任才加载（见 crate::trust）。不信任时指向一个不
+    // 存在的目录，其余（全局、插件、内置）照常。
+    let project = project_dir(project_root);
+    let project = if project.is_dir() && !crate::trust::allow_project_config(project_root, "skills") {
+        PathBuf::from("/nonexistent-untrusted-project-skills")
+    } else {
+        project
+    };
+    discover_in(&project, &global_dir(), plugins)
 }
 
 /// 没有活跃项目时（设置页）也要能列：全局 + 插件 + 内置。

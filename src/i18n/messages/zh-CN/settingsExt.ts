@@ -100,6 +100,8 @@ export default {
   "settings.hooks.event.userPromptSubmit": "消息发出前。exit 2 = 拦下这条消息",
   "settings.hooks.event.sessionStart": "会话开始时（压缩后再跑一次）。输出作为上下文交给模型，不能阻断",
   "settings.hooks.event.sessionEnd": "会话结束时：删除会话（delete，在删文件前跑），或应用关闭（shutdown，关闭时合计最多等 4 秒）。用来收尾，不能阻断",
+  "settings.hooks.untrusted": "未信任，不会运行",
+  "settings.hooks.untrusted.hint": "项目还没被信任，这条 hook 不会运行。在对话输入框上方的提示里可以信任它。",
 
   "settings.remote.webNotice": "你正通过网页访问这台机器上的 Riot。这里的改动作用在宿主机上；关掉开关会让当前页面断开。",
   "settings.remote.managed":

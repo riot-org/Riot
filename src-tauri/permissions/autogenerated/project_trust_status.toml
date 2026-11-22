@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-project-trust-status"
+description = "Enables the project_trust_status command without any pre-configured scope."
+commands.allow = ["project_trust_status"]
+
+[[permission]]
+identifier = "deny-project-trust-status"
+description = "Denies the project_trust_status command without any pre-configured scope."
+commands.deny = ["project_trust_status"]

@@ -14512,3 +14512,39 @@ button.ctx-cat-line:focus-visible {
     height: 36px;
   }
 }
+
+/* 项目信任提示：和 key-banner 同一套警示色，可展开看清单再决定。 */
+.trust-banner {
+  padding: 0;
+  text-align: left;
+}
+.trust-banner-head {
+  display: block;
+  width: 100%;
+  padding: 8px 14px;
+  background: none;
+  border: none;
+  color: inherit;
+  text-align: center;
+  cursor: pointer;
+}
+.trust-banner-body {
+  padding: 0 14px 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.trust-banner-body p {
+  margin: 0 0 6px;
+}
+.trust-banner-body ul {
+  margin: 0 0 8px;
+  padding-left: 18px;
+}
+.trust-banner-body code {
+  overflow-wrap: anywhere;
+}
+.trust-banner-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}

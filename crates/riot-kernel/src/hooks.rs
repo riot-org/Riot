@@ -154,12 +154,16 @@ pub struct HookInfo {
     /// 配置文件级的问题（这条不是 hook，是一条错误提示）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<UiError>,
+    /// 项目级 hook，但项目没被信任 —— 列出来，但不会运行（见 [`crate::trust`]）。
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub untrusted: bool,
 }
 
 /// 设置页的 hooks 清单：各层配置里配了什么，加上解析失败的文件。
 pub fn list(project_root: Option<&Path>, plugins: &[crate::plugins::Loaded]) -> Vec<HookInfo> {
     let mut problems = Vec::new();
     let mut out = Vec::new();
+    let project_untrusted = project_root.is_some_and(|r| !crate::trust::is_trusted(r));
     let mut take = |f: HooksFile, source: &str, plugin: Option<&str>| {
         for (event, groups) in [
             ("PreToolUse", f.pre_tool_use),
@@ -182,6 +186,7 @@ pub fn list(project_root: Option<&Path>, plugins: &[crate::plugins::Loaded]) -> 
                         source: source.to_owned(),
                         plugin: plugin.map(str::to_owned),
                         error: None,
+                        untrusted: source == "project" && project_untrusted,
                     });
                 }
             }
@@ -206,6 +211,7 @@ pub fn list(project_root: Option<&Path>, plugins: &[crate::plugins::Loaded]) -> 
         source: "global".into(),
         plugin: None,
         error: Some(p.reason),
+        untrusted: false,
     }));
     out
 }
@@ -243,6 +249,24 @@ pub fn global_path() -> PathBuf {
         .parent()
         .unwrap_or(Path::new("."))
         .join("hooks.json")
+}
+
+/// 一份 hooks.json 里配了几条 hook（信任提示里报数用）。坏文件算 0。
+pub fn count_in_file(path: &Path) -> usize {
+    let mut problems = Vec::new();
+    let f = load_file(path, &mut problems);
+    [
+        &f.pre_tool_use,
+        &f.post_tool_use,
+        &f.stop,
+        &f.user_prompt_submit,
+        &f.session_start,
+        &f.session_end,
+    ]
+    .iter()
+    .flat_map(|groups| groups.iter())
+    .map(|g| g.hooks.len())
+    .sum()
 }
 
 /// 项目级 hooks.json 的路径。
@@ -359,7 +383,15 @@ impl HookEngine {
     pub fn load(cwd: &Path, session_id: &str, plugins: &[crate::plugins::Loaded]) -> Self {
         let mut problems = Vec::new();
         let global = load_file(&global_path(), &mut problems);
-        let project = load_file(&project_path(cwd), &mut problems);
+        // 项目级 hooks 是仓库作者写的、会被直接执行的命令：项目没被信任
+        // 就不加载（见 crate::trust）。
+        let project = if project_path(cwd).is_file()
+            && !crate::trust::allow_project_config(cwd, "hooks")
+        {
+            HooksFile::default()
+        } else {
+            load_file(&project_path(cwd), &mut problems)
+        };
         let mut cfg = merge(global, project);
         for p in plugins {
             cfg = merge(cfg, plugin_hooks(p, &mut problems));

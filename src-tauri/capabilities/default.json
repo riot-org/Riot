@@ -122,6 +122,8 @@
     "allow-memory-list",
     "allow-memory-save",
     "allow-memory-delete",
+    "allow-project-trust-status",
+    "allow-project-trust-set",
     "allow-search-files",
     "allow-list-dir",
     "allow-schedule-list",
