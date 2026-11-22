@@ -1,0 +1,5 @@
+{
+  "prompt": "stats.mean 和 stats.median 遇到空列表会崩溃。按它们 docstring 的约定修好，顺便确认 median 对偶数个元素也是对的。",
+  "check": "python3 -m unittest -q test_check",
+  "timeout": 300
+}

@@ -1,0 +1,5 @@
+{
+  "prompt": "reader.read_rows 遇到带引号、里面有逗号的字段会切错，而且在 Windows 上中文会乱码。改成用标准库正确解析，并且固定按 UTF-8 读。",
+  "check": "python3 -m unittest -q test_check",
+  "timeout": 300
+}

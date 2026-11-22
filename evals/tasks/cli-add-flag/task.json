@@ -1,0 +1,5 @@
+{
+  "prompt": "给 cli.py 加一个 --shout 开关：打开时问候语全大写，并且结尾是一个感叹号（不是句号）。不加时行为不变。",
+  "check": "python3 -m unittest -q test_check",
+  "timeout": 300
+}

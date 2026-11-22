@@ -1,0 +1,5 @@
+{
+  "prompt": "实现 text.py 里的 slugify，规则见它的 docstring。",
+  "check": "python3 -m unittest -q test_check",
+  "timeout": 300
+}

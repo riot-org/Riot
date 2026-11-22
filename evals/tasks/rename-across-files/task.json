@@ -1,0 +1,5 @@
+{
+  "prompt": "把 calc_total 重命名为 compute_total，所有定义、导入和调用处一起改，不要留旧名字的兼容别名。",
+  "check": "python3 -m unittest -q test_check",
+  "timeout": 300
+}

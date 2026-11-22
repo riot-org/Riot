@@ -1,0 +1,5 @@
+{
+  "prompt": "pagination.page() 返回的每一页都少一个元素，修好它。",
+  "check": "python3 -m unittest -q test_check",
+  "timeout": 300
+}

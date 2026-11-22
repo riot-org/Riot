@@ -1,0 +1,5 @@
+{
+  "prompt": "create_user 要加校验：name 去掉首尾空白后不能为空（存去掉空白后的值）；age 必须是 0 到 150 之间的整数，bool 不算整数。不合法时抛 ValueError。",
+  "check": "python3 -m unittest -q test_check",
+  "timeout": 300
+}

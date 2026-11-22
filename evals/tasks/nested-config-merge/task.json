@@ -1,0 +1,5 @@
+{
+  "prompt": "load_settings({'db': {'port': 6000}}) 之后 db 的 host 丢了，其它默认值也有同样问题。修好它：用户配置应该只覆盖它写了的那些键。",
+  "check": "python3 -m unittest -q test_check",
+  "timeout": 300
+}
