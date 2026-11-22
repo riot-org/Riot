@@ -14560,3 +14560,17 @@ code.env-fix {
   user-select: all;
   white-space: nowrap;
 }
+
+/* 模型单价：三格并排，每格上面一行小标签。 */
+.price-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.price-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+}

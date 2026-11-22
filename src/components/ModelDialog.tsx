@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import {
   type ModelConfig,
+  type ModelPrice,
   type ProviderConfig,
   type Sampling,
   testConnection,
@@ -53,6 +54,9 @@ export function ModelDialog({
   const [name, setName] = useState(model?.name ?? "");
   const [vision, setVision] = useState(model?.vision ?? false);
   const [ctxWindow, setCtxWindow] = useState(model?.contextWindow?.toString() ?? "");
+  const [priceIn, setPriceIn] = useState(model?.price?.input.toString() ?? "");
+  const [priceOut, setPriceOut] = useState(model?.price?.output.toString() ?? "");
+  const [priceCache, setPriceCache] = useState(model?.price?.cacheRead?.toString() ?? "");
   // 数字字段走字符串草稿:输入过程中会经过 "0."、"-" 这种还不是合法数字的
   // 中间态，直接绑成 number 的话那些字符会被吃掉，表现是"打不出小数点"。
   const [samp, setSamp] = useState<SamplingDraft>(() => samplingDraft(model?.sampling ?? {}));
@@ -74,9 +78,23 @@ export function ModelDialog({
     return Math.min(Math.max(n, MIN_CONTEXT_WINDOW), MAX_CONTEXT_WINDOW);
   };
 
+  /** 输入、输出两项都填了才算配了单价；缓存价可选。 */
+  const price = (): ModelPrice | undefined => {
+    const num = (s: string) => {
+      const n = Number.parseFloat(s.trim());
+      return Number.isFinite(n) && n >= 0 ? n : undefined;
+    };
+    const input = num(priceIn);
+    const output = num(priceOut);
+    if (input === undefined || output === undefined) return undefined;
+    const cacheRead = num(priceCache);
+    return cacheRead === undefined ? { input, output } : { input, output, cacheRead };
+  };
+
   const save = () => {
     if (!trimmedId || duplicate) return;
     const win = contextWindow();
+    const p = price();
     onSave({
       id: trimmedId,
       name: name.trim(),
@@ -84,6 +102,7 @@ export function ModelDialog({
       // 没填就整个不带这个键（`exactOptionalPropertyTypes`），跟宿主侧
       // `skip_serializing_if` 对上 —— 存量配置不会平白多出一堆 null。
       ...(win === undefined ? {} : { contextWindow: win }),
+      ...(p === undefined ? {} : { price: p }),
       sampling: sampling(),
     });
     onClose();
@@ -184,6 +203,25 @@ export function ModelDialog({
             />
           </div>
           <p className="hint model-dialog-note">{windowNote}</p>
+
+          <h3 className="model-dialog-section">
+            {t("composer.modelDialog.price")}
+            <HintTip>{t("composer.modelDialog.price.hint")}</HintTip>
+          </h3>
+          <div className="price-row">
+            <label>
+              {t("composer.modelDialog.price.input")}
+              <FieldNumber value={priceIn} onChange={(e) => setPriceIn(e.target.value)} placeholder="—" />
+            </label>
+            <label>
+              {t("composer.modelDialog.price.output")}
+              <FieldNumber value={priceOut} onChange={(e) => setPriceOut(e.target.value)} placeholder="—" />
+            </label>
+            <label>
+              {t("composer.modelDialog.price.cache")}
+              <FieldNumber value={priceCache} onChange={(e) => setPriceCache(e.target.value)} placeholder="—" />
+            </label>
+          </div>
 
           <h3 className="model-dialog-section">
             {t("composer.sampling.title")}

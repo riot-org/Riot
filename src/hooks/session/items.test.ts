@@ -97,7 +97,7 @@ describe("applyMessage", () => {
   it("completes a streamed tool card in place and accumulates usage", () => {
     const s = state({
       items: [tool("t1", { output: ["line"] })],
-      tokens: { input: 10, output: 5, context: 15 },
+      tokens: { input: 10, output: 5, context: 15, cacheRead: 0 },
     });
     const out = applyMessage(s, {
       type: "message",
@@ -108,21 +108,21 @@ describe("applyMessage", () => {
     });
     expect(out.items).toHaveLength(1);
     expect(out.items[0]).toMatchObject({ input: { command: "ls" }, output: ["line"], status: "running" });
-    expect(out.tokens).toEqual({ input: 130, output: 12, context: 127 });
+    expect(out.tokens).toEqual({ input: 130, output: 12, context: 127, cacheRead: 20 });
   });
 });
 
 describe("applyCompacted", () => {
   it("drops context usage to the post-compaction size right away, keeping session totals", () => {
-    const s = state({ compacting: true, tokens: { input: 74_300_000, output: 177_200, context: 360_600 } });
+    const s = state({ compacting: true, tokens: { input: 74_300_000, output: 177_200, context: 360_600, cacheRead: 0 } });
     const out = applyCompacted(s, 42_000, "compact-1");
     expect(out.compacting).toBe(false);
-    expect(out.tokens).toEqual({ input: 74_300_000, output: 177_200, context: 42_000 });
+    expect(out.tokens).toEqual({ input: 74_300_000, output: 177_200, context: 42_000, cacheRead: 0 });
     expect(out.items.at(-1)).toEqual({ kind: "compact", id: "compact-1" });
   });
 
   it("keeps the old figure when the kernel reports no size", () => {
-    const s = state({ tokens: { input: 10, output: 5, context: 15 } });
+    const s = state({ tokens: { input: 10, output: 5, context: 15, cacheRead: 0 } });
     expect(applyCompacted(s, 0, "c").tokens.context).toBe(15);
   });
 });
@@ -279,5 +279,16 @@ describe("upsertTask", () => {
     const b = { id: "b", status: "running" } as BackgroundTaskView;
     const a2 = { id: "a", status: "completed" } as BackgroundTaskView;
     expect(upsertTask(upsertTask([a], b), a2)).toEqual([a2, b]);
+  });
+});
+
+describe("estimateCost", () => {
+  it("prices cached input separately and falls back to the input price", async () => {
+    const { estimateCost } = await import("../../bridge");
+    const totals = { input: 1_000_000, output: 500_000, cacheRead: 400_000 };
+    // 60 万普通输入 × 2 + 40 万缓存 × 0.5 + 50 万输出 × 8
+    expect(estimateCost(totals, { input: 2, output: 8, cacheRead: 0.5 })).toBeCloseTo(1.2 + 0.2 + 4);
+    // 没填缓存价：按普通输入算
+    expect(estimateCost(totals, { input: 2, output: 8 })).toBeCloseTo(2 + 4);
   });
 });

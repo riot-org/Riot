@@ -109,7 +109,7 @@ describe("applyHistorySnap", () => {
     expect(out.busy).toBe(false);
     expect(out.streaming).toBe("");
     expect(out.items.map((it) => it.kind)).toEqual(["user", "thinking", "assistant", "tool"]);
-    expect(out.tokens).toEqual({ input: 10, output: 3, context: 13 });
+    expect(out.tokens).toEqual({ input: 10, output: 3, context: 13, cacheRead: 0 });
   });
 
   it("busy snapshot keeps live tool output and does not mark running tools unfinished", () => {

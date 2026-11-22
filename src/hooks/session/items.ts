@@ -346,6 +346,7 @@ export function applyMessage(s: SessionState, event: Extract<AgentEvent, { type:
           input: s.tokens.input + u.input_tokens + u.cache_read_tokens + u.cache_creation_tokens,
           output: s.tokens.output + u.output_tokens,
           context: contextOf(u),
+          cacheRead: s.tokens.cacheRead + u.cache_read_tokens,
         }
       : s.tokens;
     return { ...s, items, streaming: "", thinking: "", tokens };
@@ -584,9 +585,15 @@ export function findLast<T>(arr: T[], pred: (x: T) => boolean): number {
 }
 
 /** 重建历史时恢复用量，和实时路径的口径一致。 */
-export function sumUsage(msgs: Message[]): { input: number; output: number; context: number } {
+export function sumUsage(msgs: Message[]): {
+  input: number;
+  output: number;
+  context: number;
+  cacheRead: number;
+} {
   let input = 0;
   let output = 0;
+  let cacheRead = 0;
   // 每遇到一条就整个覆盖，循环结束后剩的就是最后一条 —— 那一次请求发出去
   // 的量就是此刻上下文的真实大小（服务方报的数，不是估的）。
   let context = 0;
@@ -594,10 +601,11 @@ export function sumUsage(msgs: Message[]): { input: number; output: number; cont
     if (m.role === "assistant" && m.usage) {
       input += m.usage.input_tokens + m.usage.cache_read_tokens + m.usage.cache_creation_tokens;
       output += m.usage.output_tokens;
+      cacheRead += m.usage.cache_read_tokens;
       context = contextOf(m.usage);
     }
   }
-  return { input, output, context };
+  return { input, output, context, cacheRead };
 }
 
 /** 一次请求占了多少上下文：发进去的（含命中缓存的）加上吐出来的。 */

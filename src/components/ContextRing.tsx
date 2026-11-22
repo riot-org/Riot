@@ -21,6 +21,7 @@ import { useEffect, useRef, useState } from "react";
 import { type ContextBreakdown, sessionContextBreakdown } from "../bridge";
 import { useT } from "../i18n";
 import { type ContextRow, type ContextRowKey, layoutBreakdown } from "../lib/contextBreakdown";
+import { type ModelPrice, estimateCost } from "../bridge";
 import { fmtTokens } from "../lib/contextWindow";
 import { useDropdown } from "./pickers";
 
@@ -58,6 +59,7 @@ export function ContextRing({
   threshold,
   totals,
   window: contextWindow,
+  price,
 }: {
   /** 明细按会话查。 */
   sessionId: string;
@@ -66,7 +68,9 @@ export function ContextRing({
   /** 到这个数就自动压缩。 */
   threshold: number;
   /** 本会话累计，明细里显示。 */
-  totals: { input: number; output: number };
+  totals: { input: number; output: number; cacheRead: number };
+  /** 当前模型配了单价时，估算这个会话花了多少。 */
+  price?: ModelPrice;
   /** 这个模型配的窗口，百分比和进度条的分母。没配就用 `threshold`。 */
   window?: number;
 }) {
@@ -222,6 +226,20 @@ export function ContextRing({
                 ↑{fmtTokens(totals.input)} ↓{fmtTokens(totals.output)}
               </dd>
             </div>
+            {totals.cacheRead > 0 ? (
+              <div className="ctx-row">
+                <dt>{t("app.ctx.cacheRead")}</dt>
+                <dd>
+                  {fmtTokens(totals.cacheRead)} ({Math.round((100 * totals.cacheRead) / Math.max(1, totals.input))}%)
+                </dd>
+              </div>
+            ) : null}
+            {price ? (
+              <div className="ctx-row" title={t("app.ctx.cost.hint")}>
+                <dt>{t("app.ctx.cost")}</dt>
+                <dd>≈ {estimateCost(totals, price).toFixed(estimateCost(totals, price) < 1 ? 4 : 2)}</dd>
+              </div>
+            ) : null}
           </dl>
           {detail === undefined ? <p className="ctx-loading">{t("app.ctx.loading")}</p> : null}
           {layout ? (

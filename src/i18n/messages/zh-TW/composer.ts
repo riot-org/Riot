@@ -70,6 +70,11 @@ export default {
   "composer.model.noMatch": "沒有符合的模型",
   "composer.model.vision": "可接收圖片",
   "composer.contextWindow": "上下文視窗",
+  "composer.modelDialog.price": "單價（可選）",
+  "composer.modelDialog.price.hint": "每百萬 token 的價格，幣別隨你。填了輸入和輸出兩項，上下文圓環裡就會顯示這個工作階段的估算花費。",
+  "composer.modelDialog.price.input": "輸入",
+  "composer.modelDialog.price.output": "輸出",
+  "composer.modelDialog.price.cache": "快取命中",
   "composer.contextWindow.followSettings": "跟隨設定",
 
   "composer.handoff": "移至背景",

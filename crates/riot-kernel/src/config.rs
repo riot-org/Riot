@@ -166,6 +166,21 @@ pub struct ModelConfig {
     /// 连 provider 的值也不要，一个都不发。
     #[serde(default, skip_serializing_if = "Sampling::is_empty")]
     pub sampling: Sampling,
+    /// 用户填的单价（每百万 token），界面据此估算会话花费。内核不读它 ——
+    /// 放在这里只是为了配置往返时不丢（宿主按这个类型读写 config.json）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price: Option<ModelPrice>,
+}
+
+/// 每百万 token 的单价。币种由用户自己定（填人民币就按人民币算）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelPrice {
+    pub input: f64,
+    pub output: f64,
+    /// 命中缓存的输入。没填按普通输入算。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read: Option<f64>,
 }
 
 impl ModelConfig {
@@ -176,6 +191,7 @@ impl ModelConfig {
             vision: false,
             context_window: None,
             sampling: Sampling::default(),
+            price: None,
         }
     }
 
@@ -208,6 +224,8 @@ impl<'de> Deserialize<'de> for ModelConfig {
             context_window: Option<u32>,
             #[serde(default)]
             sampling: Sampling,
+            #[serde(default)]
+            price: Option<ModelPrice>,
         }
 
         #[derive(Deserialize)]
@@ -226,6 +244,7 @@ impl<'de> Deserialize<'de> for ModelConfig {
                 vision: f.vision,
                 context_window: f.context_window,
                 sampling: f.sampling,
+                price: f.price,
             },
         })
     }
@@ -2416,6 +2435,23 @@ mod tests {
     ///
     /// `[约束]` 这条盯的就是智谱那个 400:同一家的 glm-4.6v 能看图、
     /// glm-5.2 不能，按服务方算的话后者也会被当成能看图。
+    #[test]
+    fn 模型单价往返不丢() {
+        // ModelConfig 是手写反序列化：新字段忘了接，保存一次配置就会把用户
+        // 填的单价悄悄抹掉。
+        let raw = serde_json::json!({
+            "id": "m", "price": { "input": 2.0, "output": 8.0, "cacheRead": 0.5 }
+        });
+        let m: ModelConfig = serde_json::from_value(raw.clone()).expect("能读");
+        assert_eq!(
+            m.price,
+            Some(ModelPrice { input: 2.0, output: 8.0, cache_read: Some(0.5) })
+        );
+        assert_eq!(serde_json::to_value(&m).expect("能写")["price"], raw["price"]);
+        let bare: ModelConfig = serde_json::from_value(serde_json::json!({ "id": "m" })).unwrap();
+        assert!(serde_json::to_value(&bare).unwrap().get("price").is_none(), "没填就不写");
+    }
+
     #[test]
     fn 同一家里能看图和不能看图的模型互不影响() {
         let mut c = one_provider();

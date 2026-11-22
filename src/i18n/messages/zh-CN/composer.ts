@@ -71,6 +71,11 @@ export default {
   "composer.model.noMatch": "没有匹配的模型",
   "composer.model.vision": "能收图片",
   "composer.contextWindow": "上下文窗口",
+  "composer.modelDialog.price": "单价（可选）",
+  "composer.modelDialog.price.hint": "每百万 token 的价格，币种随你。填了输入和输出两项，上下文圆环里就会显示这个会话的估算花费。",
+  "composer.modelDialog.price.input": "输入",
+  "composer.modelDialog.price.output": "输出",
+  "composer.modelDialog.price.cache": "缓存命中",
   "composer.contextWindow.followSettings": "跟随设置",
 
   "composer.handoff": "转到后台",

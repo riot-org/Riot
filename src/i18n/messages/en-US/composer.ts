@@ -73,6 +73,11 @@ export default {
   "composer.model.noMatch": "No matching models",
   "composer.model.vision": "Accepts images",
   "composer.contextWindow": "Context window",
+  "composer.modelDialog.price": "Price (optional)",
+  "composer.modelDialog.price.hint": "Price per million tokens, in any currency. With input and output filled in, the context ring shows this session's estimated cost.",
+  "composer.modelDialog.price.input": "Input",
+  "composer.modelDialog.price.output": "Output",
+  "composer.modelDialog.price.cache": "Cached input",
   "composer.contextWindow.followSettings": "Follow settings",
 
   "composer.handoff": "Move to background",

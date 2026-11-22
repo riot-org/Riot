@@ -72,6 +72,11 @@ export default {
   "composer.model.noMatch": "일치하는 모델이 없습니다",
   "composer.model.vision": "이미지 입력 가능",
   "composer.contextWindow": "컨텍스트 윈도우",
+  "composer.modelDialog.price": "단가(선택)",
+  "composer.modelDialog.price.hint": "100만 토큰당 가격(통화 자유). 입력과 출력을 채우면 컨텍스트 링에 이 세션의 예상 비용이 표시됩니다.",
+  "composer.modelDialog.price.input": "입력",
+  "composer.modelDialog.price.output": "출력",
+  "composer.modelDialog.price.cache": "캐시 입력",
   "composer.contextWindow.followSettings": "설정을 따름",
 
   "composer.handoff": "백그라운드로 이동",

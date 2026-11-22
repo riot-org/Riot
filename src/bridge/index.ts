@@ -298,6 +298,27 @@ export interface ModelConfig {
   contextWindow?: number;
   /** 这个模型的采样参数。空字段继承 provider 的。 */
   sampling?: Sampling;
+  /** 单价（每百万 token），用来估算会话花费。币种由用户自己定。 */
+  price?: ModelPrice;
+}
+
+export interface ModelPrice {
+  input: number;
+  output: number;
+  /** 命中缓存的输入。没填按普通输入算。 */
+  cacheRead?: number;
+}
+
+/**
+ * 按单价估算花费。`input` 含命中缓存的部分，`cacheRead` 单独按缓存价算。
+ */
+export function estimateCost(
+  t: { input: number; output: number; cacheRead: number },
+  p: ModelPrice,
+): number {
+  const fresh = Math.max(0, t.input - t.cacheRead);
+  const cachePrice = p.cacheRead ?? p.input;
+  return (fresh * p.input + t.cacheRead * cachePrice + t.output * p.output) / 1_000_000;
 }
 
 /** 联网能力。抓取和搜索分开开关。 */

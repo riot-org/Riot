@@ -70,6 +70,11 @@ export default {
   "composer.model.noMatch": "一致するモデルがありません",
   "composer.model.vision": "画像対応",
   "composer.contextWindow": "コンテキストウィンドウ",
+  "composer.modelDialog.price": "単価（任意）",
+  "composer.modelDialog.price.hint": "100 万トークンあたりの価格（通貨は任意）。入力と出力を入れると、コンテキストリングにこのセッションの推定コストが表示されます。",
+  "composer.modelDialog.price.input": "入力",
+  "composer.modelDialog.price.output": "出力",
+  "composer.modelDialog.price.cache": "キャッシュ入力",
   "composer.contextWindow.followSettings": "設定に従う",
 
   "composer.handoff": "バックグラウンドへ",

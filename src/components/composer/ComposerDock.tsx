@@ -192,7 +192,7 @@ export function ComposerDock({
   hostMode: { mode: PermissionMode; seq: number } | null;
   /** 宿主侧这个会话的多任务开关。 */
   initialMultitask?: boolean;
-  tokens: { input: number; output: number; context: number };
+  tokens: { input: number; output: number; context: number; cacheRead: number };
   /** 排队面板：跑轮中发的、还没注入对话的插话。 */
   queued: QueuedItem[];
   onQueueDelete: (id: string) => void;
@@ -1749,7 +1749,8 @@ export function ComposerDock({
                 sessionId={sessionId}
                 used={tokens.context}
                 threshold={compactAt}
-                totals={{ input: tokens.input, output: tokens.output }}
+                totals={{ input: tokens.input, output: tokens.output, cacheRead: tokens.cacheRead }}
+                {...(activeModelCfg?.price ? { price: activeModelCfg.price } : {})}
                 {...(activeModelCfg?.contextWindow
                   ? { window: activeModelCfg.contextWindow }
                   : {})}

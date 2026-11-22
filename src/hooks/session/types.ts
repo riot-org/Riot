@@ -157,7 +157,8 @@ export interface SessionState {
    * 两个口径混用会让人以为"聊了半天上下文才用了 5%"（累计 ÷ 窗口），
    * 或者"压缩完怎么还是这么多"（快照当累计看）。
    */
-  tokens: { input: number; output: number; context: number };
+  /** `cacheRead` 是 `input` 里命中缓存的那部分（单独算钱，通常便宜得多）。 */
+  tokens: { input: number; output: number; context: number; cacheRead: number };
   /**
    * 宿主主动切换的权限模式（批准计划时用户选的执行档）。null = 没发生过。
    * Composer 靠它同步显示 —— 不同步的话界面还写着「规划模式」，
@@ -212,7 +213,7 @@ export const EMPTY_STATE: SessionState = {
   compacting: false,
   reconnect: null,
   asks: [],
-  tokens: { input: 0, output: 0, context: 0 },
+  tokens: { input: 0, output: 0, context: 0, cacheRead: 0 },
   hostMode: null,
   queued: [],
   withdrawn: null,
