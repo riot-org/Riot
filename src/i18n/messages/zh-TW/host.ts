@@ -7,6 +7,7 @@ export default {
   "host.kernel.restartExhausted": "核心連續當掉 {count} 次，已停止重新啟動。",
   "host.kernel.timeout": "核心沒有及時回應：{method}",
   "host.kernel.io": "和核心通訊失敗。",
+  "host.memory.failed": "記憶沒能保存：{detail}",
   "host.kernel.rpc": "核心回傳了錯誤。",
   "host.kernel.unexpectedReply": "核心對 {method} 回了意外形狀的回應。",
   "host.kernel.gone": "核心程序意外結束，這一輪的執行狀態已遺失。下一則訊息會自動重新啟動核心。",

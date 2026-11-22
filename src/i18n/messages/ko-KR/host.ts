@@ -7,6 +7,7 @@ export default {
   "host.kernel.restartExhausted": "커널이 {count}회 연속 충돌하여 재시작을 중단했습니다.",
   "host.kernel.timeout": "커널이 제때 응답하지 않았습니다: {method}",
   "host.kernel.io": "커널과 통신할 수 없습니다.",
+  "host.memory.failed": "기억을 저장하지 못했습니다: {detail}",
   "host.kernel.rpc": "커널이 오류를 반환했습니다.",
   "host.kernel.unexpectedReply": "커널이 {method}에 예상과 다른 형태의 응답을 보냈습니다.",
   "host.kernel.gone": "커널 프로세스가 예기치 않게 종료되어 이 턴의 실행 상태가 사라졌습니다. 다음 메시지를 보내면 커널이 자동으로 다시 시작됩니다.",

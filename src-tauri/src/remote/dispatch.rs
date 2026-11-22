@@ -185,6 +185,17 @@ pub async fn dispatch(
             )
         }
         "hooks_list" => ok(crate::hooks_list(st, a.take("root")?).await),
+        "memory_list" => ok(crate::memory_list(a.take("root")?).await),
+        "memory_save" => ok(crate::memory_save(
+            a.take("root")?,
+            a.take("key")?,
+            a.take("name")?,
+            a.take("kind")?,
+            a.take("description")?,
+            a.take("body")?,
+        )
+        .await),
+        "memory_delete" => ok(crate::memory_delete(a.take("key")?, a.take("name")?).await),
         "skills_list" => ok(crate::skills_list(st, a.take("root")?).await),
         "search_files" => {
             ok(

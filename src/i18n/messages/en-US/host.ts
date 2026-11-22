@@ -7,6 +7,7 @@ export default {
   "host.kernel.restartExhausted": "The kernel crashed {count} times in a row; restarts have been stopped.",
   "host.kernel.timeout": "The kernel did not respond in time: {method}",
   "host.kernel.io": "Failed to communicate with the kernel.",
+  "host.memory.failed": "Could not save the memory: {detail}",
   "host.kernel.rpc": "The kernel returned an error.",
   "host.kernel.unexpectedReply": "The kernel replied to {method} with an unexpected shape.",
   "host.kernel.gone": "The kernel process exited unexpectedly; this turn's state is lost. The next message will restart the kernel automatically.",

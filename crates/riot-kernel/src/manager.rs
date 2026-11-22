@@ -449,6 +449,10 @@ impl SessionManager {
         // 代码智能。永远注册（没装服务器时调用会明说怎么装），追加在
         // 末尾不动前缀。
         extra_tools.push(crate::code_intel::tool());
+        // 自动记忆：按项目分目录（worktree 归主仓库）。
+        extra_tools.push(Arc::new(crate::auto_memory::MemoryTool::for_project(
+            &session.cwd,
+        )));
         let plugins = session.load_plugins().await;
         let skills = crate::skills::discover(&session.cwd, &plugins);
         let model_cards = skills.model_cards();

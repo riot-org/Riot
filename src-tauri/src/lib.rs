@@ -386,6 +386,60 @@ async fn hooks_list(
     ))
 }
 
+/// 设置页「记忆」：所有有记忆的项目，外加当前项目（即使还没有记忆）。
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryOverview {
+    /// 当前会话项目对应的 key；没有活跃会话时为 None。
+    current_key: Option<String>,
+    projects: Vec<riot_kernel::auto_memory::ProjectMemoryView>,
+}
+
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn memory_list(root: Option<String>) -> HostResult<MemoryOverview> {
+    use riot_kernel::auto_memory as am;
+    let current_key = root.as_deref().map(|r| am::project_key(std::path::Path::new(r)));
+    let mut projects = am::list_projects();
+    if let Some(key) = &current_key
+        && !projects.iter().any(|p| &p.key == key)
+        && let Some(mut v) = am::project_view(key)
+    {
+        v.root = v.root.or(root);
+        projects.insert(0, v);
+    }
+    Ok(MemoryOverview {
+        current_key,
+        projects,
+    })
+}
+
+/// 新建或改写一条记忆。`root` 是当前项目根（补 project.json 用）。
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn memory_save(
+    root: Option<String>,
+    key: String,
+    name: String,
+    kind: String,
+    description: String,
+    body: String,
+) -> HostResult<()> {
+    riot_kernel::auto_memory::save_from_ui(
+        &key,
+        root.as_deref().map(std::path::Path::new),
+        &name,
+        &kind,
+        &description,
+        &body,
+    )
+    .map_err(|e| ui_error!("host.memory.failed"; e).into())
+}
+
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn memory_delete(key: String, name: String) -> HostResult<()> {
+    riot_kernel::auto_memory::delete_from_ui(&key, &name)
+        .map_err(|e| ui_error!("host.memory.failed"; e).into())
+}
+
 /// 展开一条自定义命令：`/name args` → 发给模型的 prompt。
 /// null = 没这条命令，或它是内置命令（前端按 name 执行）。
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -1955,6 +2009,9 @@ pub fn run() {
             slash_commands,
             slash_expand,
             hooks_list,
+            memory_list,
+            memory_save,
+            memory_delete,
             search_files,
             list_dir,
             schedule_list,

@@ -9,6 +9,7 @@ export default {
   "host.kernel.restartExhausted": "内核连续崩溃 {count} 次，已停止重启。",
   "host.kernel.timeout": "内核没有及时响应：{method}",
   "host.kernel.io": "和内核通信失败。",
+  "host.memory.failed": "记忆没能保存：{detail}",
   "host.kernel.rpc": "内核返回了错误。",
   "host.kernel.unexpectedReply": "内核对 {method} 回了意外形状的应答。",
   "host.kernel.gone": "内核进程意外退出，这一轮的运行状态已丢失。下一条消息会自动重启内核。",

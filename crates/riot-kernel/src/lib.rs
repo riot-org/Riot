@@ -27,6 +27,7 @@ use std::io::Write as _;
 // config 的文件读写代码在这里,宿主进程照常在自己进程内调用它(设置页归宿主);
 // 内核进程不碰配置文件,每轮所需的配置值随 RPC 传入。
 pub mod adapt;
+pub mod auto_memory;
 pub mod bridge;
 pub mod changes;
 pub mod checkpoint;

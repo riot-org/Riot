@@ -64,7 +64,14 @@ pub fn collect(project_root: &Path) -> Vec<MemoryFile> {
         .parent()
         .unwrap_or(Path::new("."))
         .to_path_buf();
-    collect_in(&global_dir, project_root)
+    let mut out = collect_in(&global_dir, project_root);
+    // 自动记忆的索引排在最后：人写的约定在前，模型自己记的在后 ——
+    // 两者冲突时以人写的为准是 AGENTS.md 的本意，而模型对后出现的内容
+    // 权重更高，所以索引的说明文字里明确写了"可能过时、先核实"。
+    if let Some((path, content)) = crate::auto_memory::index_for_prompt(project_root) {
+        out.push(MemoryFile { path, content });
+    }
+    out
 }
 
 /// 路径参数化的实现。测试用临时目录，不碰真实配置。

@@ -153,3 +153,13 @@ export function InfoIcon() {
     </svg>
   );
 }
+
+/** 记忆：一只灯泡。学到的东西 —— 和书签（提示词）、钥匙（环境变量）拉得开。 */
+export function MemoryIcon() {
+  return (
+    <svg {...S} aria-hidden>
+      <path d="M8 2.2a4.3 4.3 0 0 0-2.6 7.7c.5.4.8 1 .8 1.6v.3h3.6v-.3c0-.6.3-1.2.8-1.6A4.3 4.3 0 0 0 8 2.2z" />
+      <path d="M6.3 13.8h3.4" />
+    </svg>
+  );
+}

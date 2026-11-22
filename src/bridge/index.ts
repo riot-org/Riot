@@ -806,6 +806,55 @@ export function hooksList(root: string | null): Promise<HookInfo[]> {
   return invoke<HookInfo[]>("hooks_list", { root });
 }
 
+/** 一条自动记忆。 */
+export interface MemoryNote {
+  name: string;
+  /** `user` / `feedback` / `project` / `reference`；手改坏了时可能为空。 */
+  kind: string;
+  description: string;
+  /** 去掉 frontmatter 的正文。 */
+  body: string;
+  updatedMs?: number | null;
+}
+
+/** 一个项目的全部自动记忆。 */
+export interface ProjectMemory {
+  /** 项目指纹（目录名）。增删改用它指定项目。 */
+  key: string;
+  /** 项目根；老记忆没记下时为 null，界面退回显示 key。 */
+  root?: string | null;
+  /** 记忆目录完整路径（「打开目录」用）。 */
+  dir: string;
+  notes: MemoryNote[];
+}
+
+export interface MemoryOverview {
+  /** 当前会话项目对应的 key。 */
+  currentKey?: string | null;
+  projects: ProjectMemory[];
+}
+
+/** 所有有记忆的项目，外加当前项目（即使还是空的）。 */
+export function memoryList(root: string | null): Promise<MemoryOverview> {
+  return invoke<MemoryOverview>("memory_list", { root });
+}
+
+/** 新建或改写一条记忆（同名覆盖）。 */
+export function memorySave(args: {
+  root: string | null;
+  key: string;
+  name: string;
+  kind: string;
+  description: string;
+  body: string;
+}): Promise<void> {
+  return invoke<void>("memory_save", args);
+}
+
+export function memoryDelete(key: string, name: string): Promise<void> {
+  return invoke<void>("memory_delete", { key, name });
+}
+
 /**
  * 展开一条自定义命令：`/name args` → 发给模型的 prompt。
  * null = 没这条命令，或它是内置命令（按 name 特判执行）。

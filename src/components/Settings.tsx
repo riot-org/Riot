@@ -19,6 +19,7 @@ import {
   ProviderIcon,
   RemoteIcon,
   KeyIcon,
+  MemoryIcon,
   ShieldIcon,
   SkillIcon,
   SlidersIcon,
@@ -30,6 +31,7 @@ import { CommandsPane } from "./settings/CommandsPane";
 import { GeneralPane } from "./settings/GeneralPane";
 import { HooksPane } from "./settings/HooksPane";
 import { McpPane } from "./settings/McpPane";
+import { MemoryPane } from "./settings/MemoryPane";
 import { PluginsPane } from "./settings/PluginsPane";
 import { PermissionPane } from "./settings/PermissionPane";
 import { EnvPane } from "./settings/EnvPane";
@@ -60,6 +62,7 @@ type Tab =
   | "provider"
   | "web"
   | "prompts"
+  | "memory"
   | "permission"
   | "env"
   | "mcp"
@@ -92,6 +95,7 @@ const NAV: { group: MessageKey; tabs: TabDef[] }[] = [
       { id: "provider", icon: ProviderIcon },
       { id: "web", icon: GlobeIcon },
       { id: "prompts", icon: BookmarkIcon },
+      { id: "memory", icon: MemoryIcon },
     ],
   },
   {
@@ -262,6 +266,13 @@ export function Settings({
                 <PromptsPane
                   status={status}
                   onStatus={onStatus}
+                  askConfirm={setConfirm}
+                  onSaved={flashSaved}
+                />
+              ) : null}
+              {tab === "memory" ? (
+                <MemoryPane
+                  activeRoot={activeRoot ?? null}
                   askConfirm={setConfirm}
                   onSaved={flashSaved}
                 />
