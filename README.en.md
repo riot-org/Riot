@@ -33,6 +33,10 @@ Not only code. Web pages, documents, and scheduled tasks too.
 - **DOM picker**: Click an element. Its selector and structure are attached to the chat.
 - **Server deploy**: Run it on a Linux server. Close the laptop and the task keeps going.
 - **Security testing**: Built-in crawl, fuzz, and secret-leak scans. Findings become a report with evidence and fixes.
+- **Code intelligence (LSP)**: Uses the rust-analyzer, typescript-language-server, or pyright already installed on your machine to go to definitions, find references, show types, and list symbols. After an edit, new errors are attached to the result.
+- **Auto memory**: Corrections and confirmed preferences are saved per project and loaded into later sessions. Notes live in Riot's config directory and can be deleted any time.
+- **GitHub loop**: Built-in `pr`, `fix-ci`, and `address-comments` skills use `gh` to open PRs, fix failing CI from its logs, and work through review comments.
+- **CLI / CI**: `riot-server exec "task"` runs one task without a UI and exits. It reads stdin, can print JSON, and fits scripts and CI.
 
 ## Download
 
@@ -105,6 +109,21 @@ docker rm -f riot
 Start it again with the command in step 1. Data stays in the `riot-home` volume, and the login link stays the same.
 
 The image only has basic command-line tools. If the agent needs Node, Python, or a compiler, write another image `FROM` this one and install them. Building your own image, a systemd deploy without Docker, and how it works are in [REMOTE_ACCESS.md](docs/REMOTE_ACCESS.md#9-无界面宿主riot-server).
+
+## Command line (`riot-server exec`)
+
+Run one task without a UI and exit. It uses the same model settings as the app.
+
+```bash
+riot-server exec "fix issue #42 and run the tests"
+git diff | riot-server exec --mode plan "review this change; only point out bugs"
+riot-server exec --json "..." > events.jsonl
+```
+
+- Default mode is `auto`: clearly safe actions run; anything that still needs a person is denied, the agent is told nobody is there, and the denied actions are listed on stderr. Use `--mode bypass` to allow them.
+- stdout has only the final answer (one event per line with `--json`); progress goes to stderr.
+- Exit codes: 0 done, 1 error, 2 bad arguments, 3 stopped to ask the user, 124 timed out, 130 interrupted.
+- Sessions are kept in `exec-sessions/` under the config directory, apart from the app's sessions.
 
 ## Development
 

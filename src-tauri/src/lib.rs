@@ -34,6 +34,7 @@ pub use gui_env::print_process_env;
 
 pub mod dir_browse;
 pub mod env_probe;
+pub mod exec;
 pub mod headless;
 pub mod ipc;
 pub mod kernel;
@@ -1820,19 +1821,41 @@ fn create_main_window(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>
 /// `[约束]` 必须在任何线程起来之前调用 —— 登录环境是 `set_var` 装进来的，
 /// 它不是线程安全的（见 `gui_env`）。
 pub fn init_process() {
-    let directives = log_filter(
+    init_process_logging_to(false);
+}
+
+/// `riot-server exec` 用：日志走 stderr。exec 的 stdout 是给脚本读的
+/// （最终回答或 JSON 事件流），一行日志混进去就解析不了。
+pub fn init_process_stderr() {
+    init_process_logging_to(true);
+}
+
+fn init_process_logging_to(stderr: bool) {
+    let mut directives = log_filter(
         std::env::var("RIOT_LOG").ok(),
         std::env::var("RUST_LOG").ok(),
     );
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_new(&directives)
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(DEFAULT_LOG)),
-        )
-        // 颜色码只给终端。journald、docker logs、重定向到文件时它们是
-        // 一串 `[2m` `[0m`，grep 都对不上。
-        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stdout()))
-        .init();
+    // exec 的 stderr 是给人看的进度（调了什么工具、拒了什么），默认只放
+    // 错误进来；排查时照常用 RIOT_LOG 打开。
+    if stderr && directives == DEFAULT_LOG {
+        "error".clone_into(&mut directives);
+    }
+    let builder = tracing_subscriber::fmt().with_env_filter(
+        tracing_subscriber::EnvFilter::try_new(&directives)
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(DEFAULT_LOG)),
+    );
+    if stderr {
+        builder
+            .with_writer(std::io::stderr)
+            .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
+            .init();
+    } else {
+        builder
+            // 颜色码只给终端。journald、docker logs、重定向到文件时它们是
+            // 一串 `[2m` `[0m`，grep 都对不上。
+            .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stdout()))
+            .init();
+    }
     // 装在 tracing 起来之后、任何业务代码之前 —— 这中间 panic 的话就只有
     // stderr 那一份了。
     install_panic_hook();
@@ -1852,6 +1875,15 @@ pub fn init_process() {
     if let Err(e) = std::fs::create_dir_all(skills::global_dir()) {
         tracing::warn!(error = %e, "cannot create global skills dir; the settings 'open folder' button will be a no-op");
     }
+}
+
+/// `riot-server exec` 的后台部分：只要内核事件桥和 MCP。
+///
+/// `[约束]` 不起定时任务的调度循环、不做目录回收：exec 是一次性进程，
+/// 而且可能和开着的桌面版同时跑 —— 两边都调度就会把同一个定时任务
+/// 跑两遍，回收则可能删掉对方正在用的工件目录。
+pub fn start_exec_background(state: &AppState) {
+    state.spawn_host_bridge();
 }
 
 /// 宿主的后台部分：内核事件桥、定时任务、MCP 对齐、旧目录回收。桌面在

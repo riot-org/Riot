@@ -38,12 +38,14 @@ riot-server — Riot without a window, served as a web UI
 USAGE:
     riot-server [serve] [--listen ADDR] [--web-dir DIR]
     riot-server token [--rotate] [--listen ADDR]
+    riot-server exec [OPTIONS] <PROMPT>
     riot-server --version
 
 COMMANDS:
     serve     Run the server (default)
     token     Print the login link (creates a token on first use).
               --rotate invalidates the old one.
+    exec      Run one task without a UI and exit (see `riot-server exec --help`).
 
 OPTIONS:
     --listen ADDR    Address to listen on [env: RIOT_LISTEN] [default: 127.0.0.1:7823]
@@ -69,6 +71,10 @@ struct Options {
 /// 入口。`main.rs` 那样的多调用分发（`--print-env`、`--askpass`）由
 /// `src/bin/riot-server.rs` 先做完。
 pub fn main() -> ExitCode {
+    // `exec` 有自己的一整套参数，整个交出去。
+    if std::env::args().nth(1).as_deref() == Some("exec") {
+        return crate::exec::main(std::env::args().skip(2).collect());
+    }
     let opts = match parse_args(std::env::args().skip(1)) {
         Ok(Some(o)) => o,
         Ok(None) => return ExitCode::SUCCESS,

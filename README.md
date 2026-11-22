@@ -33,6 +33,10 @@
 - **DOM 拾取**：点一下页面元素，选择器和结构就附进对话。
 - **服务器部署**：部署到 Linux 服务器，电脑合上了任务照样跑。
 - **安全渗透**：内置爬取、Fuzz、密钥泄露扫描，结果整理成带证据和修复建议的报告。
+- **代码智能（LSP）**：接入本机装好的 rust-analyzer、typescript-language-server、pyright，跳转定义、查引用、看类型、列符号；改完文件自动附上新出现的错误。
+- **自动记忆**：你纠正过的做法、确认过的偏好，Agent 会记下来，下次会话自动带上。记忆按项目存在 Riot 配置目录，随时可删。
+- **GitHub 闭环**：内置 `pr`、`fix-ci`、`address-comments` 技能，用 `gh` 开 PR、读 CI 失败日志并修复、逐条处理审查评论。
+- **命令行 / CI**：`riot-server exec "任务"` 不开界面跑完一个任务就退出，可接管道、出 JSON，适合脚本和 CI。
 
 ## 下载
 
@@ -105,6 +109,21 @@ docker rm -f riot
 然后用第 1 步的命令重新启动。数据在 `riot-home` 卷里，登录链接不变。
 
 镜像里只有基本命令行工具。agent 要用 node、python、编译器这类运行时，就基于这个镜像再写一层 `FROM` 装上。自己构建镜像、不用 Docker 的 systemd 部署，以及原理说明，见 [REMOTE_ACCESS.md](docs/REMOTE_ACCESS.md#9-无界面宿主riot-server)。
+
+## 命令行（`riot-server exec`）
+
+不开界面跑一个任务，跑完退出。用的是和桌面版同一份模型配置。
+
+```bash
+riot-server exec "修复 issue #42 并跑测试"
+git diff | riot-server exec --mode plan "审查这个改动，只指出 bug"
+riot-server exec --json "..." > events.jsonl
+```
+
+- 默认 `auto` 模式：明显安全的操作自动放行，其余需要人确认的一律拒绝并告诉模型"无人值守"，退出前在 stderr 列出被拒的操作。要全部放开用 `--mode bypass`。
+- stdout 只有最终回答（`--json` 时是一行一个事件），过程写 stderr。
+- 退出码：0 完成，1 出错，2 参数错误，3 停下来等人，124 超时，130 被中断。
+- 会话存在配置目录下的 `exec-sessions/`，和桌面版的会话分开。
 
 ## 开发
 

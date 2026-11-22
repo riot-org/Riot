@@ -435,6 +435,12 @@ impl Inner {
             .parent()
             .unwrap_or(std::path::Path::new("."))
             .join("sessions");
+        Self::at_dirs(config_path, sessions_dir, true)
+    }
+
+    /// `browser = false`：不挂浏览器。`riot-server exec` 用 —— 浏览器
+    /// profile 有进程单例锁，和开着的桌面版抢会让其中一个静默失去浏览器。
+    fn at_dirs(config_path: PathBuf, sessions_dir: PathBuf, browser: bool) -> Self {
         let kernel_exe = crate::kernel::locate_kernel().unwrap_or_else(|e| {
             // 起不来的时候报错在 ensure_running(第一次真正用到内核时),
             // 这里只留日志 —— 纯本地操作(建会话、看列表)不该被它挡住。
@@ -442,7 +448,11 @@ impl Inner {
             PathBuf::new()
         });
         // 建 hub 不起进程（惰性启动），所以放在这里不花什么钱。
-        let browser_hub = make_browser_hub(&config_path);
+        let browser_hub = if browser {
+            make_browser_hub(&config_path)
+        } else {
+            None
+        };
         Self {
             transcripts: Arc::new(riot_store::Transcripts::new(&sessions_dir)),
             kernel: KernelClient::new(kernel_exe, sessions_dir.clone()),
@@ -487,7 +497,19 @@ impl AppState {
     /// 没价值 —— 历史仍然可读，工具会在使用时报真实错误；跳过它的话，
     /// 下一次索引落盘会把它永久抹掉，用户连历史都找不回。
     pub fn restore_at(config_path: PathBuf) -> Self {
-        let inner = Inner::at(config_path);
+        Self::restore_inner(Inner::at(config_path))
+    }
+
+    /// `riot-server exec` 的宿主：配置和密钥照常读 `config_path` 那一份，
+    /// 会话放进单独的 `sessions_dir`，不挂浏览器。
+    ///
+    /// `[约束]` 会话目录必须分开。会话索引是整份重写的，和一个开着的
+    /// 桌面版共用同一个目录时，两边会互相抹掉对方新建的会话。
+    pub fn restore_exec(config_path: PathBuf, sessions_dir: PathBuf) -> Self {
+        Self::restore_inner(Inner::at_dirs(config_path, sessions_dir, false))
+    }
+
+    fn restore_inner(inner: Inner) -> Self {
         let index = crate::persist::load(&inner.sessions_dir, &inner.transcripts);
         // 老索引没有 provider/model。按**此刻**的全局默认钉进每个会话，
         // 之后各自独立 —— 不钉的话它们继续继承 live 全局，A 换模型 B 跟着跳。
