@@ -119,6 +119,7 @@ const COMMANDS: &[&str] = &[
     "memory_delete",
     "project_trust_status",
     "project_trust_set",
+    "toolchain_check",
     "search_files",
     "list_dir",
     "schedule_list",

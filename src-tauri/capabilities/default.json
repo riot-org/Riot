@@ -124,6 +124,7 @@
     "allow-memory-delete",
     "allow-project-trust-status",
     "allow-project-trust-set",
+    "allow-toolchain-check",
     "allow-search-files",
     "allow-list-dir",
     "allow-schedule-list",

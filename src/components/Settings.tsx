@@ -312,7 +312,7 @@ export function Settings({
               {tab === "hooks" ? (
                 <HooksPane status={status} activeRoot={activeRoot ?? null} />
               ) : null}
-              {tab === "general" ? <GeneralPane /> : null}
+              {tab === "general" ? <GeneralPane activeRoot={activeRoot ?? null} /> : null}
               {tab === "remote" ? (
                 <RemotePane
                   status={status}

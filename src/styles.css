@@ -14548,3 +14548,15 @@ button.ctx-cat-line:focus-visible {
   justify-content: flex-end;
   gap: 6px;
 }
+
+/* 运行环境检查：名字前一个状态符号，缺了的给一行可复制的安装命令。 */
+.env-status.ok > span:first-child {
+  color: var(--ok, #3fb950);
+}
+.env-status.bad > span:first-child {
+  color: var(--warn);
+}
+code.env-fix {
+  user-select: all;
+  white-space: nowrap;
+}

@@ -55,6 +55,7 @@ pub mod skills;
 pub mod slash;
 pub mod subagent;
 pub mod tasks;
+pub mod toolchain;
 pub mod trust;
 pub mod vision;
 pub mod web;

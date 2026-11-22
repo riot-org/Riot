@@ -388,6 +388,12 @@ async fn hooks_list(
 }
 
 
+/// 设置页「运行环境」：git、gh、node 和各语言服务器能不能用。
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn toolchain_check(root: Option<String>) -> Vec<riot_kernel::toolchain::ToolCheck> {
+    riot_kernel::toolchain::check(root.as_deref().map(std::path::Path::new)).await
+}
+
 /// 项目信任状态：信没信任、项目里带了哪些要信任才加载的配置。
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -2078,6 +2084,7 @@ pub fn run() {
             memory_delete,
             project_trust_status,
             project_trust_set,
+            toolchain_check,
             search_files,
             list_dir,
             schedule_list,

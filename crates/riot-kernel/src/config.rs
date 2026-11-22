@@ -1261,7 +1261,13 @@ pub const fn default_compact_threshold_tokens() -> u32 {
     300_000
 }
 
-/// 新会话的默认权限模式：全部放行。
+/// 新会话的默认权限模式：macOS / Linux 全部放行，Windows 用 Auto。
+///
+/// `[约束]` 默认放行**只在默认就有沙箱兜底的平台上**成立（见下面的理由）。
+/// Windows 的沙箱要先提权安装、出厂是关着的（[`SandboxMode`] 的 Default），
+/// 那里再默认放行就是"命令不隔离、执行前也不问"—— 一点防护都没有。所以
+/// Windows 默认 Auto：明显安全的由分类器放行，其余照常问人。用户装好沙箱
+/// 后可以自己切回放行。
 ///
 /// `[约束]` 是 `BypassPermissions` 而不是 `Unattended`。两者的差别是那层
 /// 分层免疫：放行模式仍然守着 SSH 密钥、shell 启动脚本、hooks 这些"写下去

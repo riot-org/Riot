@@ -809,6 +809,22 @@ export function hooksList(root: string | null): Promise<HookInfo[]> {
 }
 
 
+/** 运行环境检查的一项。 */
+export interface ToolCheck {
+  /** `git` / `gh` / `node` / `rust-analyzer` / `typescript-language-server` / `pyright`。 */
+  id: string;
+  ok: boolean;
+  /** 版本号或不能用的原因。 */
+  detail: string;
+  /** 缺了 / 不能用时建议跑的命令。 */
+  fix?: string | null;
+}
+
+/** git、gh、node 和各语言服务器能不能用。要跑几个外部程序，给慢档超时。 */
+export function toolchainCheck(root: string | null): Promise<ToolCheck[]> {
+  return invoke<ToolCheck[]>("toolchain_check", { root }, T_SLOW);
+}
+
 /** 项目里一项要信任才加载的配置。 */
 export interface ProjectConfigItem {
   /** `hooks` / `skills` / `commands`。 */
