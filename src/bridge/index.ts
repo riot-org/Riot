@@ -829,6 +829,20 @@ export function hooksList(root: string | null): Promise<HookInfo[]> {
   return invoke<HookInfo[]>("hooks_list", { root });
 }
 
+export interface GlobalAgents {
+  path: string;
+  content: string;
+}
+
+/** 全局约定 `<配置目录>/riot/AGENTS.md`（不存在时 content 为空）。 */
+export function globalAgentsRead(): Promise<GlobalAgents> {
+  return invoke<GlobalAgents>("global_agents_read");
+}
+
+/** 保存全局约定。空内容 = 删掉文件。下一个新会话起生效。 */
+export function globalAgentsWrite(content: string): Promise<void> {
+  return invoke<void>("global_agents_write", { content });
+}
 
 /** 本地 crash.log 的最后一条（没有就是 null）。只读本地文件，不上传。 */
 export function crashLatest(): Promise<string | null> {

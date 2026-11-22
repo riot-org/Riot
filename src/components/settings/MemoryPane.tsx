@@ -4,6 +4,8 @@ import {
   type MemoryNote,
   type MemoryOverview,
   type ProjectMemory,
+  globalAgentsRead,
+  globalAgentsWrite,
   memoryDelete,
   memoryList,
   memorySave,
@@ -35,7 +37,83 @@ const NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
  * 改动直接落盘，不经内核：只影响**之后新开**的会话（已开的会话在开头
  * 已经拿到了索引）。页面说明里写清这一点。
  */
-export function MemoryPane({
+export function MemoryPane(props: {
+  activeRoot: string | null;
+  askConfirm: AskConfirm;
+  onSaved: () => void;
+}) {
+  return (
+    <>
+      <GlobalAgentsGroup onSaved={props.onSaved} />
+      <ProjectMemory {...props} />
+    </>
+  );
+}
+
+/**
+ * 全局约定：`<配置目录>/riot/AGENTS.md`，每个项目的会话都会带上。
+ *
+ * 跨项目的偏好（回复语言、沟通风格、通用习惯）放这里，由用户自己写 ——
+ * 自动记忆刻意只按项目存：模型分不清一条经验是跟人走还是跟项目走，
+ * 判错了会在所有项目里悄悄出错，被注入的话影响面也是全部项目。
+ */
+function GlobalAgentsGroup({ onSaved }: { onSaved: () => void }) {
+  const { t } = useT();
+  const [path, setPath] = useState("");
+  const [saved, setSaved] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    void globalAgentsRead()
+      .then((g) => {
+        setPath(g.path);
+        setSaved(g.content);
+        setDraft(g.content);
+      })
+      .catch((e: unknown) => setError(String(e)));
+  }, []);
+
+  const save = async () => {
+    setError("");
+    try {
+      await globalAgentsWrite(draft);
+      setSaved(draft);
+      onSaved();
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  return (
+    <Group title={t("settings.memory.global")} desc={t("settings.memory.global.desc")}>
+      <Card>
+        <Row title="AGENTS.md" desc={path ? <code>{path}</code> : null} stack>
+          <ResizableTextarea
+            className="preset-body-input"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            rows={6}
+            placeholder={t("settings.memory.global.placeholder")}
+            spellCheck={false}
+            aria-label="AGENTS.md"
+          />
+        </Row>
+      </Card>
+      {error ? <FormError text={error} /> : null}
+      <div className="editor-foot">
+        <span />
+        <div className="editor-foot-actions">
+          <button className="primary" disabled={saved === null || draft === saved} onClick={() => void save()}>
+            {t("common.save")}
+          </button>
+        </div>
+      </div>
+    </Group>
+  );
+}
+
+function ProjectMemory({
   activeRoot,
   askConfirm,
   onSaved,
@@ -117,7 +195,7 @@ export function MemoryPane({
   }
   if (data.projects.length === 0) {
     return (
-      <div className="empty-state">
+      <div className="empty-state" style={{ marginTop: 16 }}>
         <p className="empty-title">{t("settings.memory.none.title")}</p>
         <p className="hint">{t("settings.memory.none.hint")}</p>
       </div>

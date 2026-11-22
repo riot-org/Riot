@@ -126,6 +126,8 @@
     "allow-project-trust-set",
     "allow-toolchain-check",
     "allow-crash-latest",
+    "allow-global-agents-read",
+    "allow-global-agents-write",
     "allow-search-files",
     "allow-list-dir",
     "allow-schedule-list",

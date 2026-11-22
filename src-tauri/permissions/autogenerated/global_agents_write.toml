@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-global-agents-write"
+description = "Enables the global_agents_write command without any pre-configured scope."
+commands.allow = ["global_agents_write"]
+
+[[permission]]
+identifier = "deny-global-agents-write"
+description = "Denies the global_agents_write command without any pre-configured scope."
+commands.deny = ["global_agents_write"]

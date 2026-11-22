@@ -388,6 +388,52 @@ async fn hooks_list(
     ))
 }
 
+fn global_agents_path() -> std::path::PathBuf {
+    crate::config::config_path()
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("AGENTS.md")
+}
+
+/// 全局约定（`<配置目录>/riot/AGENTS.md`）：跨项目的偏好，用户自己写。
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalAgents {
+    path: String,
+    content: String,
+}
+
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn global_agents_read() -> GlobalAgents {
+    let p = global_agents_path();
+    // 豁免理由：宿主层，读写 Riot 自己的配置目录。
+    #[allow(clippy::disallowed_methods)]
+    let content = std::fs::read_to_string(&p).unwrap_or_default();
+    GlobalAgents {
+        path: p.display().to_string(),
+        content,
+    }
+}
+
+/// 保存全局约定。空内容 = 删掉文件（等于没有）。下一个新会话起生效。
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn global_agents_write(content: String) -> HostResult<()> {
+    let p = global_agents_path();
+    // 豁免理由同上。
+    #[allow(clippy::disallowed_methods)]
+    let r = if content.trim().is_empty() {
+        match std::fs::remove_file(&p) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        }
+    } else {
+        p.parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::write(&p, content))
+    };
+    r.map_err(|e| ui_error!("host.memory.failed"; e).into())
+}
+
 /// 最近一次崩溃记录（本地 crash.log 的最后一条）。「反馈问题」用。
 #[cfg_attr(feature = "desktop", tauri::command)]
 async fn crash_latest() -> Option<String> {
@@ -2090,6 +2136,8 @@ pub fn run() {
             project_trust_set,
             toolchain_check,
             crash_latest,
+            global_agents_read,
+            global_agents_write,
             search_files,
             list_dir,
             schedule_list,

@@ -196,6 +196,8 @@ pub async fn dispatch(
         )
         .await),
         "memory_delete" => ok(crate::memory_delete(a.take("key")?, a.take("name")?).await),
+        "global_agents_read" => val(crate::global_agents_read().await),
+        "global_agents_write" => ok(crate::global_agents_write(a.take("content")?).await),
         "crash_latest" => val(crate::crash_latest().await),
         "toolchain_check" => val(crate::toolchain_check(a.take("root")?).await),
         "project_trust_status" => ok(crate::project_trust_status(a.take("root")?).await),
