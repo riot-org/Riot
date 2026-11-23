@@ -56,6 +56,8 @@ interface Props {
   updateChecking: boolean;
   updateError: string | null;
   onCheckUpdate: () => void;
+  /** 「设置 → 通用」里重新打开引导页。 */
+  onOpenOnboarding: () => void;
 }
 
 type Tab =
@@ -148,6 +150,7 @@ export function Settings({
   updateError,
   onCheckUpdate,
   navWidth,
+  onOpenOnboarding,
 }: Props) {
   const { t } = useT();
   const [tab, setTab] = useState<Tab>("provider");
@@ -312,7 +315,9 @@ export function Settings({
               {tab === "hooks" ? (
                 <HooksPane status={status} activeRoot={activeRoot ?? null} />
               ) : null}
-              {tab === "general" ? <GeneralPane activeRoot={activeRoot ?? null} /> : null}
+              {tab === "general" ? (
+                <GeneralPane activeRoot={activeRoot ?? null} onOpenOnboarding={onOpenOnboarding} />
+              ) : null}
               {tab === "remote" ? (
                 <RemotePane
                   status={status}

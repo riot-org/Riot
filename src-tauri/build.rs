@@ -122,6 +122,7 @@ const COMMANDS: &[&str] = &[
     "toolchain_check",
     "crash_latest",
     "cli_status",
+    "test_vision",
     "cli_install",
     "global_agents_read",
     "global_agents_write",

@@ -70,6 +70,7 @@ import { MissingProjectDialog } from "./components/MissingProjectDialog";
 import { ProjectRootContext } from "./components/Markdown";
 import { PlanPanel } from "./components/PlanPanel";
 import { Settings } from "./components/Settings";
+import { Onboarding, onboardingSkipped } from "./components/Onboarding";
 import { SubagentPanel } from "./components/SubagentPanel";
 import { closeSessionTerminals, TerminalPanel } from "./components/TerminalPanel";
 import { forgetSession } from "./hooks/useSession";
@@ -252,6 +253,18 @@ export function App() {
   const [booting, setBooting] = useState(true);
   const { recency, touchSession } = useSessionRecency(sessions, booting);
   const [showSettings, setShowSettings] = useState(false);
+  /** 引导页。没配任何服务方时自动打开一次（用户点过「先跳过」就不再自动开）。 */
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  // 只在配置第一次读到时判断一次：按「有没有服务方」而不是「看过没有」，
+  // 老用户升级不会被打扰；用户中途关掉也不会在下一次配置刷新时又弹出来。
+  const onboardingChecked = useRef(false);
+  useEffect(() => {
+    if (!config || onboardingChecked.current) return;
+    onboardingChecked.current = true;
+    if (config.config.providers.length === 0 && !onboardingSkipped()) {
+      setShowOnboarding(true);
+    }
+  }, [config]);
   /** 定时任务页在主区前台（侧栏一级菜单进入，选会话退出）。 */
   const [schedulePage, setSchedulePage] = useState(false);
   /**
@@ -1961,6 +1974,7 @@ export function App() {
                 missing={missing}
                 onNewSession={newSession}
                 onOpenProject={openProject}
+                onSetup={() => setShowOnboarding(true)}
               />
             ) : null}
           </div>
@@ -2270,10 +2284,23 @@ export function App() {
       {/* 钉在窗口右上角。任务页没有这条会话工具栏，开关也不露。 */}
       {schedulePage ? null : windowControls}
 
+      {showOnboarding && config ? (
+        <Onboarding
+          status={config}
+          onStatus={setConfig}
+          onClose={() => setShowOnboarding(false)}
+          onOpenProject={() => void openProject()}
+        />
+      ) : null}
+
       {showSettings ? (
         <Settings
           status={config}
           onStatus={setConfig}
+          onOpenOnboarding={() => {
+            setShowSettings(false);
+            setShowOnboarding(true);
+          }}
           onClose={() => setShowSettings(false)}
           activeRoot={activeSession?.root ?? null}
           appVersion={update.version}

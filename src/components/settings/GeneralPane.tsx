@@ -18,7 +18,13 @@ import { Card, CardBlock, Group, Row } from "./layout";
 /** 下拉里"跟随系统"那一项的值。语言代码和主题名里都不会出现，不会撞。 */
 const SYSTEM = "system";
 
-export function GeneralPane({ activeRoot }: { activeRoot: string | null }) {
+export function GeneralPane({
+  activeRoot,
+  onOpenOnboarding,
+}: {
+  activeRoot: string | null;
+  onOpenOnboarding: () => void;
+}) {
   const { t } = useT();
   const choice = useLocaleChoice();
   const theme = useThemeChoice();
@@ -52,6 +58,9 @@ export function GeneralPane({ activeRoot }: { activeRoot: string | null }) {
             options={themeOptions}
             onChange={(v) => setThemeChoice(isTheme(v) ? v : null)}
           />
+        </Row>
+        <Row title={t("settings.general.onboarding")} desc={t("settings.general.onboarding.desc")}>
+          <button onClick={onOpenOnboarding}>{t("settings.general.onboarding.open")}</button>
         </Row>
       </Card>
       </Group>

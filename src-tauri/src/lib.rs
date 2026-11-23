@@ -1782,6 +1782,22 @@ async fn test_connection(
         .map_err(|e| ui_error!("host.provider.testFailed"; e))?)
 }
 
+/// 测一个模型能不能看图（发一张纯红色小图问颜色）。引导页配视觉模型时用。
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn test_vision(
+    state: State<'_, AppState>,
+    provider_id: String,
+    model: String,
+) -> HostResult<String> {
+    let mut probe = state.config().await;
+    probe.active_provider = provider_id;
+    probe.active_model = model;
+    let resolved = probe.resolve()?;
+    Ok(models::test_vision(&resolved)
+        .await
+        .map_err(|e| ui_error!("host.provider.visionFailed"; e))?)
+}
+
 /// 测搜索后端通不通。设置页的「测试」按钮走这里。
 ///
 /// 传的是**正在编辑的**地址而不是已保存的配置 —— 用户的期待是"填完点
@@ -2150,6 +2166,7 @@ pub fn run() {
             toolchain_check,
             crash_latest,
             cli_status,
+            test_vision,
             cli_install,
             global_agents_read,
             global_agents_write,

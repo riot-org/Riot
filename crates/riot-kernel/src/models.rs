@@ -379,9 +379,106 @@ pub async fn test_connection(model: &ResolvedModel) -> Result<String, String> {
     }
 }
 
+/// 32×16 的两色 PNG：左半蓝、右半黄。视觉测试用。
+///
+/// `[取舍]` 不用纯色图：纯红是看不了图的模型最常「蒙」的答案，单色测试
+/// 会把它们放过去。要求按左右顺序说出蓝和黄，不看图基本不可能碰对。
+const TEST_PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAQCAIAAAD4YuoOAAAAIklEQVR4nGOQC7hDEvpwQoQkxDBqwagFoxaMWjBqwVCwAAAvsRYuY6L+dwAAAABJRU5ErkJggg==";
+
+/// 验证一个模型真的能看图：发一张左蓝右黄的小图，问左右各是什么颜色。
+///
+/// 只测"连得上"不够 —— 很多服务方对不支持图片的模型照样返回 200，然后
+/// 无视图片瞎答，或者回一句"我看不到图片"。用户把它配成视觉兼容模型之后，
+/// 表现是截图工具转述出一堆和画面无关的东西，而没有任何报错。
+pub async fn test_vision(model: &ResolvedModel) -> Result<String, String> {
+    use futures::StreamExt;
+    use riot_protocol::message::{AssistantContent, Attachment};
+    use riot_protocol::provider::{ProviderEvent, ProviderRequest};
+
+    let provider = provider_for(model, crate::config::PROBE_SESSION_ID)?;
+    let req = ProviderRequest {
+        model: model.model.clone(),
+        messages: vec![Message::User {
+            id: MessageId::from_raw("msg_vision_test"),
+            content: vec![
+                UserContent::Text {
+                    text: "This image has two colored halves. Name the color of the left half, then the right half, as two English words.".into(),
+                },
+                UserContent::Attachment(Attachment::Image {
+                    media_type: "image/png".into(),
+                    data: TEST_PNG.into(),
+                }),
+            ],
+            meta: MessageMeta::default(),
+        }],
+        system: String::new(),
+        tools: Vec::new(),
+        // 推理模型会先想一会儿，16 个 token 不够它说出答案。
+        max_output_tokens: Some(256),
+        thinking: Default::default(),
+        cache_ttl: Default::default(),
+    };
+    let cancel = CancellationToken::new();
+    let mut stream = provider.stream(req, cancel.clone());
+    #[allow(clippy::disallowed_methods)]
+    // 等的是外部服务，真实时钟。
+    let answer = tokio::time::timeout(Duration::from_secs(60), async {
+        let mut out = String::new();
+        while let Some(ev) = stream.next().await {
+            match ev {
+                ProviderEvent::Message(Message::Assistant { content, .. }) => {
+                    for c in content {
+                        if let AssistantContent::Text { text } = c {
+                            out.push_str(&text);
+                        }
+                    }
+                }
+                ProviderEvent::Error(e) => return Err(format!("{e}")),
+                _ => {}
+            }
+        }
+        Ok(out)
+    })
+    .await;
+    cancel.cancel();
+    let text = match answer {
+        Ok(Ok(t)) => t,
+        Ok(Err(e)) => return Err(e),
+        Err(_) => return Err("no answer within 60 seconds".to_owned()),
+    };
+    if sees_test_image(&text) {
+        Ok(format!("{} @ {}", model.model, model.base_url))
+    } else {
+        Err(format!(
+            "the model answered \"{}\" for a blue-and-yellow test image, so it does not seem to see images",
+            text.trim().chars().take(80).collect::<String>()
+        ))
+    }
+}
+
+/// 回答里先出现蓝、后出现黄（顺序对才算，左右是题目的一部分）。
+fn sees_test_image(answer: &str) -> bool {
+    let a = answer.to_lowercase();
+    let first = |words: &[&str]| words.iter().filter_map(|w| a.find(w)).min();
+    match (first(&["blue", "蓝"]), first(&["yellow", "黄"])) {
+        (Some(b), Some(y)) => b < y,
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 视觉测试要按左右说出蓝和黄() {
+        assert!(sees_test_image("Blue, Yellow"));
+        assert!(sees_test_image("左边是蓝色，右边是黄色"));
+        assert!(sees_test_image("blue yellow"));
+        assert!(!sees_test_image("Yellow, blue"), "左右反了");
+        assert!(!sees_test_image("Red"), "纯色瞎猜不算");
+        assert!(!sees_test_image("I can't see any image."));
+    }
 
     /// 拉模型清单要问两个路径。
     ///

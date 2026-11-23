@@ -198,6 +198,7 @@ pub async fn dispatch(
         "memory_delete" => ok(crate::memory_delete(a.take("key")?, a.take("name")?).await),
         "global_agents_read" => val(crate::global_agents_read().await),
         "global_agents_write" => ok(crate::global_agents_write(a.take("content")?).await),
+        "test_vision" => ok(crate::test_vision(st, a.take("providerId")?, a.take("model")?).await),
         "cli_status" => val(crate::cli_status().await),
         "cli_install" => ok(crate::cli_install().await),
         "crash_latest" => val(crate::crash_latest().await),

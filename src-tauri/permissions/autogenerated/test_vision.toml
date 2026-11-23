@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-test-vision"
+description = "Enables the test_vision command without any pre-configured scope."
+commands.allow = ["test_vision"]
+
+[[permission]]
+identifier = "deny-test-vision"
+description = "Denies the test_vision command without any pre-configured scope."
+commands.deny = ["test_vision"]

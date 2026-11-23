@@ -64,11 +64,14 @@ export function Welcome({
   missing,
   onNewSession,
   onOpenProject,
+  onSetup,
 }: {
   projects: string[];
   missing: ReadonlySet<string>;
   onNewSession: (root: string) => void;
   onOpenProject: () => void;
+  /** 打开引导页（设置向导）。 */
+  onSetup: () => void;
 }) {
   const { t } = useT();
   const recent = projects.slice(0, RECENT_LIMIT);
@@ -84,6 +87,10 @@ export function Welcome({
           项目本身是数据，该列出来让人挑，不该编进标签里。 */}
       <button className="primary big" onClick={onOpenProject}>
         {t("app.openDir")}
+      </button>
+      {/* 不显眼的入口：新用户关掉引导之后、老用户想做一次配置体检时用。 */}
+      <button className="link-button welcome-setup" onClick={onSetup}>
+        {t("app.welcome.setup")}
       </button>
 
       {recent.length > 0 ? (

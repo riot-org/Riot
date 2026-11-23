@@ -127,6 +127,7 @@
     "allow-toolchain-check",
     "allow-crash-latest",
     "allow-cli-status",
+    "allow-test-vision",
     "allow-cli-install",
     "allow-global-agents-read",
     "allow-global-agents-write",

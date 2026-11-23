@@ -2303,6 +2303,16 @@ export async function pickDirectory(defaultPath?: string): Promise<string | null
  * 发一个最小请求，验证 base URL / key / 模型名。不传参数测当前激活的；
  * 设置页传"正在编辑的那个"。成功返回一句人话；失败时错误信息里已带原因。
  */
+/**
+ * 测一个模型能不能看图：发一张纯红色小图问颜色，答不出红色就算失败。
+ * 引导页配视觉兼容时用 —— 只测「连得上」的话，看不了图的模型也会通过。
+ */
+export function testVision(providerId: string, model: string): Promise<string> {
+  // 比内核那边的 60 秒上限多等一截：让内核自己的「60 秒内没有回答」先到，
+  // 而不是前端先超时、只能说一句含糊的「宿主没有响应」。
+  return invoke<string>("test_vision", { providerId, model }, 90_000);
+}
+
 export function testConnection(providerId?: string, model?: string): Promise<string> {
   // 真发一次请求，走网络。
   return invoke<string>(
