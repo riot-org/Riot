@@ -42,6 +42,7 @@ export default {
   "host.remote.bindFailed": "{addr}에서 수신 대기하는 데 실패했습니다.",
   "host.provider.notFound": "제공자 「{id}」를 찾을 수 없습니다.",
   "host.provider.testFailed": "연결 테스트에 실패했습니다.",
+  "host.provider.visionFailed": "이미지 확인에 실패했습니다.",
   "host.provider.listModelsFailed": "모델 목록을 가져오는 데 실패했습니다.",
   "host.provider.noVision":
     "현재 모델은 이미지를 받을 수 없습니다. 설정에서 이 제공자의 「비전」을 켜거나, 비전 대체 모델을 지정하세요(설정 → 제공자 → 비전 대체).",

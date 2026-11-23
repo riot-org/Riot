@@ -42,6 +42,7 @@ export default {
   "host.remote.bindFailed": "Failed to listen on {addr}.",
   "host.provider.notFound": "Provider “{id}” not found.",
   "host.provider.testFailed": "Connection test failed.",
+  "host.provider.visionFailed": "Image check failed.",
   "host.provider.listModelsFailed": "Failed to fetch the model list.",
   "host.provider.noVision":
     "The current model cannot accept images. Enable “Images” for this provider in Settings, or configure a vision-capable model (Settings → Providers → Vision fallback).",

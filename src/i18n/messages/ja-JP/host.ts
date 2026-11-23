@@ -42,6 +42,7 @@ export default {
   "host.remote.bindFailed": "{addr} での待ち受けに失敗しました。",
   "host.provider.notFound": "プロバイダー「{id}」が見つかりません。",
   "host.provider.testFailed": "接続テストに失敗しました。",
+  "host.provider.visionFailed": "画像チェックに失敗しました。",
   "host.provider.listModelsFailed": "モデル一覧の取得に失敗しました。",
   "host.provider.noVision":
     "現在のモデルは画像を受け取れません。設定でこのプロバイダーの「ビジョン」をオンにするか、ビジョン代替モデルを設定してください（設定 → プロバイダー → ビジョン代替）。",

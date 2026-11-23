@@ -42,6 +42,7 @@ export default {
   "host.remote.bindFailed": "監聽 {addr} 失敗。",
   "host.provider.notFound": "找不到服務商「{id}」。",
   "host.provider.testFailed": "連線測試失敗。",
+  "host.provider.visionFailed": "看圖測試失敗。",
   "host.provider.listModelsFailed": "拉取模型清單失敗。",
   "host.provider.noVision":
     "目前的模型收不了圖片。去設定裡給這家服務商開啟「圖片」，或者設定一個視覺相容模型（設定 → 服務商 → 視覺相容）。",

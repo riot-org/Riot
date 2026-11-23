@@ -44,6 +44,7 @@ export default {
   "host.remote.bindFailed": "监听 {addr} 失败。",
   "host.provider.notFound": "找不到服务方「{id}」。",
   "host.provider.testFailed": "连接测试失败。",
+  "host.provider.visionFailed": "看图测试失败。",
   "host.provider.listModelsFailed": "拉取模型列表失败。",
   "host.provider.noVision":
     "当前模型收不了图片。去设置里给这个服务方打开「图片」，或者配一个视觉兼容模型（设置 → 服务方 → 视觉兼容）。",
