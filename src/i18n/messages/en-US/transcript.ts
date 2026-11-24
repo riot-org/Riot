@@ -195,7 +195,8 @@ export default {
   "transcript.permission.always": "Always allow (save rule)",
   "transcript.permission.alwaysTitle":
     "Writes a permanent rule (revoke under Settings → Permissions): {rules}",
-  "transcript.permission.alwaysSub": "Won't ask again · {rules}",
+  "transcript.permission.alwaysSub": "Won't ask again",
+  "transcript.permission.alwaysRuleNote": "“Always allow” will save this rule:",
   "transcript.permission.once": "Allow once",
   "transcript.permission.fromTask": "Background task \"{label}\": {summary}",
   "transcript.preview.runIn": "Will run in {cwd}",

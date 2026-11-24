@@ -50,6 +50,11 @@ export function PermissionCard({
   const rules = rememberable
     .map((s) => `${s.tool}${s.pattern ? `(${s.pattern})` : ""}`)
     .join(t("transcript.listSep"));
+  // 规则不进按钮：规则长度没有上限，放进按钮会把按钮撑宽、把「允许
+  // 一次」挤到下一行。规则就是上面预览里那条命令/路径时干脆不显示；
+  // 比这一次更宽（整个工具放行，或带通配符）时在按钮行上方单独一行
+  // 写出来、可折行 —— 那是用户点之前必须看见的。完整规则也在 title 里。
+  const broad = rememberable.some((s) => !s.pattern || s.pattern.includes("*"));
 
   return (
     <div
@@ -75,6 +80,13 @@ export function PermissionCard({
 
       <Preview preview={ask.preview} />
 
+      {rememberable.length > 0 && broad ? (
+        <div className="perm-rule-note">
+          {t("transcript.permission.alwaysRuleNote")}
+          <code>{rules}</code>
+        </div>
+      ) : null}
+
       <div className="plan-card-actions">
         <button className="btn-deny" disabled={answered} onClick={() => answer({ decision: "deny" })}>
           {t("transcript.permission.deny")}
@@ -91,7 +103,7 @@ export function PermissionCard({
             onClick={() => answer({ decision: "allow", remember: rememberable })}
           >
             {t("transcript.permission.always")}
-            <span className="allow-always-sub">{t("transcript.permission.alwaysSub", { rules })}</span>
+            <span className="allow-always-sub">{t("transcript.permission.alwaysSub")}</span>
           </button>
         ) : null}
         <button className="btn-allow" disabled={answered} onClick={() => answer({ decision: "allow" })}>
