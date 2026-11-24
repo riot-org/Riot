@@ -8178,12 +8178,20 @@ button.ta-resize-grip:hover:not(:disabled),
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
-  margin-top: 1px;
-  border-radius: 8px;
+  /* 和右边两行字（标记 15 + 间距 2 + 标题 17）同高 —— 26px 时比两行字
+     矮一截，方块悬在标题行旁边看着别扭。 */
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
   color: var(--warn);
   background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+
+/* 方块放大了，里面的清单图标跟着放大（图标本身 12px，是给 pill 用的）。 */
+.plan-tool-icon svg,
+.build-card-icon svg {
+  width: 16px;
+  height: 16px;
 }
 
 .plan-tool-main {
@@ -8199,6 +8207,7 @@ button.ta-resize-grip:hover:not(:disabled),
   display: inline-flex;
   align-items: center;
   font-size: 11px;
+  line-height: 15px;
   font-weight: 600;
   letter-spacing: 0.4px;
   color: var(--text-faint);
@@ -8215,7 +8224,7 @@ button.ta-resize-grip:hover:not(:disabled),
   font-size: 13px;
   font-weight: 600;
   color: var(--text);
-  line-height: 1.35;
+  line-height: 17px;
   word-break: break-word;
 }
 
@@ -8272,9 +8281,10 @@ button.ta-resize-grip:hover:not(:disabled),
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 8px;
+  /* 同计划卡：和两行字同高。 */
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
   color: var(--warn);
   background: color-mix(in srgb, var(--warn) 12%, transparent);
 }
@@ -8288,6 +8298,7 @@ button.ta-resize-grip:hover:not(:disabled),
 
 .build-card-badge {
   font-size: 11px;
+  line-height: 15px;
   font-weight: 600;
   letter-spacing: 0.4px;
   color: var(--text-faint);
@@ -8296,7 +8307,7 @@ button.ta-resize-grip:hover:not(:disabled),
 .build-card-title {
   font-size: 13px;
   font-weight: 600;
-  line-height: 1.35;
+  line-height: 17px;
   word-break: break-word;
 }
 
