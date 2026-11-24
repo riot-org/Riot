@@ -112,7 +112,8 @@ export const SessionChangesBar = memo(function SessionChangesBar({
           aria-expanded={open}
           title={t("transcript.changesBar.title")}
         >
-          <Chevron open={open} />
+          {/* 文件列表长在标题上面，箭头按往上展开的方向画。 */}
+          <Chevron up open={open} />
           <span className="changes-bar-title">
             {tn("transcript.changesBar.label", changes.length)}
           </span>

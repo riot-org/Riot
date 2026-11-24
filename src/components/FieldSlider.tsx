@@ -114,7 +114,9 @@ export function FieldSlider({
         ? defaultLabel
         : t("composer.sampling.inherit", { value: inheritLabel });
 
-  const placeholder = off || inheritLabel == null ? defaultLabel : inheritLabel;
+  // 不发时格子里只放一道横线：「模型默认」已经写在滑块下方的状态字里，
+  // 数字格再写一遍是重复。继承时仍显示上层的数，那是这里独有的信息。
+  const placeholder = off || inheritLabel == null ? "—" : inheritLabel;
   const numRef = useFitWidth(value || placeholder);
 
   const pending = useRef<string | null>(null);

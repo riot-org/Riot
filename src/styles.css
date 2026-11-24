@@ -842,6 +842,19 @@ pre {
   transition: height var(--dur-panel) var(--ease-panel);
 }
 
+/* 内层也挂同一条过渡。开合时内层尺寸不变（一直是 size），这条不起作用，
+   内容照旧躺在固定尺寸里被裁。它管的是**开着改尺寸**（双击分隔条恢复
+   默认宽度）：只有壳在过渡、内层一步跳到新尺寸的话，侧栏（贴右缘）
+   变宽时左边一截被裁掉、变窄时左边先空出一条，再随壳慢慢收齐。两层
+   一起过渡，内容就是平滑地变宽变窄。拖动时和壳一起摘掉（见下一条）。 */
+.slide-panel.ax > .slide-panel-inner {
+  transition: width var(--dur-panel) var(--ease-panel);
+}
+
+.slide-panel.ay > .slide-panel-inner {
+  transition: height var(--dur-panel) var(--ease-panel);
+}
+
 /* 右列（工作台抽屉 / 任务详情）和主区之间的分隔线。
  *
  * 早先这条线是右列每个面板各画一份 border-left（标签栏、空状态、
@@ -884,7 +897,9 @@ pre {
    两个开关都已经在 DOM 上了（Resizer 自己挂 .dragging，窗口那个由
    App 在 resize 时打在 html 上），CSS 直接读，不用再走一轮 React。 */
 .shell:has(.rz.dragging) .slide-panel,
-html[data-resizing] .slide-panel {
+.shell:has(.rz.dragging) .slide-panel > .slide-panel-inner,
+html[data-resizing] .slide-panel,
+html[data-resizing] .slide-panel > .slide-panel-inner {
   transition: none;
 }
 
@@ -923,6 +938,7 @@ html[data-resizing] .slide-panel {
 @media (prefers-reduced-motion: reduce) {
   .slide-panel.ax,
   .slide-panel.ay,
+  .slide-panel > .slide-panel-inner,
   .tb-traffic,
   .tb-win-slot {
     transition: none;
@@ -1002,7 +1018,7 @@ html[data-resizing] .slide-panel {
   place-items: center;
   background: transparent;
   border: none;
-  border-radius: 7px;
+  border-radius: 8px;
   color: var(--text-dim);
   position: relative;
 }
@@ -1032,10 +1048,10 @@ html[data-resizing] .slide-panel {
   min-width: 13px;
   height: 13px;
   padding: 0 3px;
-  border-radius: 7px;
+  border-radius: 8px;
   background: var(--accent);
   color: var(--bg);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 600;
   line-height: 13px;
   text-align: center;
@@ -1075,7 +1091,7 @@ html[data-resizing] .slide-panel {
   overflow: hidden;
   background: transparent;
   border: none;
-  border-radius: 7px;
+  border-radius: 8px;
   padding: 4px 10px;
   font-size: 13px;
   color: var(--text);
@@ -1346,7 +1362,7 @@ html[data-resizing] .slide-panel {
   border-radius: 999px;
   background: var(--warn-bg);
   color: var(--warn);
-  font-size: 12.5px;
+  font-size: 13px;
   box-shadow: 0 4px 18px var(--shadow-color);
 }
 
@@ -1415,7 +1431,7 @@ html[data-host='web'] body {
   margin: 0;
   padding-left: 18px;
   color: var(--text-dim);
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 1.6;
 }
 
@@ -1538,9 +1554,11 @@ html[data-host='web'] body {
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 8px 10px;
+  /* 和下面的「定时任务」同一种行：不描边、同高。它是主操作，靠正文色
+     和 500 字重区分，不再额外框一圈。 */
+  padding: 7px 10px;
   background: transparent;
-  border-color: var(--border);
+  border-color: transparent;
   color: var(--text);
   font-weight: 500;
 }
@@ -1799,9 +1817,8 @@ html[data-host='web'] body {
   place-items: center;
 }
 
-/* 开新会话是主路径，项目行上的键淡着常驻。当前会话的 … 也是。
-   其余会话行仍 hover / 键盘焦点才出现，避免一列会话全是图标。 */
-.project-head .row-btn,
+/* 当前会话的 … 淡着常驻（对它操作最多）。项目行的 + / … 和其余会话行
+   一样悬停 / 键盘焦点才出现：七八个项目各挂两个淡图标，常驻是噪音。 */
 .thread.active .row-btn {
   opacity: 0.4;
 }
@@ -1975,7 +1992,7 @@ html[data-host='web'] body {
   margin: 0 6px 0 44px;
   padding: 5px 8px;
   font-size: 13px;
-  border-radius: 7px;
+  border-radius: 8px;
 }
 
 .sidebar-foot {
@@ -2081,7 +2098,7 @@ html[data-host='web'] body {
   padding: 7px 10px;
   border: 1px solid transparent;
   background: none;
-  border-radius: 7px;
+  border-radius: 8px;
   color: var(--text-dim);
   text-align: left;
 }
@@ -2267,7 +2284,7 @@ html[data-host='web'] body {
   place-items: center;
   background: transparent;
   border: none;
-  border-radius: 7px;
+  border-radius: 8px;
   color: var(--text-dim);
 }
 
@@ -2330,7 +2347,7 @@ html[data-host='web'] body {
   width: 20px;
   height: 20px;
   margin: -2px -4px -2px 0;
-  border-radius: 5px;
+  border-radius: 6px;
   opacity: 0;
   cursor: pointer;
 }
@@ -2583,7 +2600,7 @@ html[data-host='web'] body {
   place-items: center;
   background: transparent;
   border: none;
-  border-radius: 7px;
+  border-radius: 8px;
   color: var(--text-dim);
 }
 
@@ -2755,7 +2772,7 @@ html[data-host='web'] body {
   place-items: center;
   background: transparent;
   border: none;
-  border-radius: 7px;
+  border-radius: 8px;
   color: var(--text-dim);
 }
 
@@ -2831,7 +2848,7 @@ html[data-host='web'] body {
   width: 22px;
   height: 22px;
   margin: -3px -3px -3px 0;
-  border-radius: 5px;
+  border-radius: 6px;
   opacity: 0;
   cursor: pointer;
 }
@@ -3098,12 +3115,10 @@ html[data-host='web'] body {
   background: var(--bg-card);
   border: 1px solid var(--border-strong);
   color: var(--text-dim);
-  /* 第一层是页面底色的一圈光晕：按钮压在正文上时，紧挨着它的字被
-     这圈"让开"，而不是被一个圆硬切掉半个字 —— 底色和页面几乎一样，
-     只有描边的话边界看不清。第二层投影让它浮起来。 */
-  box-shadow:
-    0 0 0 6px color-mix(in srgb, var(--bg) 85%, transparent),
-    0 4px 16px var(--shadow-color);
+  /* 只用投影浮起来。早先外面还套一圈 6px 的页面底色光晕，想让压在
+     下面的字"让开" —— 实际盖在正文上是一圈半透明的暗环，比字被圆
+     切掉更显眼。 */
+  box-shadow: 0 4px 16px var(--shadow-color);
   z-index: var(--z-panel);
 }
 
@@ -3229,7 +3244,7 @@ html[data-host='web'] body {
   font-size: 10px;
   background: transparent;
   border: none;
-  border-radius: 5px;
+  border-radius: 6px;
   color: var(--text-dim);
 }
 
@@ -3558,7 +3573,7 @@ html[data-host='web'] body {
   border-radius: 999px;
   background: none;
   color: var(--text-faint);
-  font-size: 11.5px;
+  font-size: 12px;
   line-height: 18px;
   cursor: pointer;
 }
@@ -3810,6 +3825,12 @@ html[data-host='web'] body {
   transform: rotate(-90deg);
 }
 
+/* 往上展开：收着和其他折叠行一样朝右，展开后朝上 —— 指向内容
+   长出来的方向（往下展开的是转朝下，见 .chevron.open）。 */
+.chevron.up.open {
+  transform: rotate(-90deg);
+}
+
 .tool-body {
   margin: 0;
   padding: 10px 12px;
@@ -3843,11 +3864,19 @@ html[data-host='web'] body {
   background: none;
 }
 
-/* 组里的工具行和收起的组头同级（照 Claude），悬停 / 展开提亮一档。 */
+/* 组里的工具行和收起的组头同级（照 Claude），悬停 / 展开提亮一档。
+   字体也和组头、「思考过程」一样用正文无衬线：摘要多半是一句话
+   （「推送到远端 master」），等宽排中文又宽又散，和同组的行也对不齐。
+   工具名靠 500 字重和摘要分开；命令原文、输出在展开区里仍是等宽。 */
 .tool-plain .tool-name,
 .tool-plain .tool-summary {
+  font-family: inherit;
   color: var(--text-faint);
   transition: color var(--dur-1) var(--ease-out);
+}
+
+.tool-plain .tool-name {
+  font-weight: 500;
 }
 
 .tool-plain button.tool-head:hover .tool-name,
@@ -3947,7 +3976,7 @@ html[data-host='web'] body {
   height: 28px;
   padding: 0;
   border: 1px solid var(--border-strong);
-  border-radius: 5px;
+  border-radius: 6px;
   overflow: hidden;
   background: var(--bg-side);
   cursor: zoom-in;
@@ -4164,7 +4193,8 @@ html[data-host='web'] body {
   border: 1px solid var(--warn-border);
   background: var(--warn-bg);
   color: var(--warn);
-  border-radius: 10px;
+  /* 和它上面的改动条（.changes-bar）同一个圆角，叠在一起才像一组。 */
+  border-radius: 12px;
   padding: 8px 14px;
   text-align: center;
   /* 文案里常带长路径或文件名，中间没有空格可断 —— 不允许任意处断行的话
@@ -4194,7 +4224,7 @@ html[data-host='web'] body {
      行与行之间空出 2px 左右 —— 靠的是行本身的 leading，不加外边距，
      所以有块的行和纯文字的行仍然一样高。 */
   line-height: 1.5;
-  border-radius: 7px;
+  border-radius: 8px;
   padding: 0 5px;
   margin: 0 1px;
   white-space: nowrap;
@@ -5569,7 +5599,7 @@ body.file-dragging.file-drop-hot * {
   place-items: center;
   background: transparent;
   border: none;
-  border-radius: 7px;
+  border-radius: 8px;
   color: var(--composer-icon);
 }
 
@@ -5931,7 +5961,7 @@ body.file-dragging.file-drop-hot * {
 .pick-badge {
   flex: none;
   padding: 1px 6px;
-  border-radius: 5px;
+  border-radius: 6px;
   font-size: 11px;
   line-height: 1.5;
   color: var(--text-dim);
@@ -6275,7 +6305,7 @@ body.file-dragging.file-drop-hot * {
   color: var(--text-dim);
   background: var(--bg-hover);
   padding: 2px 7px;
-  border-radius: 5px;
+  border-radius: 6px;
 }
 
 .modal-title {
@@ -6472,7 +6502,7 @@ body.file-dragging.file-drop-hot * {
   display: grid;
   place-items: center;
   border: none;
-  border-radius: 5px;
+  border-radius: 6px;
   background: transparent;
   color: var(--text-faint);
 }
@@ -6642,7 +6672,7 @@ body.file-dragging.file-drop-hot * {
 .file-tree-empty {
   padding: 24px 12px;
   text-align: center;
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--text-faint);
 }
 
@@ -7553,7 +7583,7 @@ button.chip-ref.clickable:hover,
   box-sizing: border-box;
   resize: vertical;
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 1.7;
   background: var(--bg);
   border: 1px solid var(--border);
@@ -7807,7 +7837,7 @@ button.ta-resize-grip:hover:not(:disabled),
   width: 260px;
   height: 30px;
   padding: 0 10px;
-  font-size: 12.5px;
+  font-size: 13px;
   border-radius: 8px;
 }
 
@@ -7826,7 +7856,7 @@ button.ta-resize-grip:hover:not(:disabled),
 
 .env-search-empty {
   margin: 4px 0 0;
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--text-faint);
 }
 
@@ -7904,7 +7934,7 @@ button.ta-resize-grip:hover:not(:disabled),
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--text-faint);
 }
 
@@ -7929,7 +7959,7 @@ button.ta-resize-grip:hover:not(:disabled),
   height: 28px;
   padding: 0;
   border: none;
-  border-radius: 7px;
+  border-radius: 8px;
   background: transparent;
   color: var(--text-faint);
   cursor: pointer;
@@ -8574,7 +8604,7 @@ button.ta-resize-grip:hover:not(:disabled),
   gap: 8px;
   width: 100%;
   padding: 6px 10px;
-  border-radius: 7px;
+  border-radius: 8px;
   background: transparent;
   border: none;
   text-align: left;
@@ -8955,7 +8985,7 @@ button.pl-hit:hover:not(:disabled) {
 
 .plugin-facts-long {
   min-width: 0;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--text-faint);
   white-space: nowrap;
   overflow: hidden;
@@ -8993,7 +9023,7 @@ button.pl-hit:hover:not(:disabled) {
   width: 26px;
   height: 26px;
   font-size: 12px;
-  border-radius: 7px;
+  border-radius: 8px;
 }
 
 /* 页尾那句"怎么写插件"。 */
@@ -9174,7 +9204,7 @@ button.pl-hit:hover:not(:disabled) {
 .plugin-chips code {
   display: inline-block;
   padding: 2px 8px;
-  font-size: 11.5px;
+  font-size: 12px;
   line-height: 1.5;
   color: var(--text);
   background: var(--lift-1);
@@ -9195,7 +9225,7 @@ button.pl-hit:hover:not(:disabled) {
   flex-direction: column;
   gap: 4px;
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: 12px;
   line-height: 1.55;
   color: var(--text-dim);
   background: var(--lift-1);
@@ -9236,7 +9266,7 @@ button.pl-hit:hover:not(:disabled) {
 
 .plugin-code-tag {
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: 11px;
   line-height: 1.5;
   padding: 0 5px;
   color: var(--text-faint);
@@ -9259,7 +9289,7 @@ button.pl-hit:hover:not(:disabled) {
 }
 
 .plugin-component code {
-  font-size: 11.5px;
+  font-size: 12px;
 }
 
 .plugin-market-add {
@@ -9288,7 +9318,7 @@ button.pl-hit:hover:not(:disabled) {
 
 .market-error-detail {
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: 12px;
   line-height: 1.5;
   color: var(--text-faint);
   overflow-wrap: anywhere;
@@ -9385,7 +9415,7 @@ button.pl-hit:hover:not(:disabled) {
   margin: 3px;
   padding: 2px 10px;
   font-size: 12px;
-  border-radius: 5px;
+  border-radius: 6px;
   background: var(--bg-hover);
   border-color: var(--border-strong);
   color: var(--text-dim);
@@ -9806,9 +9836,10 @@ button.pl-hit:hover:not(:disabled) {
 }
 
 /* 选中态用底色 + 左缘一道色条。描边会和卡片边贴在一起分不开。 */
+/* 选中靠实心圆点 + 底色就够了。不加左侧强调条：它顶在卡片圆角上，
+   像溢出了一截。 */
 .model-row.active {
   background: var(--bg-active);
-  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 /* 整行一起亮，别只亮左边那个名字按钮 —— 它是 button，会吃到全局
@@ -9999,7 +10030,13 @@ button.pl-hit:hover:not(:disabled) {
 }
 
 .venv-found .ghost {
+  /* 小胶囊、有外框：外框左缘和上面的输入框对齐。原来是无框的 ghost
+     按钮，字被 14px 内边距推进去一截，看着像这行没对齐、也不像能点。 */
+  padding: 3px 10px;
+  border-color: var(--border-strong);
+  border-radius: 999px;
   font-size: 12px;
+  color: var(--text-dim);
 }
 
 .session-dialog {
@@ -10097,14 +10134,14 @@ button.pl-hit:hover:not(:disabled) {
   left: 0;
   right: 0;
   height: 4px;
-  border-radius: 99px;
+  border-radius: 999px;
   background: var(--border-strong);
   pointer-events: none;
 }
 
 .field-slider-fill {
   height: 100%;
-  border-radius: 99px;
+  border-radius: 999px;
   background: var(--fill);
 }
 
@@ -10381,7 +10418,7 @@ button.field-slider-state:hover {
   padding: 6px 10px;
   background: transparent;
   border: none;
-  border-radius: 7px;
+  border-radius: 8px;
   text-align: left;
   font-size: 13px;
   color: var(--text);
@@ -10403,7 +10440,7 @@ button.field-slider-state:hover {
 
 .ctx-hint {
   margin-top: 1px;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--text-faint);
 }
 
@@ -10519,12 +10556,12 @@ button.field-slider-state:hover {
 
 .radio-opt-desc {
   color: var(--text-dim);
-  font-size: 12.5px;
+  font-size: 13px;
 }
 
 .radio-opt-warn {
   color: var(--warn-dim);
-  font-size: 12.5px;
+  font-size: 13px;
 }
 
 .radio-opt-note {
@@ -10569,7 +10606,7 @@ button.field-slider-state:hover {
 
 .orphan-branch {
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: 13px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -10577,7 +10614,7 @@ button.field-slider-state:hover {
 
 .orphan-path {
   color: var(--text-faint);
-  font-size: 11.5px;
+  font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -10597,7 +10634,7 @@ button.field-slider-state:hover {
 /* 弹窗里的出错 / 进行中一行。 */
 .dialog-status {
   margin: 10px 18px 0;
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--text-dim);
 }
 
@@ -10840,7 +10877,11 @@ button.field-slider-state:hover {
   color: var(--md-code-text);
   background: var(--md-code-bg);
   padding: 0.1em 0.4em;
-  border-radius: 5px;
+  border-radius: 6px;
+  /* 长标识符折行时，两段各自收口（内边距 + 圆角），不是一块底色被
+     从中间切开。 */
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 
 /* 链接里的代码随链接色，不然点得到却看不出是链接。 */
@@ -11206,7 +11247,7 @@ button.field-slider-state:hover {
   width: calc(100% - 2px);
   height: calc(100% - 2px);
   object-fit: contain;
-  border-radius: 7px;
+  border-radius: 8px;
   background: var(--bg-side);
   pointer-events: none;
 }
@@ -11420,7 +11461,7 @@ button.field-slider-state:hover {
   text-align: left;
   padding: 9px 12px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: 8px;
   background: transparent;
   color: var(--text);
   font-size: 13px;
@@ -11505,7 +11546,7 @@ button.field-slider-state:hover {
   border: none;
   background: none;
   padding: 2px 7px 2px 0;
-  border-radius: 5px;
+  border-radius: 6px;
   font-family: var(--mono);
   font-size: 11px;
   color: var(--text-dim);
@@ -11546,7 +11587,7 @@ button.field-slider-state:hover {
   font-size: 11px;
   color: var(--text-faint);
   padding: 2px 7px;
-  border-radius: 5px;
+  border-radius: 6px;
 }
 
 .codeblock-copy:hover {
@@ -11624,7 +11665,7 @@ button.field-slider-state:hover {
   border: none;
   background: none;
   color: var(--text-faint);
-  border-radius: 5px;
+  border-radius: 6px;
   padding: 0;
   cursor: pointer;
 }
@@ -12371,7 +12412,7 @@ button.ctx-cat-line:focus-visible {
 .ctx-cat-num,
 .ctx-cat-pct {
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: 11px;
   white-space: nowrap;
 }
 
@@ -12405,7 +12446,7 @@ button.ctx-cat-line:focus-visible {
   justify-content: space-between;
   gap: 8px;
   padding-right: 50px;
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--text-faint);
 }
 
@@ -12420,7 +12461,7 @@ button.ctx-cat-line:focus-visible {
 }
 
 .ctx-deferred-head {
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--text-faint);
 }
 
@@ -12591,7 +12632,7 @@ button.ctx-cat-line:focus-visible {
   height: 28px;
   padding: 0 6px 0 8px;
   gap: 4px;
-  border-radius: 7px;
+  border-radius: 8px;
   font-size: 13px;
   font-family: var(--mono);
   color: var(--text-dim);
@@ -12627,7 +12668,7 @@ button.ctx-cat-line:focus-visible {
   place-items: center;
   background: transparent;
   border: none;
-  border-radius: 7px;
+  border-radius: 8px;
   color: var(--text-dim);
 }
 
@@ -12680,7 +12721,7 @@ button.ctx-cat-line:focus-visible {
   padding: 3px 8px;
   background: transparent;
   border: none;
-  border-radius: 7px;
+  border-radius: 8px;
   text-align: left;
   cursor: pointer;
 }
@@ -12793,7 +12834,7 @@ button.ctx-cat-line:focus-visible {
   border-radius: 8px;
   margin: 2px 0 6px;
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: 12px;
   line-height: 1.55;
   overflow-x: auto;
   max-height: 460px;
@@ -12908,7 +12949,7 @@ button.ctx-cat-line:focus-visible {
 .change-note {
   padding: 4px 8px 6px;
   color: var(--text-faint);
-  font-size: 11.5px;
+  font-size: 12px;
   font-family: var(--sans);
 }
 
@@ -13117,7 +13158,7 @@ button.ctx-cat-line:focus-visible {
   right: 8px;
   padding: 2px 7px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 6px;
   background: var(--bg-card);
   font-size: 11px;
   color: var(--text-faint);
@@ -13258,7 +13299,7 @@ button.ctx-cat-line:focus-visible {
   height: 22px;
   color: var(--text-dim);
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 6px;
   padding: 0;
   cursor: pointer;
 }
@@ -13504,7 +13545,7 @@ button.ctx-cat-line:focus-visible {
 /* 创建表单（右侧栏，和详情共用 .sp-detail 壳）：宿主返回的错误就是给人
    看的一句话，摆在表单底部，红字不加框。 */
 .sp-d-error {
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--danger-soft);
 }
 
@@ -14263,7 +14304,7 @@ button.ctx-cat-line:focus-visible {
   padding: 6px 8px;
   background: transparent;
   border: none;
-  border-radius: 7px;
+  border-radius: 8px;
   text-align: left;
   font-size: 13px;
   color: var(--text);

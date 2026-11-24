@@ -128,6 +128,7 @@ import {
   TERM,
   clamp,
   DRAWER_MIN,
+  MAIN_MIN,
   SIDEBAR_PUSH_FLOOR_LIGHTS,
   drawerDefault,
   drawerDragLayout,
@@ -410,6 +411,26 @@ export function App() {
   const emptyShown = useRef(false);
   if (rightDrawerOpen) emptyShown.current = wb.tabs.length === 0;
   const showWorkbenchEmpty = rightDrawerOpen ? wb.tabs.length === 0 : emptyShown.current;
+
+  // 右侧栏打开（或开着时窗口缩窄），三列塞不下 —— 左栏 + 主区下限 + 右侧栏
+  // 下限 > 窗口：先收起左栏。usePanelLayout 的 fit 只会把右侧栏压到它自己
+  // 的下限为止，再不够它就被 .shell 裁掉右缘（面板内容切掉一截）。
+  // 只在右侧栏打开和窗口变化时判断，不跟着 sidebarOpen：用户自己再展开
+  // 左栏是他的选择，不和他抢。临时收起，不写进侧栏的开合偏好。
+  const rightMin = rightDrawerOpen ? DRAWER_MIN : scheduleDetailOpen ? SCHED_DETAIL.min : 0;
+  const fitLeft = useRef({ sidebarOpen, sidebarW, isMobile });
+  fitLeft.current = { sidebarOpen, sidebarW, isMobile };
+  useEffect(() => {
+    if (!rightMin) return;
+    const fit = () => {
+      const { sidebarOpen: open, sidebarW: w, isMobile: mobile } = fitLeft.current;
+      if (mobile || !open) return;
+      if (w + MAIN_MIN + rightMin > window.innerWidth) setSidebarOpen(false);
+    };
+    fit();
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
+  }, [rightMin, setSidebarOpen]);
   /** 壳真正开始改宽度的那一拍。窗口开关跟这个走：跟收起动画对齐
    *  坐回顶栏，设置钮才不会先被主区拽到窗口右缘、再被开关挤回来。 */
   const [drawerVisual, setDrawerVisual] = useState(false);
