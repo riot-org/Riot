@@ -1686,11 +1686,7 @@ export const Transcript = memo(function Transcript({
       // 「回到底部」得靠这里浮出来，不然用户翻上去就找不到回程。
       setAwayFromBottom(distFromBottom(box) > box.clientHeight);
     });
-    // border-box：对话列的下内边距跟着浮在上面的底栏变（--dock-h，见
-    // styles.css 的 .chat:not(.chat-empty) .thread-col）。默认的 content-box
-    // 不含内边距 —— 输入框打多行变高时这里收不到，跟随中不贴底，最后一条就
-    // 被输入框盖住。
-    ro.observe(col, { box: "border-box" });
+    ro.observe(col);
     // 对话区自己变高变矮也要管：输入框随草稿长高缩回、上方出现横条时，
     // 列没变、视口变了 —— 跟随中不贴一下，底部就露出一截或被盖住一截。
     ro.observe(box);
