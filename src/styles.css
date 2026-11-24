@@ -12952,6 +12952,17 @@ button.ctx-cat-line:focus-visible {
   opacity: 0.35;
 }
 
+/* 视觉开关：开着时常亮、用强调色 —— 它表示的是状态，不能跟着行按钮
+   一起淡下去，否则扫一眼看不出哪些模型能看图。关着时随其他行按钮。 */
+.model-row .vision-toggle.on {
+  opacity: 1;
+  color: var(--accent);
+}
+
+.model-row .vision-toggle.on:hover {
+  color: var(--accent);
+}
+
 /* MCP 工具名的展开/收起。跟 chip 同高，别再塞进一段正文。 */
 .mcp-tools-more {
   border: none;

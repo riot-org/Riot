@@ -470,20 +470,25 @@ export function ProviderEditor({
                   title={picked ? t("settings.provider.editor.testModel") : t("settings.provider.editor.testWith")}
                 >
                   <span className="model-radio">{picked ? "●" : "○"}</span>
-                  <span className="model-label">
-                    {m.name?.trim() || m.id}
-                    {m.vision ? (
-                      <span
-                        className="cap-icon"
-                        role="img"
-                        aria-label={t("settings.provider.editor.vision.aria")}
-                        title={t("settings.provider.editor.vision.title")}
-                      >
-                        <EyeIcon />
-                      </span>
-                    ) : null}
-                  </span>
+                  <span className="model-label">{m.name?.trim() || m.id}</span>
                   {m.name?.trim() ? <code className="model-id">{m.id}</code> : null}
+                </button>
+                {/* 视觉是常改的一项，直接在行上切，不用进编辑弹窗。和名字分开
+                    放：名字那块是「选测试模型」的单选，按钮里不能再套按钮。
+                    开着时常亮（状态要一眼看得见），关着时和其他行按钮一样淡。 */}
+                <button
+                  className={m.vision ? "row-btn vision-toggle on" : "row-btn vision-toggle"}
+                  role="switch"
+                  aria-checked={!!m.vision}
+                  aria-label={t("settings.provider.editor.vision.aria")}
+                  title={
+                    m.vision
+                      ? t("settings.provider.editor.vision.onTitle")
+                      : t("settings.provider.editor.vision.offTitle")
+                  }
+                  onClick={() => saveModel({ ...m, vision: !m.vision })}
+                >
+                  {m.vision ? <EyeIcon /> : <EyeOffIcon />}
                 </button>
                 <button
                   className="row-btn"
@@ -604,6 +609,22 @@ function EyeIcon() {
         strokeLinejoin="round"
       />
       <circle cx="8" cy="8" r="1.9" stroke="currentColor" strokeWidth="1.3" />
+    </svg>
+  );
+}
+
+/** 关着的视觉：同一只眼睛加一道斜线。 */
+function EyeOffIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden>
+      <path
+        d="M1.8 8s2.4-4.5 6.2-4.5S14.2 8 14.2 8s-2.4 4.5-6.2 4.5S1.8 8 1.8 8z"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+      />
+      <circle cx="8" cy="8" r="1.9" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M2.5 13.5l11-11" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
     </svg>
   );
 }
