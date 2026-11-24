@@ -1518,6 +1518,11 @@ export interface EnvVarAsk {
    */
   name: string;
   /**
+   * 可以不填（端口有默认值、私钥没设密码短语这类）。表单上标「可选」，
+   * 留空也能提交。
+   */
+  optional?: boolean;
+  /**
    * 设置里已经有了。表单上显示「已配置」，留空就沿用。
    */
   set?: boolean;

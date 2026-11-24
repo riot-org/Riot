@@ -268,8 +268,9 @@ export function EnvVarsCard({
 
   if (!form) return null;
 
-  // 能提交：每个还没配过的变量都填了。已配过的可以留空沿用。
-  const ready = form.vars.every((v) => v.set || (values[v.name] ?? "").trim() !== "");
+  const filled = (name: string) => (values[name] ?? "").trim() !== "";
+  // 能提交：每个必填、还没配过的变量都填了。已配过的留空沿用，可选的留空跳过。
+  const ready = form.vars.every((v) => v.set || v.optional || filled(v.name));
 
   const submit = async () => {
     if (answered || saving || !ready) return;
@@ -287,9 +288,11 @@ export function EnvVarsCard({
     }
     setAnswered(true);
     setSaving(false);
-    // 值在宿主那边了，这里不再留着。
+    // 值在宿主那边了，这里不再留着（下面 setValues 清空）。
+    // 只报真有值的：可选留空的不在里面，内核据此告诉模型「用户跳过了」。
+    const saved = form.vars.filter((v) => v.set || filled(v.name)).map((v) => v.name);
     setValues({});
-    onAnswer({ decision: "allow", choice: form.vars.map((v) => v.name) });
+    onAnswer({ decision: "allow", choice: saved });
   };
 
   const skip = () => {
@@ -314,6 +317,9 @@ export function EnvVarsCard({
             <span className="env-card-label">
               <code className="env-card-name">{v.name}</code>
               {v.set ? <span className="env-card-set">{t("transcript.env.alreadySet")}</span> : null}
+              {!v.set && v.optional ? (
+                <span className="env-card-set env-card-optional">{t("transcript.env.optional")}</span>
+              ) : null}
               {v.link ? (
                 <button
                   type="button"
@@ -339,7 +345,13 @@ export function EnvVarsCard({
                     void submit();
                   }
                 }}
-                placeholder={v.set ? t("transcript.env.keepPlaceholder") : t("transcript.env.placeholder")}
+                placeholder={
+                  v.set
+                    ? t("transcript.env.keepPlaceholder")
+                    : v.optional
+                      ? t("transcript.env.optionalPlaceholder")
+                      : t("transcript.env.placeholder")
+                }
                 autoComplete="off"
                 spellCheck={false}
                 disabled={busy}

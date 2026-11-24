@@ -53,6 +53,10 @@ struct InputVar {
     /// 获取这个值的网页（控制台的 API key 页面）。没有就不填。
     #[serde(default)]
     link: Option<String>,
+    /// 可以不填时为 true（有默认值的端口、可能没有的密码短语）。用户
+    /// 留空也能提交表单。默认 false：必填。
+    #[serde(default)]
+    optional: bool,
 }
 
 pub struct RequestEnv;
@@ -81,6 +85,7 @@ pub fn preview_parts(input: &serde_json::Value) -> Option<(String, Vec<EnvVarAsk
             .map(|v| EnvVarAsk {
                 set: crate::user_env::is_set(&v.name),
                 name: v.name,
+                optional: v.optional,
                 description: v.description,
                 link: v
                     .link
@@ -134,7 +139,9 @@ impl Tool for RequestEnv {
              you do not need to check first — and do not try to check with `echo $NAME`.\n\n\
              Name variables the way the service's docs do (`OPENAI_API_KEY`), uppercase with \
              underscores. In `description`, say what the value is and where to get it; put the \
-             page that issues it in `link`.\n\n\
+             page that issues it in `link`. Set `optional: true` on a variable the task can \
+             do without (a port with a default, a passphrase the key may not have) so the user \
+             can leave it empty.\n\n\
              Command output that contains a configured value reaches you as \
              `[已遮蔽：$NAME]` — that is expected, the command did see the real value."
         )
@@ -236,16 +243,24 @@ impl Tool for RequestEnv {
         let Some(parsed) = parse(&input) else {
             return ToolOutcome::failed("参数解析不了，重新组织一下 reason 和 vars。");
         };
-        let asked: Vec<String> = parsed.vars.into_iter().map(|v| v.name).collect();
+        let asked: Vec<(String, bool)> = parsed
+            .vars
+            .into_iter()
+            .map(|v| (v.name, v.optional))
+            .collect();
         // 放行有两条路：用户填了表单（名字从 CHOSEN_KEY 回来），或者要的
         // 本来就全配好了（没出表单）。以表为准再核一遍 —— 表单上留空的
         // 变量不会被写进设置。
         let mut ready: Vec<&str> = Vec::new();
         let mut missing: Vec<&str> = Vec::new();
+        // 可选变量留空不算缺：告诉模型按没有这个值处理，别当成要等用户补。
+        let mut skipped: Vec<&str> = Vec::new();
         let filled = saved(&input);
-        for name in &asked {
+        for (name, optional) in &asked {
             if crate::user_env::is_set(name) || filled.iter().any(|f| f == name) {
                 ready.push(name);
+            } else if *optional {
+                skipped.push(name);
             } else {
                 missing.push(name);
             }
@@ -257,13 +272,27 @@ impl Tool for RequestEnv {
             .collect::<Vec<_>>()
             .join("、");
         let mut text = if ready.is_empty() {
-            "用户没有填写任何变量。".to_owned()
+            if missing.is_empty() {
+                // 全是可选的、用户都留空了：下面那行「可选、用户留空」就是全部。
+                String::new()
+            } else {
+                "用户没有填写任何变量。".to_owned()
+            }
         } else {
             format!(
                 "已配置：{refs}。之后的每条命令都带着这些环境变量（包括这一轮接下来的），\
                  在命令和脚本里直接引用即可。值对你不可见，输出里出现会被遮蔽成 [已遮蔽：$NAME]。"
             )
         };
+        if !skipped.is_empty() {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(&format!(
+                "可选、用户留空：{}。按没有这个值处理（用默认值、不带这个参数），不要再问。",
+                skipped.join("、")
+            ));
+        }
         if !missing.is_empty() {
             text.push_str(&format!(
                 "\n还没配置：{}。用户这次没有填，不要立刻再问；需要它的那一步先别做，\
@@ -388,6 +417,42 @@ mod tests {
         };
         assert!(text.contains("$MOSS_API_KEY"), "{text}");
         assert!(text.contains("还没配置：MOSS_GROUP"), "{text}");
+    }
+
+    #[test]
+    fn 可选变量留空不算缺() {
+        let _g = crate::user_env::test_lock();
+        crate::user_env::set(Vec::new());
+        let mut i = json!({
+            "reason": "连第二台服务器",
+            "vars": [
+                { "name": "SSH_HOST" },
+                { "name": "SSH_PASSPHRASE", "optional": true },
+            ]
+        });
+        let (_, vars) = preview_parts(&i).unwrap();
+        assert_eq!(
+            vars.iter()
+                .map(|v| (v.name.as_str(), v.optional))
+                .collect::<Vec<_>>(),
+            [("SSH_HOST", false), ("SSH_PASSPHRASE", true)]
+        );
+        i[CHOSEN_KEY] = json!(["SSH_HOST"]);
+        let out = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("建运行时")
+            .block_on(RequestEnv.call(i, tctx()));
+        let ToolOutcome::Ok {
+            model_content: ToolResultContent::Text { text },
+            ..
+        } = out
+        else {
+            panic!("该成功：{out:?}")
+        };
+        assert!(text.contains("$SSH_HOST"), "{text}");
+        assert!(text.contains("可选、用户留空：SSH_PASSPHRASE"), "{text}");
+        assert!(!text.contains("还没配置"), "{text}");
     }
 
     #[tokio::test]

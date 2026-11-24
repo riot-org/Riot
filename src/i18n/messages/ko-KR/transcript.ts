@@ -211,6 +211,8 @@ export default {
   "transcript.env.alreadySet": "설정됨",
   "transcript.env.getIt": "발급받기 ↗",
   "transcript.env.keepPlaceholder": "비워 두면 기존 값을 사용합니다",
+  "transcript.env.optional": "선택",
+  "transcript.env.optionalPlaceholder": "비워 두어도 됩니다",
   "transcript.env.placeholder": "여기에 붙여넣기",
   "transcript.env.show": "보기",
   "transcript.env.hide": "숨기기",

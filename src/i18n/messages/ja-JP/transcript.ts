@@ -199,6 +199,8 @@ export default {
   "transcript.env.alreadySet": "設定済み",
   "transcript.env.getIt": "取得する ↗",
   "transcript.env.keepPlaceholder": "空のままなら現在の値を使います",
+  "transcript.env.optional": "任意",
+  "transcript.env.optionalPlaceholder": "空のままでも可",
   "transcript.env.placeholder": "ここに貼り付け",
   "transcript.env.show": "表示",
   "transcript.env.hide": "隠す",

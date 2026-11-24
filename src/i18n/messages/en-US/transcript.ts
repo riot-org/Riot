@@ -218,6 +218,8 @@ export default {
   "transcript.env.alreadySet": "Set",
   "transcript.env.getIt": "Get it ↗",
   "transcript.env.keepPlaceholder": "Leave empty to keep the current value",
+  "transcript.env.optional": "Optional",
+  "transcript.env.optionalPlaceholder": "Optional — leave empty to skip",
   "transcript.env.placeholder": "Paste here",
   "transcript.env.show": "Show",
   "transcript.env.hide": "Hide",

@@ -197,6 +197,8 @@ export default {
   "transcript.env.alreadySet": "已設定",
   "transcript.env.getIt": "去取得 ↗",
   "transcript.env.keepPlaceholder": "留空沿用已設定的值",
+  "transcript.env.optional": "選填",
+  "transcript.env.optionalPlaceholder": "可留空",
   "transcript.env.placeholder": "貼到這裡",
   "transcript.env.show": "顯示",
   "transcript.env.hide": "隱藏",

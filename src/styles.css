@@ -8067,6 +8067,11 @@ button.ta-resize-grip:hover:not(:disabled),
   color: var(--ok);
 }
 
+/* 「可选」：只是说明，不是状态，用淡色。 */
+.env-card-optional {
+  color: var(--text-faint);
+}
+
 .env-card-link {
   margin-left: auto;
   padding: 0;
