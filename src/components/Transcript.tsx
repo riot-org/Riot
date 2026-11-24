@@ -470,12 +470,17 @@ function FindBar({
   // 关闭（含卸载）时清掉高亮，别在页面上留一堆黄块。
   useEffect(() => clear, [clear]);
 
+  // 打开即聚焦。不用 autoFocus：它会顺带滚动对话区去"露出"输入框，
+  // 把读到一半的位置挪走（见 lib/popoverFit）。
+  useEffect(() => {
+    inputRef.current?.focus({ preventScroll: true });
+  }, []);
+
   return (
     <div className="find-wrap">
       <div className="find-bar" role="search">
         <input
           ref={inputRef}
-          autoFocus
           value={query}
           placeholder={t("transcript.find.placeholder")}
           onChange={(e) => setQuery(e.target.value)}

@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 
 import { Chevron } from "./Chevron";
 import { MenuPickCheck } from "./icons";
+import { scrollIntoViewWithin } from "../lib/popoverFit";
 
 export interface FieldOption {
   value: string;
@@ -102,7 +103,7 @@ export function FieldSelect({
     if (!open) return;
     const items = menuRef.current?.querySelectorAll<HTMLButtonElement>("[role=option]");
     const cur = [...(items ?? [])].find((b) => b.getAttribute("aria-selected") === "true");
-    (cur ?? items?.[0])?.focus();
+    (cur ?? items?.[0])?.focus({ preventScroll: true });
   }, [open, box]);
 
   const current = options.find((o) => o.value === value);
@@ -155,7 +156,9 @@ export function FieldSelect({
                 const i = items.indexOf(document.activeElement as HTMLButtonElement);
                 const n = items.length;
                 const next = e.key === "ArrowDown" ? (i + 1) % n : (i - 1 + n) % n;
-                items[next]?.focus();
+                const el = items[next];
+                el?.focus({ preventScroll: true });
+                if (el && menuRef.current) scrollIntoViewWithin(menuRef.current, el);
               }}
             >
               {options.map((o) => (

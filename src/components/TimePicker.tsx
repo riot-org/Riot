@@ -88,10 +88,13 @@ function ScrollCol({
   onPick: (v: string) => void;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
+  // 只滚这一列，把选中项放到中间。scrollIntoView 会连带滚外层，见 lib/popoverFit。
   useEffect(() => {
-    listRef.current
-      ?.querySelector(".tp-item.picked")
-      ?.scrollIntoView({ block: "center" });
+    const list = listRef.current;
+    const el = list?.querySelector<HTMLElement>(".tp-item.picked");
+    if (!list || !el) return;
+    list.scrollTop += el.getBoundingClientRect().top - list.getBoundingClientRect().top
+      - (list.clientHeight - el.offsetHeight) / 2;
   }, []);
   return (
     <div className="tp-col">

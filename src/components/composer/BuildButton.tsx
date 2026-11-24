@@ -22,7 +22,8 @@ export function BuildButton({
 }) {
   const { t } = useT();
   const [open, setOpen] = useState(false);
-  const { rootRef, onKeyDown } = useDropdown(open, setOpen);
+  // 挂在工具栏右端：右缘对齐、往左开 —— 往右开会顶出输入框。
+  const { rootRef, menuRef, onKeyDown, float } = useDropdown(open, setOpen, { align: "end" });
   return (
     <div className="mode-menu build-menu" ref={rootRef} onKeyDown={onKeyDown}>
       <div className="build-split">
@@ -49,8 +50,8 @@ export function BuildButton({
           <Chevron down open={open} />
         </button>
       </div>
-      {open ? (
-        <div className="menu menu-right" role="menu">
+      {open ? float(
+        <div className="menu menu-float build-pop" role="menu" ref={menuRef}>
           <button
             type="button"
             role="menuitem"
@@ -70,7 +71,7 @@ export function BuildButton({
               <span className="menu-hint">{t("composer.build.parallelHint")}</span>
             </span>
           </button>
-        </div>
+        </div>,
       ) : null}
     </div>
   );

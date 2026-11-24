@@ -3,12 +3,14 @@
  * 它们共用的开合/键盘导航逻辑（useDropdown）。从 App.tsx 拆出。
  */
 
-import { Fragment, type ReactNode, useEffect, useRef, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import type { PermissionMode, ProviderConfig } from "../bridge";
 import { type MessageKey, useT } from "../i18n";
 import { Chevron } from "./Chevron";
 import { ConfirmDialog, type ConfirmRequest } from "./ConfirmDialog";
+import { scrollIntoViewWithin } from "../lib/popoverFit";
 import { AgentModeIcon, EyeIcon, MenuPickCheck, MultitaskIcon, PlanModeIcon } from "./icons";
 
 /** 权限档名的词典键。渲染时 `t()`，不缓存翻译结果。 */
@@ -68,29 +70,68 @@ export function modelLabel(p: ProviderConfig | null, id: string): string {
 
 /**
  * 上拉菜单的公共行为：点外面关、Esc 关（焦点还给 pill）、上下键在
- * 菜单项间移动。三个 pill 菜单（模式/服务方/模型）共用，键盘模型
+ * 菜单项间移动。几个 pill 菜单（模式/权限/模型/构建）共用，键盘模型
  * 才能一致。
+ *
+ * 菜单**全局悬浮**：用 `float()` 渲染到 body、`position: fixed`，按
+ * 触发器在窗口里的位置摆。挂在原地的话会被聊天区（`overflow: hidden`）
+ * 裁掉，超出部分还会让浏览器把聊天区横向滚走（见 lib/popoverFit）——
+ * 聊天区一窄，整个界面就被推到左边。现在只受窗口边界约束。
+ *
+ * React 事件照样沿组件树冒泡穿过 portal，根上的 onKeyDown 仍管得到
+ * 菜单里的按键；只有原生的 mousedown「点外面」要同时认菜单节点。
  */
-export function useDropdown(open: boolean, setOpen: (v: boolean) => void) {
+export function useDropdown(
+  open: boolean,
+  setOpen: (v: boolean) => void,
+  opts: {
+    /** 往上开（输入框工具栏，默认）还是往下开（顶栏）。放不下时自动翻面。 */
+    placement?: "up" | "down";
+    /** 左缘对齐触发器（默认），或右缘对齐（工具栏右端的构建键）。 */
+    align?: "start" | "end";
+    /** 菜单内容的形状变了（比如模型菜单切成一列展开）就换个值，重新摆位。 */
+    relayout?: unknown;
+  } = {},
+) {
+  const { placement = "up", align = "start", relayout } = opts;
   const rootRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
     const close = (e: MouseEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (rootRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+      setOpen(false);
     };
     window.addEventListener("mousedown", close);
     return () => window.removeEventListener("mousedown", close);
   }, [open, setOpen]);
 
-  // 打开后把焦点放到当前选中项，键盘用户不用先按好几下 Tab
+  // 摆位：绘制前量好。往上开时钉住**底边**（style.bottom），菜单内容
+  // 变高变矮（搜索过滤）都从底边往上长，不会离开触发器。
+  useLayoutEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const anchor = rootRef.current;
+      const menu = menuRef.current;
+      if (!anchor || !menu) return;
+      placeMenu(menu, anchor.getBoundingClientRect(), placement, align);
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [open, placement, align, relayout]);
+
+  // 打开后把焦点放到当前选中项，键盘用户不用先按好几下 Tab。
+  // preventScroll：聚焦不许连带滚动外层容器。
   useEffect(() => {
     if (!open) return;
-    const root = rootRef.current;
+    const menu = menuRef.current;
     const target =
-      root?.querySelector<HTMLButtonElement>(".menu-item.active") ??
-      root?.querySelector<HTMLButtonElement>(".menu-item");
-    target?.focus();
+      menu?.querySelector<HTMLButtonElement>(".menu-item.active") ??
+      menu?.querySelector<HTMLButtonElement>(".menu-item");
+    focusInMenu(target);
   }, [open]);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -99,7 +140,7 @@ export function useDropdown(open: boolean, setOpen: (v: boolean) => void) {
       e.preventDefault();
       e.stopPropagation();
       setOpen(false);
-      rootRef.current?.querySelector<HTMLButtonElement>(".picker-pill")?.focus();
+      rootRef.current?.querySelector<HTMLButtonElement>("[aria-haspopup=menu]")?.focus();
       return;
     }
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
@@ -108,7 +149,7 @@ export function useDropdown(open: boolean, setOpen: (v: boolean) => void) {
       // 主菜单里，不分层的话上下键会从主菜单一路走进子菜单。
       const scope =
         (document.activeElement as HTMLElement | null)?.closest<HTMLElement>("[role=menu]") ??
-        rootRef.current?.querySelector<HTMLElement>("[role=menu]");
+        menuRef.current;
       const items = [...(scope?.querySelectorAll<HTMLButtonElement>(".menu-item") ?? [])].filter(
         (el) => el.closest("[role=menu]") === scope,
       );
@@ -116,11 +157,69 @@ export function useDropdown(open: boolean, setOpen: (v: boolean) => void) {
       const cur = items.indexOf(document.activeElement as HTMLButtonElement);
       const n = items.length;
       const next = e.key === "ArrowDown" ? (cur + 1) % n : (cur - 1 + n) % n;
-      items[next]?.focus();
+      focusInMenu(items[next]);
     }
   };
 
-  return { rootRef, onKeyDown };
+  /** 把菜单渲染到 body。菜单根节点要挂 `ref={menuRef}`。 */
+  const float = (node: ReactNode) => createPortal(node, document.body);
+
+  return { rootRef, menuRef, onKeyDown, float };
+}
+
+/** 菜单离窗口边缘、离触发器的距离。 */
+const MENU_EDGE = 8;
+const MENU_GAP = 8;
+
+/**
+ * 把悬浮菜单摆到触发器旁边：首选方向放不下而另一面更宽敞就翻面；
+ * 横向夹在窗口里；两面都不够高就限高、菜单内部滚动。
+ */
+function placeMenu(menu: HTMLElement, a: DOMRect, placement: "up" | "down", align: "start" | "end") {
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const s = menu.style;
+  s.maxHeight = "";
+  s.overflowY = "";
+  const w = menu.offsetWidth;
+  const h = menu.offsetHeight;
+
+  const above = a.top - MENU_GAP - MENU_EDGE;
+  const below = vh - a.bottom - MENU_GAP - MENU_EDGE;
+  const up = placement === "up" ? h <= above || above >= below : !(h <= below || below >= above);
+  const room = up ? above : below;
+  if (h > room) {
+    s.maxHeight = `${Math.max(120, room)}px`;
+    s.overflowY = "auto";
+  }
+  if (up) {
+    s.top = "auto";
+    s.bottom = `${vh - a.top + MENU_GAP}px`;
+  } else {
+    s.bottom = "auto";
+    s.top = `${a.bottom + MENU_GAP}px`;
+  }
+
+  const want = align === "end" ? a.right - w : a.left;
+  s.right = "auto";
+  s.left = `${Math.max(MENU_EDGE, Math.min(want, vw - w - MENU_EDGE))}px`;
+}
+
+/**
+ * 聚焦菜单项：不滚祖先（见 lib/popoverFit），只滚它所在的那个可滚的列表，
+ * 让键盘走到的项露出来。
+ */
+function focusInMenu(el: HTMLElement | null | undefined) {
+  if (!el) return;
+  el.focus({ preventScroll: true });
+  // 滚最近一个真的在滚的容器：子菜单的列表，或限了高的整个菜单（一列展开时）。
+  for (let p = el.parentElement; p; p = p.parentElement) {
+    if (p.scrollHeight > p.clientHeight && getComputedStyle(p).overflowY !== "visible") {
+      scrollIntoViewWithin(p, el);
+      return;
+    }
+    if (p.classList.contains("menu-float")) return;
+  }
 }
 
 function ModeMenuItem({
@@ -204,7 +303,7 @@ export function ModeMenu({
 }) {
   const { t } = useT();
   const [open, setOpen] = useState(false);
-  const { rootRef, onKeyDown } = useDropdown(open, setOpen);
+  const { rootRef, menuRef, onKeyDown, float } = useDropdown(open, setOpen);
   const items = canMultitask ? WORK_MODES : WORK_MODES.filter((w) => w.id !== "multitask");
   const cur = WORK_MODES.find((w) => w.id === value) ?? WORK_MODES[0]!;
   const curLabel = t(cur.labelKey);
@@ -229,8 +328,8 @@ export function ModeMenu({
           <Chevron down open={open} />
         </span>
       </button>
-      {open ? (
-        <div className="menu" role="menu">
+      {open ? float(
+        <div className="menu menu-float" role="menu" ref={menuRef}>
           <div className="menu-group-title">{t("composer.mode.group")}</div>
           {items.map((w) => (
             <ModeMenuItem
@@ -245,7 +344,7 @@ export function ModeMenu({
               }}
             />
           ))}
-        </div>
+        </div>,
       ) : null}
     </div>
   );
@@ -269,7 +368,7 @@ export function PermissionMenu({
   const { t } = useT();
   const [open, setOpen] = useState(false);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
-  const { rootRef, onKeyDown } = useDropdown(open, setOpen);
+  const { rootRef, menuRef, onKeyDown, float } = useDropdown(open, setOpen, { placement: "down" });
   const labelKey = MODE_LABEL_KEY[mode];
   const label = labelKey ? t(labelKey) : mode;
   const warnKey = MODE_WARN_KEY[mode];
@@ -310,8 +409,8 @@ export function PermissionMenu({
           <Chevron down open={open} />
         </span>
       </button>
-      {open ? (
-        <div className="menu menu-down" role="menu">
+      {open ? float(
+        <div className="menu menu-float" role="menu" ref={menuRef}>
           <div className="menu-group-title">{t("composer.perm.group")}</div>
           {PERMISSION_MODES.map((m) => {
             const lk = MODE_LABEL_KEY[m];
@@ -326,7 +425,7 @@ export function PermissionMenu({
               />
             );
           })}
-        </div>
+        </div>,
       ) : null}
       {/* portal：顶栏是窄条，遮罩要罩住整个窗口，不能就地渲染在它里面。 */}
       {confirm ? <ConfirmDialog c={confirm} portal onClose={() => setConfirm(null)} /> : null}
@@ -439,13 +538,16 @@ function PickerRow({ item, onPick }: { item: PickerItem; onPick: () => void }) {
 }
 
 /** 二级菜单的内容：可选的搜索框 + 分组列表。卸载即清空搜索。 */
-function PickerList({ menu, onPick, onClose }: {
+function PickerList({ menu, inline, onPick, onClose }: {
   menu: PickerSubmenu;
+  /** 一列展开里的一节：不自己滚（整个菜单滚），打开时不抢焦点。 */
+  inline?: boolean;
   onPick: (id: string) => void;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   const groups: PickerGroup[] = menu.groups ?? [{ id: "", title: "", items: menu.items ?? [] }];
   const total = groups.reduce((n, g) => n + (g.hideOnSearch ? 0 : g.items.length), 0);
   const searchable = Boolean(menu.searchPlaceholder) && total >= SEARCH_MIN;
@@ -459,8 +561,17 @@ function PickerList({ menu, onPick, onClose }: {
         .filter((g) => g.items.length > 0)
     : groups;
 
+  // 不用 autoFocus / scrollIntoView：两者都会把外层会裁剪的容器（聊天区）
+  // 横向滚过去，窄布局下整个界面被推到左边（见 lib/popoverFit）。
+  // 用 effect 而不是 layout effect：等外层子菜单先摆好位置再聚焦。
   useEffect(() => {
-    listRef.current?.querySelector<HTMLElement>(".menu-item.active")?.scrollIntoView({ block: "nearest" });
+    if (inline) return;
+    const list = listRef.current;
+    const active = list?.querySelector<HTMLElement>(".menu-item.active");
+    if (list && active) scrollIntoViewWithin(list, active);
+    // 悬停展开也给焦点：看到搜索框就能直接打字，不用再点一下。
+    searchRef.current?.focus({ preventScroll: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
@@ -474,8 +585,7 @@ function PickerList({ menu, onPick, onClose }: {
           aria-label={menu.searchPlaceholder}
           spellCheck={false}
           autoComplete="off"
-          // 悬停展开也给焦点：看到搜索框就能直接打字，不用再点一下。
-          autoFocus
+          ref={searchRef}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
             if (e.key !== "Enter" || !q) return;
@@ -485,7 +595,7 @@ function PickerList({ menu, onPick, onClose }: {
           }}
         />
       ) : null}
-      <div className="picker-list" ref={listRef}>
+      <div className={inline ? "picker-list inline" : "picker-list"} ref={listRef}>
         {shown.map((g, gi) => (
           <div
             key={g.id}
@@ -550,14 +660,61 @@ export function Picker({
 }) {
   const [open, setOpen] = useState(false);
   const [sub, setSub] = useState<string | null>(null);
-  const { rootRef, onKeyDown } = useDropdown(open, setOpen);
+  /**
+   * 子菜单怎么出：往右弹、往左弹，还是两边都放不下 —— 那就不弹了，
+   * 整个菜单变成一列，各个子菜单就地展开成带标题的一节（照 Claude）。
+   */
+  const [flyMode, setFlyMode] = useState<"right" | "left" | "inline">("right");
+  const { rootRef, menuRef, onKeyDown, float } = useDropdown(open, setOpen, { relayout: flyMode });
   const subTimer = useRef(0);
   const lastSub = useRef<string | null>(null);
+  const flyRef = useRef<HTMLDivElement>(null);
+
+  // 打开时按主菜单在窗口里的位置定一次：右边够放子菜单就往右，否则
+  // 左边够就往左，都不够就一列展开。菜单悬浮在 body 上，只看窗口边界。
+  // 在 useDropdown 摆好主菜单之后跑（同一次提交里按声明顺序），绘制前定。
+  useLayoutEffect(() => {
+    if (!open) {
+      setFlyMode("right");
+      return;
+    }
+    const menu = menuRef.current;
+    if (!menu) return;
+    const r = menu.getBoundingClientRect();
+    const need = FLYOUT_W + MENU_EDGE;
+    setFlyMode(window.innerWidth - r.right >= need ? "right" : r.left >= need ? "left" : "inline");
+    // 只在开合时定：展开成一列后菜单变宽，再量会来回跳。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  // 切成一列时原来那些触发行被卸载，useDropdown 打开时给的焦点跟着丢到
+  // body 上（Esc、上下键就不归菜单管了）。重新放到第一个当前档上。
+  useEffect(() => {
+    if (!open || flyMode !== "inline") return;
+    focusInMenu(menuRef.current?.querySelector<HTMLElement>(".menu-item.active"));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, flyMode]);
+
+  // 子菜单底边对齐触发行、往上长。窗口矮时列表限高到上面放得下的高度，
+  // 别让顶上的搜索框长出窗口。
+  useLayoutEffect(() => {
+    const el = flyRef.current;
+    const anchor = el?.parentElement;
+    const list = el?.querySelector<HTMLElement>(".picker-list");
+    if (!el || !anchor || !list) return;
+    list.style.removeProperty("--fly-list-max");
+    const chrome = el.offsetHeight - list.offsetHeight;
+    const room = anchor.getBoundingClientRect().bottom + 4 - MENU_EDGE - chrome;
+    if (list.offsetHeight > room) list.style.setProperty("--fly-list-max", `${Math.max(120, room)}px`);
+  }, [sub, flyMode]);
 
   useEffect(() => {
     if (!open) setSub(null);
   }, [open]);
   useEffect(() => () => window.clearTimeout(subTimer.current), []);
+
+  const triggerOf = (id: string) =>
+    menuRef.current?.querySelector<HTMLButtonElement>(`.picker-sub-trigger[data-sub="${CSS.escape(id)}"]`);
 
   // 二级菜单因为鼠标移走而关掉时，焦点可能还在它（已卸载）的搜索框里，
   // 落到 body 上 —— Esc 和上下键就不归这个菜单管了。还给它的触发行。
@@ -567,13 +724,9 @@ export function Picker({
     if (a && a !== document.body) return;
     const id = lastSub.current;
     if (!id) return;
-    rootRef.current
-      ?.querySelector<HTMLButtonElement>(`.picker-sub-trigger[data-sub="${CSS.escape(id)}"]`)
-      ?.focus({ preventScroll: true });
-  }, [open, sub, rootRef]);
-
-  const triggerOf = (id: string) =>
-    rootRef.current?.querySelector<HTMLButtonElement>(`.picker-sub-trigger[data-sub="${CSS.escape(id)}"]`);
+    triggerOf(id)?.focus({ preventScroll: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, sub]);
 
   const showSub = (id: string) => {
     lastSub.current = id;
@@ -592,20 +745,27 @@ export function Picker({
     window.clearTimeout(subTimer.current);
     showSub(id);
     requestAnimationFrame(() => {
-      const fly = rootRef.current?.querySelector<HTMLElement>(".picker-sub-flyout");
+      const fly = menuRef.current?.querySelector<HTMLElement>(".picker-sub-flyout");
       (
         fly?.querySelector<HTMLElement>(".picker-search") ??
         fly?.querySelector<HTMLElement>(".menu-item.active") ??
         fly?.querySelector<HTMLElement>(".menu-item")
-      )?.focus();
+      )?.focus({ preventScroll: true });
     });
   };
 
   const leaveSub = () => {
     const id = sub;
     setSub(null);
-    if (id) triggerOf(id)?.focus();
+    if (id) triggerOf(id)?.focus({ preventScroll: true });
   };
+
+  const pickFrom = (r: PickerSubmenu) => (id: string) => {
+    r.onPick(id);
+    setOpen(false);
+  };
+
+  const inline = flyMode === "inline";
 
   return (
     <div className="mode-menu" ref={rootRef} onKeyDown={onKeyDown}>
@@ -623,71 +783,86 @@ export function Picker({
           <Chevron down open={open} />
         </span>
       </button>
-      {open && !empty ? (
-        <div className="menu picker-menu" role="menu">
-          {rows.map((r) => (
-            <Fragment key={r.id}>
-              {r.sepBefore ? <div className="menu-sep" role="separator" /> : null}
-              <div
-                className="picker-sub"
-                onMouseEnter={() => hoverSub(r.id)}
-                onMouseLeave={() => hoverSub(null)}
-              >
-                <button
-                  type="button"
-                  role="menuitem"
-                  aria-haspopup="menu"
-                  aria-expanded={sub === r.id}
-                  data-sub={r.id}
-                  className={
-                    sub === r.id
-                      ? "menu-item menu-pick picker-sub-trigger open"
-                      : "menu-item menu-pick picker-sub-trigger"
-                  }
-                  onMouseEnter={(e) => e.currentTarget.focus({ preventScroll: true })}
-                  onClick={() => (sub === r.id ? setSub(null) : enterSub(r.id))}
-                  onKeyDown={(e) => {
-                    if (e.key === "ArrowRight") {
-                      e.preventDefault();
-                      enterSub(r.id);
-                    }
-                  }}
-                >
-                  <span className="menu-pick-body">
-                    <span className="pick-label">{r.label}</span>
-                  </span>
-                  <span className="picker-sub-value">{r.value}</span>
-                  <Chevron />
-                </button>
-                {sub === r.id ? (
-                  <div
-                    className="picker-sub-flyout"
-                    onKeyDown={(e) => {
-                      const inInput = (e.target as HTMLElement).tagName === "INPUT";
-                      if (e.key === "Escape" || (e.key === "ArrowLeft" && !inInput)) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        leaveSub();
-                      }
-                    }}
-                  >
-                    <div className="menu picker-submenu" role="menu" aria-label={r.label}>
-                      <PickerList
-                        menu={r}
-                        onPick={(id) => {
-                          r.onPick(id);
-                          setOpen(false);
-                        }}
-                        onClose={() => setOpen(false)}
-                      />
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            </Fragment>
-          ))}
-        </div>
-      ) : null}
+      {open && !empty
+        ? float(
+            <div
+              className={inline ? "menu menu-float picker-menu inline" : "menu menu-float picker-menu"}
+              role="menu"
+              ref={menuRef}
+            >
+              {inline
+                ? rows.map((r, i) => (
+                    <Fragment key={r.id}>
+                      {i > 0 ? <div className="menu-sep" role="separator" /> : null}
+                      <div className="picker-inline-sec" role="group" aria-label={r.label}>
+                        <div className="picker-inline-title">{r.label}</div>
+                        <PickerList menu={r} inline onPick={pickFrom(r)} onClose={() => setOpen(false)} />
+                      </div>
+                    </Fragment>
+                  ))
+                : rows.map((r) => (
+                    <Fragment key={r.id}>
+                      {r.sepBefore ? <div className="menu-sep" role="separator" /> : null}
+                      <div
+                        className="picker-sub"
+                        onMouseEnter={() => hoverSub(r.id)}
+                        onMouseLeave={() => hoverSub(null)}
+                      >
+                        <button
+                          type="button"
+                          role="menuitem"
+                          aria-haspopup="menu"
+                          aria-expanded={sub === r.id}
+                          data-sub={r.id}
+                          className={
+                            sub === r.id
+                              ? "menu-item menu-pick picker-sub-trigger open"
+                              : "menu-item menu-pick picker-sub-trigger"
+                          }
+                          onMouseEnter={(e) => e.currentTarget.focus({ preventScroll: true })}
+                          onClick={() => (sub === r.id ? setSub(null) : enterSub(r.id))}
+                          onKeyDown={(e) => {
+                            // 往左弹时，进子菜单的方向键也跟着换成 ←。
+                            if (e.key === (flyMode === "left" ? "ArrowLeft" : "ArrowRight")) {
+                              e.preventDefault();
+                              enterSub(r.id);
+                            }
+                          }}
+                        >
+                          <span className="menu-pick-body">
+                            <span className="pick-label">{r.label}</span>
+                          </span>
+                          <span className="picker-sub-value">{r.value}</span>
+                          <Chevron />
+                        </button>
+                        {sub === r.id ? (
+                          <div
+                            ref={flyRef}
+                            className={flyMode === "left" ? "picker-sub-flyout left" : "picker-sub-flyout"}
+                            onKeyDown={(e) => {
+                              const inInput = (e.target as HTMLElement).tagName === "INPUT";
+                              const back = flyMode === "left" ? "ArrowRight" : "ArrowLeft";
+                              if (e.key === "Escape" || (e.key === back && !inInput)) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                leaveSub();
+                              }
+                            }}
+                          >
+                            <div className="menu picker-submenu" role="menu" aria-label={r.label}>
+                              <PickerList menu={r} onPick={pickFrom(r)} onClose={() => setOpen(false)} />
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    </Fragment>
+                  ))}
+            </div>,
+          )
+        : null}
     </div>
   );
 }
+
+/** 子菜单占的宽：`.picker-submenu` 的 max-width 320 + 接鼠标的缝 10。 */
+const FLYOUT_W = 330;

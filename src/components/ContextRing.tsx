@@ -76,9 +76,13 @@ export function ContextRing({
 }) {
   const { t } = useT();
   const [open, setOpen] = useState(false);
-  const { rootRef, onKeyDown } = useDropdown(open, setOpen);
   /** 明细：undefined = 还在拉，null = 拉不到（退回简版）。 */
   const [detail, setDetail] = useState<ContextBreakdown | null | undefined>(undefined);
+  // 悬浮在 body 上（见 useDropdown）。明细拉回来面板会变宽，右缘对齐要重摆。
+  const { rootRef, menuRef, onKeyDown, float } = useDropdown(open, setOpen, {
+    align: "end",
+    relayout: detail,
+  });
   /** 展开着的那一行。延迟加载的 MCP 工具和计入的那行同名，单独给个键。 */
   const [expanded, setExpanded] = useState<ContextRowKey | "deferredMcp" | null>(null);
   /**
@@ -181,8 +185,8 @@ export function ContextRing({
           />
         </svg>
       </button>
-      {open ? (
-        <div className="ctx-panel" role="dialog" aria-label={t("app.ctx.usage")}>
+      {open ? float(
+        <div className="ctx-panel menu-float" role="dialog" aria-label={t("app.ctx.usage")} ref={menuRef}>
           <div className="ctx-panel-head">
             <span className="ctx-panel-title">{t("app.ctx.usage")}</span>
             <span className={level ? `ctx-panel-pct ${level}` : "ctx-panel-pct"}>{shown}%</span>
@@ -286,7 +290,7 @@ export function ContextRing({
               ) : null}
             </>
           ) : null}
-        </div>
+        </div>,
       ) : null}
     </div>
   );

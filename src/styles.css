@@ -5758,10 +5758,11 @@ body.file-dragging.file-drop-hot * {
   --bg-hover: color-mix(in srgb, var(--lift-base) 5%, var(--bg-card));
 }
 
-/* 顶栏里的菜单往下开：上面就是窗口边，没地方。 */
-.menu.menu-down {
-  bottom: auto;
-  top: calc(100% + 6px);
+/* 悬浮菜单：渲染在 body 上，位置由 useDropdown 按触发器在窗口里的位置
+   写进 top/bottom/left。挂在原地会被聊天区裁掉，还会把它横向滚走。 */
+.menu.menu-float,
+.ctx-panel.menu-float {
+  position: fixed;
 }
 
 .menu-item {
@@ -5892,6 +5893,33 @@ body.file-dragging.file-drop-hot * {
   bottom: -4px;
   padding-left: 10px;
   z-index: var(--z-menu);
+}
+
+/* 窗口右边放不下：往左弹（pickers.tsx 量过才加这个类）。接鼠标
+   的那条缝跟着换到右侧。 */
+.picker-sub-flyout.left {
+  left: auto;
+  right: 100%;
+  padding-left: 0;
+  padding-right: 10px;
+}
+
+/* 两边都放不下子菜单：不弹了，整个菜单一列展开，每个子菜单是一节
+   （照 Claude）。菜单限高后整体滚动，各节的列表不再自己滚。 */
+.menu.picker-menu.inline {
+  min-width: 260px;
+  max-width: min(340px, calc(100vw - 16px));
+}
+
+.picker-inline-title {
+  padding: 6px 10px 2px;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.picker-list.inline {
+  max-height: none;
+  overflow: visible;
 }
 
 .menu.picker-submenu {
@@ -6060,17 +6088,12 @@ body.file-dragging.file-drop-hot * {
   opacity: 0.45;
 }
 
-/* 构建菜单挂在工具栏右端，往左开 —— 往右开会顶出输入框。 */
-.menu.menu-right {
-  left: auto;
-  right: 0;
-}
-
-.build-menu .menu {
+/* 构建菜单（悬浮在 body 上，右缘对齐构建键，见 BuildButton）。 */
+.menu.build-pop {
   min-width: 220px;
 }
 
-.build-menu .menu-hint {
+.build-pop .menu-hint {
   margin-top: 2px;
 }
 
@@ -6146,7 +6169,8 @@ body.file-dragging.file-drop-hot * {
 }
 
 .picker-list {
-  max-height: min(360px, 60vh);
+  /* --fly-list-max：窗口矮时 pickers.tsx 量出的上方剩余高度。 */
+  max-height: min(360px, 60vh, var(--fly-list-max, 360px));
   overflow-y: auto;
 }
 

@@ -81,6 +81,7 @@ import {
   readEditor,
   writeEditor,
 } from "../../lib/chipEditor";
+import { scrollIntoViewWithin } from "../../lib/popoverFit";
 import { mergeSampling } from "../../lib/sampling";
 import { ENTER_TRANSCRIPT_EVENT } from "../../lib/transcriptNav";
 import { FileIcon } from "../FileIcon";
@@ -779,7 +780,10 @@ export function ComposerDock({
   // 那条时得把它带进视野。nearest 只在越界时滚，鼠标扫过不会跳。
   useEffect(() => {
     if (!menuKind) return;
-    document.getElementById(optionId(menuPick))?.scrollIntoView({ block: "nearest" });
+    // 只滚菜单自己：scrollIntoView 会连带滚外层（聊天区），见 lib/popoverFit。
+    const opt = document.getElementById(optionId(menuPick));
+    const list = document.getElementById(menuId);
+    if (opt && list) scrollIntoViewWithin(list, opt);
     // optionId 是纯函数，只依赖 menuId。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [menuKind, menuPick, menuId]);
