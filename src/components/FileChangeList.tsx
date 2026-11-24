@@ -11,6 +11,7 @@ import { useContext, useRef, useState } from "react";
 import type { FileChange } from "../bridge";
 import { type MessageKey, t, useT } from "../i18n";
 import { joinRoot, looksAbsPath } from "../pathDisplay";
+import { CopiedCheck } from "./icons";
 import { Chevron } from "./Chevron";
 import { FileIcon } from "./FileIcon";
 import { openFilePreview } from "./FilePreview";
@@ -118,7 +119,7 @@ export function FileChangeList({ changes }: { changes: FileChange[] }) {
                   }
                 }}
               >
-                {copied === c.path ? <CheckIcon /> : <CopyIcon />}
+                {copied === c.path ? <CopiedCheck /> : <CopyIcon />}
               </span>
               <Chevron open={open} />
             </button>
@@ -224,20 +225,6 @@ function CopyIcon() {
         d="M10.5 5.5V4.2A1.7 1.7 0 0 0 8.8 2.5H4.2A1.7 1.7 0 0 0 2.5 4.2v4.6A1.7 1.7 0 0 0 4.2 10.5H5.5"
         stroke="currentColor"
         strokeWidth="1.3"
-      />
-    </svg>
-  );
-}
-
-function CheckIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden>
-      <path
-        d="M3.5 8.2L6.6 11.2 12.5 4.8"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-        strokeLinejoin="round"
       />
     </svg>
   );

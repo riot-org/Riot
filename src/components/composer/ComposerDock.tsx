@@ -1789,6 +1789,12 @@ export function ComposerDock({
                 title={t("composer.stop.title")}
                 aria-label={t("common.stop")}
               >
+                {/* 发送那一下的箭头：停止键挂上时它往上飞出、淡掉，方块随后
+                    从中心长出来 —— 读作"箭头发出去了，变成了停止"。纯装饰，
+                    动画播完就是透明的（见 .send-ghost）。 */}
+                <span className="send-ghost" aria-hidden>
+                  <ArrowUpIcon />
+                </span>
                 <StopIcon />
               </button>
             ) : null}

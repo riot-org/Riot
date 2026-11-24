@@ -30,7 +30,7 @@ import { cellFloorEm } from "../lib/tableCellFloor";
 import { basename, joinRoot, looksAbsPath } from "../pathDisplay";
 import { type Theme, getTheme, subscribeTheme } from "../theme";
 import { audioMimeOf, imageMimeOf, openFilePreview, videoMimeOf } from "./FilePreview";
-import { BrowserIcon, FolderIcon, ForkIcon } from "./icons";
+import { BrowserIcon, CopiedCheck, FolderIcon, ForkIcon } from "./icons";
 import { AudioPlayer } from "./AudioPlayer";
 import { FullscreenGlyph, MediaBar, VolumeGlyph, useMediaPlayback, useVideoFullscreen } from "./MediaControls";
 import { MermaidBlock } from "./Mermaid";
@@ -1305,7 +1305,12 @@ function CodeBlock({
         )}
         <button type="button" className="codeblock-copy" onClick={copy}>
           {copied === "ok"
-            ? t("common.copied")
+            ? (
+                <>
+                  <CopiedCheck />
+                  {t("common.copied")}
+                </>
+              )
             : copied === "fail"
               ? t("transcript.md.copyFailed")
               : t("common.copy")}

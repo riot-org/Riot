@@ -155,6 +155,63 @@ export function RiotMark() {
   );
 }
 
+/** R 的笔画上等距取的 16 个点（viewBox 坐标）。改 R 的路径时要按新路径重新采样。 */
+const R_DOTS: readonly (readonly [number, number])[] = [
+  [7.4, 19.8], [7.4, 16.51], [7.4, 13.22], [7.4, 9.93], [7.4, 6.64], [8.25, 4.2],
+  [11.54, 4.2], [14.69, 4.88], [16.51, 7.52], [15.93, 10.68], [13.29, 12.5],
+  [10.01, 12.6], [12.09, 13.08], [14.43, 15.38], [16.4, 17.67], [13.9, 19.8],
+];
+
+/** 星点离开笔画时飘多远（viewBox 单位，R 所在的画布是 24 格）。 */
+const DOT_DRIFT = 5;
+/** 入场时粒子从多远的地方飞来（同上单位），远在 R 的轮廓之外。 */
+const DOT_FAR = 14;
+/** 入场：16 颗按打乱的顺序先后起飞，每颗间隔 0.04s（单颗飞行时长见 CSS）。 */
+const DOT_IN_STEP = 0.04;
+/** 飘动一个来回的时长，和 .riot-twinkle circle 里的 2s 一致。 */
+const DOT_PERIOD = 2;
+
+/**
+ * 每个点的方向、飘动相位和入场时机。方向按黄金角 137.5° 递增，四面八方
+ * 散得均匀，又每次都一样（不用运行时随机）。模块加载时算一次。
+ *
+ * - 飘动（riot-twinkle）：负的 delay，一挂上就各在周期的不同位置；0.37 和
+ *   周期 2 不成整数比，相邻的点不会同进同出。
+ * - 入场（riot-dot-in）：叠加在飘动上，不替换它 —— 粒子飞进来就直接落进
+ *   「飘动中」的状态，不先拼成一个整齐的 R。起飞顺序用 i×7 mod 16 打乱。
+ */
+const DOT_STYLES: readonly React.CSSProperties[] = R_DOTS.map(([x, y], i) => {
+  const a = (i * 137.5 * Math.PI) / 180;
+  const start = ((i * 7) % R_DOTS.length) * DOT_IN_STEP;
+  return {
+    "--dx": `${(Math.cos(a) * DOT_DRIFT).toFixed(2)}px`,
+    "--dy": `${(Math.sin(a) * DOT_DRIFT).toFixed(2)}px`,
+    "--fx": `${(Math.cos(a) * DOT_FAR).toFixed(2)}px`,
+    "--fy": `${(Math.sin(a) * DOT_FAR).toFixed(2)}px`,
+    // 缩放绕点自己的圆心，不是绕画布原点（transform-box: view-box 下的 0,0）。
+    transformOrigin: `${x}px ${y}px`,
+    // 三条动画：飘动、入场位移、入场淡入（后两条同一时刻起飞）。
+    animationDelay: `${-((i * 0.37) % DOT_PERIOD).toFixed(2)}s, ${start.toFixed(2)}s, ${start.toFixed(2)}s`,
+  } as React.CSSProperties;
+});
+
+/**
+ * 生成中指示（对话末尾的等待行、回到底部按钮里）。一挂上，粒子从虚空
+ * 里先后浮现、飞进来，直接落进飘动中的状态；每个点此起彼伏地变暗、往外
+ * 飘开，再变亮、落回笔画上 —— 星点闪烁和粒子汇聚的结合：R 整体一直认得出，局部总有点在离开、
+ * 有点在落位，像正在被算出来（照 Claude 用自己的标志做生成动画）。
+ * 动画见 .riot-twinkle。
+ */
+export function RiotTwinkle() {
+  return (
+    <svg className="riot-twinkle" width="16" height="16" viewBox="0 0 24 24" aria-hidden>
+      {R_DOTS.map(([x, y], i) => (
+        <circle key={i} cx={x} cy={y} r={1.25} fill="currentColor" style={DOT_STYLES[i]} />
+      ))}
+    </svg>
+  );
+}
+
 export function FolderIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
@@ -175,6 +232,26 @@ export function GearIcon() {
         d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.74v-.47a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"
         stroke="currentColor"
         strokeWidth="2"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/**
+ * 复制成功的对勾。挂上时一笔画出来（pathLength=1，dashoffset 1 → 0），
+ * 不是直接换图标 —— 看得出"刚刚成功了"。动画见 .copied-check。
+ * 消息操作栏、文件改动列表、代码块三处的复制反馈共用这一个。
+ */
+export function CopiedCheck() {
+  return (
+    <svg className="copied-check" width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden>
+      <path
+        pathLength={1}
+        d="M3.5 8.2L6.6 11.2 12.5 4.8"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
         strokeLinejoin="round"
       />
     </svg>

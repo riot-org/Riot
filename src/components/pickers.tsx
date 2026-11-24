@@ -201,8 +201,14 @@ function placeMenu(menu: HTMLElement, a: DOMRect, placement: "up" | "down", alig
   }
 
   const want = align === "end" ? a.right - w : a.left;
+  const left = Math.max(MENU_EDGE, Math.min(want, vw - w - MENU_EDGE));
   s.right = "auto";
-  s.left = `${Math.max(MENU_EDGE, Math.min(want, vw - w - MENU_EDGE))}px`;
+  s.left = `${left}px`;
+
+  // 展开动画（.menu-float 的 menu-in）从触发器那边长出来：往上开的从底边、
+  // 往下开的从顶边，横向对准触发器的中线。
+  menu.dataset.side = up ? "up" : "down";
+  s.transformOrigin = `${Math.round(a.left + a.width / 2 - left)}px ${up ? "100%" : "0"}`;
 }
 
 /**

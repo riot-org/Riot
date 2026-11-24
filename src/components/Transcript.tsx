@@ -56,7 +56,7 @@ import { Chip, FileChip } from "./Chip";
 import { ContextMenu, type MenuState } from "./chrome";
 import { Composer } from "./Composer";
 import { ConfirmDialog, type ConfirmRequest } from "./ConfirmDialog";
-import { BranchIcon, PlanModeIcon } from "./icons";
+import { BranchIcon, CopiedCheck, PlanModeIcon, RiotTwinkle } from "./icons";
 import { HYDRATE_EVENT, LazyMarkdown, Markdown, ProjectRootContext } from "./Markdown";
 import { AskChoiceCard, EnvVarsCard, ModeSwitchCard, PermissionCard } from "./PermissionDialog";
 import {
@@ -1686,7 +1686,11 @@ export const Transcript = memo(function Transcript({
       // 「回到底部」得靠这里浮出来，不然用户翻上去就找不到回程。
       setAwayFromBottom(distFromBottom(box) > box.clientHeight);
     });
-    ro.observe(col);
+    // border-box：对话列的下内边距跟着浮在上面的底栏变（--dock-h，见
+    // styles.css 的 .chat:not(.chat-empty) .thread-col）。默认的 content-box
+    // 不含内边距 —— 输入框打多行变高时这里收不到，跟随中不贴底，最后一条就
+    // 被输入框盖住。
+    ro.observe(col, { box: "border-box" });
     // 对话区自己变高变矮也要管：输入框随草稿长高缩回、上方出现横条时，
     // 列没变、视口变了 —— 跟随中不贴一下，底部就露出一截或被盖住一截。
     ro.observe(box);
@@ -2073,21 +2077,31 @@ export const Transcript = memo(function Transcript({
       {awayFromBottom ? (
         <button
           type="button"
-          className={hasNew ? "jump-bottom has-new" : "jump-bottom"}
+          className={["jump-bottom", hasNew ? "has-new" : "", busy ? "busy" : ""].filter(Boolean).join(" ")}
           title={hasNew ? t("transcript.jumpBottomNew") : t("transcript.jumpBottom")}
           aria-label={hasNew ? t("transcript.jumpBottomNew") : t("transcript.jumpBottom")}
           onClick={glideToBottom}
         >
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
-            <path
-              d="M8 3v10M3.5 8.5L8 13l4.5-4.5"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-          {hasNew ? <span className="jump-dot" aria-hidden /> : null}
+          {/* 箭头和生成中的星点 R 两层叠着，一直都在，靠 .busy 和悬停切换（照
+              Claude：翻上去看旧内容时，按钮本身告诉你底下还在生成；指上去
+              变回箭头，说明点了会去哪）。两层常驻，切换才有过渡可播：开始
+              生成那一刻，箭头缩进去、星点从外圈收拢成 R。 */}
+          <span className="jump-layer jump-arrow">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
+              <path
+                d="M8 3v10M3.5 8.5L8 13l4.5-4.5"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </span>
+          <span className="jump-layer jump-gen">
+            <RiotTwinkle />
+          </span>
+          {/* 生成中星点在动就说明有新东西，「有新内容」的小点不再叠一个。 */}
+          {hasNew && !busy ? <span className="jump-dot" aria-hidden /> : null}
         </button>
       ) : null}
     </div>
@@ -2511,7 +2525,7 @@ function MsgActions({
           flashCopied(true);
         }}
       >
-        {copied ? <CheckIcon /> : <CopyIcon />}
+        {copied ? <CopiedCheck /> : <CopyIcon />}
       </button>
       {onRegenerate ? (
         <button
@@ -2618,20 +2632,6 @@ function CopyIcon() {
         d="M10.5 5.5V4.2A1.7 1.7 0 0 0 8.8 2.5H4.2A1.7 1.7 0 0 0 2.5 4.2v4.6A1.7 1.7 0 0 0 4.2 10.5H5.5"
         stroke="currentColor"
         strokeWidth="1.3"
-      />
-    </svg>
-  );
-}
-
-function CheckIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden>
-      <path
-        d="M3.5 8.2L6.6 11.2 12.5 4.8"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-        strokeLinejoin="round"
       />
     </svg>
   );
@@ -2817,7 +2817,7 @@ function RegenIcon() {
  * 最常见的那个理解 —— 所以有具体原因时必须写出来。
  *
  * `timed` 让它自己数秒。模型准备工具参数的那十几秒里一个字都不会吐，
- * 静止的三个点和"卡死了"看起来一模一样；走动的秒数是那段时间里唯一
+ * 光有动画和"卡死了"分不太开；走动的秒数是那段时间里唯一
  * 能证明系统还活着的东西。
  */
 function Dots({
@@ -2851,9 +2851,7 @@ function Dots({
 
   const dots = (
     <div className="dots">
-      <span />
-      <span />
-      <span />
+      <RiotTwinkle />
     </div>
   );
   // 头几秒不报时:答得快的时候跳一下数字，看着像出了故障。

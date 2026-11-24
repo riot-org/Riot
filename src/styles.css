@@ -2204,6 +2204,17 @@ html[data-host='web'] body {
   content-visibility: hidden;
 }
 
+/* 保活着但看不见的会话，里面的持续动画（等待指示的小人、回到底部的
+   描线、工具的转圈）一律暂停。content-visibility 跳过了排版和绘制，但
+   规范不保证动画也停 —— 后台会话在生成时它们会一直在跑。切回来时
+   恢复播放，从停下的那一帧接着走。!important：各处写的是 `animation:`
+   简写，它会把 play-state 一并重置成 running，选择器更具体时压过这里。 */
+.chat-pane.is-hidden *,
+.chat-pane.is-hidden *::before,
+.chat-pane.is-hidden *::after {
+  animation-play-state: paused !important;
+}
+
 /* 右侧抽屉：全高一列，和主区平级（Codex 同款）。宽度由内联样式给
    （用户拖出来的值）；窗口不够宽时允许被压扁 —— 对话是主体，抽屉是
    辅助。压缩下限比拖拽下限（DRAWER_MIN）低：拖到 320 是"舒适宽度"，
@@ -3102,13 +3113,13 @@ html[data-host='web'] body {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
-  min-width: 30px;
-  min-height: 30px;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  min-height: 36px;
   flex-shrink: 0;
   /* 全局 button 有 6×14 的 padding。box-sizing:border-box 下
-     30px 圆钮内容区会被挤成 0，箭头裁没了只剩一圈底。 */
+     圆钮内容区会被挤成 0，箭头裁没了只剩一圈底。 */
   padding: 0;
   margin: 0;
   border-radius: 50%;
@@ -3122,20 +3133,40 @@ html[data-host='web'] body {
   z-index: var(--z-panel);
 }
 
+/* 悬停只提亮底色和图标，不换蓝边：一圈强调色描边在深色正文上太跳。 */
 .jump-bottom:hover {
   color: var(--text);
-  border-color: var(--accent);
+  background: var(--bg-hover);
 }
 
-/* 出现时从下面浮上来一点，不是凭空冒出。transform 里要带上居中那一截。 */
+/* 出场分两拍（往上翻、按钮刚挂上时）：
+   1. 按钮从下方 10px、0.85 倍、透明浮上来放大到原大，末尾带一点回弹。
+      早先只有 0.18s、6px，几乎看不出来，观感是"突然冒出来"。transform
+      里要带上居中那一截（translateX(-50%)）。
+   2. 里面的图标入场：生成中是粒子从虚空里先后浮现、汇聚成 R（这是星点
+      自己的入场，见 .riot-twinkle circle，等待行里也一样）；否则是箭头晚
+      0.08s 从 0.6 倍弹出来。backwards：延迟那一小段停在起始帧，不先闪一下
+      终态。之后悬停切换走 .jump-layer 的过渡。 */
 .jump-bottom {
-  animation: jump-in var(--dur-2) var(--ease-out);
+  animation: jump-in 0.32s cubic-bezier(0.34, 1.4, 0.64, 1);
 }
 
 @keyframes jump-in {
   from {
     opacity: 0;
-    transform: translate(-50%, 6px);
+    transform: translate(-50%, 10px) scale(0.85);
+  }
+}
+
+.jump-bottom .jump-arrow {
+  animation: jump-arrow-in 0.3s cubic-bezier(0.34, 1.4, 0.64, 1) 0.08s backwards;
+}
+
+
+@keyframes jump-arrow-in {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
   }
 }
 
@@ -3586,27 +3617,126 @@ html[data-host='web'] body {
 
 .dots {
   display: flex;
-  gap: 4px;
-  padding: 4px 0;
+  align-items: center;
+  padding: 2px 0;
+  color: var(--text-dim);
 }
 
-.dots span {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--text-faint);
-  animation: blink 1.2s infinite;
+/* 生成中（对话末尾的等待行、回到底部按钮里）：R 由星点组成，每个点 2s 一个来回 —— 变暗时
+   往外飘开（--dx/--dy，幅度见 RiotTwinkle 的 DOT_DRIFT），变亮时落回笔画。
+   相位由 RiotTwinkle 用负的 animation-delay 错开。overflow: visible：飘开
+   时点会出 16px 方框。 */
+.riot-twinkle {
+  overflow: visible;
 }
 
-.dots span:nth-child(2) {
-  animation-delay: 0.2s;
+.riot-twinkle circle {
+  transform-box: view-box;
+  /* 两条同时跑：飘动一挂上就开始；入场（从远处的虚空飞来、从 0 长大）
+     **叠加**在飘动上（animation-composition: add），飞到时偏移归零，剩下
+     的就是飘动本身 —— 粒子直接落进飘动中的状态，不先拼成一个整齐的 R。
+     入场的淡入单独一条（riot-dot-fade），走 fill-opacity、按替换合成 ——
+     放进 add 那条的话，0 会被加到默认的 1 上，起点不透明。fill-opacity 和
+     飘动的 opacity 相乘，互不覆盖。
+     backwards：起飞前停在虚空里（远处、0 大小、透明）。delay 由 RiotTwinkle
+     的 DOT_STYLES 按点给（入场两条共用一个）。不认 animation-composition
+     的引擎退回替换：入场期间不飘，飞到后接上飘动，会有一下跳，但不出错。 */
+  animation:
+    riot-twinkle 2s ease-in-out infinite,
+    riot-dot-in 0.8s cubic-bezier(0.2, 0.7, 0.2, 1) backwards,
+    riot-dot-fade 0.8s ease-out backwards;
+  animation-composition: replace, add, replace;
 }
 
-.dots span:nth-child(3) {
-  animation-delay: 0.4s;
+@keyframes riot-dot-in {
+  from {
+    transform: translate(var(--fx), var(--fy)) scale(0);
+  }
+  to {
+    transform: translate(0, 0) scale(1);
+  }
 }
 
-/* 带说明的等待。三个点单独出现时表示"模型在回答"，配上文字才说得清
+@keyframes riot-dot-fade {
+  from {
+    fill-opacity: 0;
+  }
+}
+
+@keyframes riot-twinkle {
+  0%,
+  100% {
+    transform: translate(var(--dx), var(--dy));
+    opacity: 0.15;
+  }
+  50% {
+    transform: translate(0, 0);
+    opacity: 1;
+  }
+}
+
+/* 回到底部按钮里的两层：箭头、生成中的星点 R。叠在按钮正中，靠 .busy 和
+   悬停切换，切换时走过渡：
+   - 箭头 → R：箭头缩小淡出；星点那层从 1.6 倍收拢到 1 倍、淡入 —— 散在
+     外圈的点聚拢成 R。
+   - R → 箭头（悬停、生成结束）：反过来，星点往外散开淡出，箭头放大回来。
+   不可见的那层暂停动画，不白跑。 */
+.jump-layer {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  transition:
+    opacity var(--dur-2) var(--ease-out),
+    transform var(--dur-2) var(--ease-out);
+}
+
+.jump-gen {
+  opacity: 0;
+  transform: scale(1.6);
+}
+
+.jump-bottom.busy .jump-arrow {
+  opacity: 0;
+  transform: scale(0.5);
+}
+
+.jump-bottom.busy .jump-gen {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* 按钮放大到 36px 后，里面两层跟着放大一档（组件里写的是 14 / 16）。 */
+.jump-arrow svg {
+  width: 16px;
+  height: 16px;
+}
+
+.jump-gen .riot-twinkle {
+  width: 20px;
+  height: 20px;
+}
+
+/* 指上去（或键盘聚焦）变回箭头：说明点了会去哪。 */
+.jump-bottom.busy:hover .jump-arrow,
+.jump-bottom.busy:focus-visible .jump-arrow {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.jump-bottom.busy:hover .jump-gen,
+.jump-bottom.busy:focus-visible .jump-gen {
+  opacity: 0;
+  transform: scale(1.6);
+}
+
+.jump-bottom:not(.busy) .riot-twinkle circle,
+.jump-bottom.busy:hover .riot-twinkle circle {
+  animation-play-state: paused;
+}
+
+/* 带说明的等待。星点 R 单独出现时表示"模型在回答"，配上文字才说得清
    这次等的是别的事（目前只有上下文压缩）。 */
 .wait-note {
   display: flex;
@@ -3644,22 +3774,15 @@ html[data-host='web'] body {
   opacity: 0.75;
 }
 
-@keyframes blink {
-  0%,
-  60%,
-  100% {
-    opacity: 0.25;
-  }
-  30% {
-    opacity: 1;
-  }
-}
 
 /* 尊重系统的减少动效设置 —— 这类持续动画对前庭敏感的人是真的难受 */
 @media (prefers-reduced-motion: reduce) {
-  .dots span {
+  /* 不动的时候就是一个完整的点阵 R；两层切换直接换，不播过渡。 */
+  .riot-twinkle circle {
     animation: none;
-    opacity: 0.6;
+  }
+  .jump-layer {
+    transition: none;
   }
   .plan-caret {
     animation: none;
@@ -3674,6 +3797,17 @@ html[data-host='web'] body {
   .fold-label-settle,
   .msg-enter,
   .jump-bottom,
+  .jump-bottom .jump-arrow,
+  .menu.menu-float,
+  .ctx-panel.menu-float,
+  .picker-submenu,
+  .send-ghost,
+  .send.stop > svg,
+  .send:not(.stop) > svg,
+  .plan-card,
+  .plan-card .plan-card-badge,
+  .copied-check,
+  .copied-check path,
   .jump-dot,
   .jump-dot::after {
     animation: none;
@@ -5764,6 +5898,60 @@ body.file-dragging.file-drop-hot * {
   border-color: color-mix(in srgb, var(--lift-base) 25%, var(--bg));
 }
 
+/* 发送 ↔ 停止的切换。两态是两个按钮（busy 时停止键挂上，发送键按需卸掉），
+   没法在同一个元素上过渡，所以各自用入场动画来演这一下：
+   - 停止键挂上：里面那个「幽灵箭头」从原位往上飞出、淡掉；停止方块晚
+     0.1s 从中心长出来。
+   - 发送键挂上（停止之后）：箭头从下方升上来、淡入。
+   发送键在输入框首次挂上时也会播一次升起，0.22s、6px，不扰人。 */
+.send.stop {
+  position: relative;
+  overflow: visible;
+}
+
+.send-ghost {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  opacity: 0;
+  animation: send-ghost-out 0.32s var(--ease-out);
+}
+
+@keyframes send-ghost-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-12px);
+  }
+}
+
+.send.stop > svg {
+  animation: stop-icon-in 0.24s cubic-bezier(0.34, 1.4, 0.64, 1) 0.1s backwards;
+}
+
+@keyframes stop-icon-in {
+  from {
+    opacity: 0;
+    transform: scale(0.2);
+  }
+}
+
+.send:not(.stop) > svg {
+  animation: send-arrow-in 0.22s var(--ease-out);
+}
+
+@keyframes send-arrow-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
 /* pill 下拉菜单（工作方式 / 服务方 / 模型 / 顶栏权限） */
 
 .mode-menu {
@@ -5793,6 +5981,46 @@ body.file-dragging.file-drop-hot * {
 .menu.menu-float,
 .ctx-panel.menu-float {
   position: fixed;
+}
+
+/* 展开：从触发器那边轻轻长出来 —— 淡入、朝展开方向挪 4px、从 0.97 倍放大。
+   往上开的从下往上，往下开的从上往下；缩放原点由 placeMenu 对准触发器
+   （transform-origin + data-side）。只在挂上时播一次：搜索过滤、切成一列
+   展开都是同一个元素改内容，不重播。 */
+.menu.menu-float,
+.ctx-panel.menu-float {
+  animation: menu-in 0.16s var(--ease-out);
+}
+
+.menu-float[data-side='up'] {
+  --menu-dy: 4px;
+}
+
+.menu-float[data-side='down'] {
+  --menu-dy: -4px;
+}
+
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--menu-dy, 4px)) scale(0.97);
+  }
+}
+
+/* 子菜单从触发行那一侧滑出来：往右弹的从左边来，往左弹的从右边来。 */
+.picker-submenu {
+  animation: submenu-in 0.14s var(--ease-out);
+}
+
+.picker-sub-flyout.left .picker-submenu {
+  --sub-dx: 4px;
+}
+
+@keyframes submenu-in {
+  from {
+    opacity: 0;
+    transform: translateX(var(--sub-dx, -4px));
+  }
 }
 
 .menu-item {
@@ -7672,6 +7900,35 @@ button.ta-resize-grip:hover:not(:disabled),
   border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
   border-radius: 12px;
   background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+
+/* 入场（权限 / 提问 / 环境变量 / 切换方式，四种卡共用这个壳）：从下方 8px
+   浮上来、淡入。这类卡片会让流程停下来等用户，值得被看见。只动 transform
+   和 opacity，不改占位高度 —— 贴底跟随的量法不受影响。 */
+.plan-card {
+  animation: card-in 0.32s var(--ease-out);
+}
+
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* 卡片浮上来之后，徽标外圈扩散两下，提醒"这里要你操作"。两下就停，不一直
+   闪着打扰。 */
+.plan-card .plan-card-badge {
+  animation: badge-ping 1.1s var(--ease-out) 0.3s 2;
+}
+
+@keyframes badge-ping {
+  from {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent);
+  }
+  to {
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 0%, transparent);
+  }
 }
 
 .plan-card-head {
@@ -11593,6 +11850,44 @@ button.field-slider-state:hover {
 .codeblock-copy:hover {
   color: var(--text);
   background: var(--bg-hover);
+}
+
+/* 「已复制」前面的对勾和文字排一行。 */
+.codeblock-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.codeblock-copy .copied-check {
+  width: 11px;
+  height: 11px;
+}
+
+/* 复制成功：对勾一笔画出来，图标同时轻轻弹一下（0.8 → 1）。三处共用，
+   见 CopiedCheck。颜色跟着各自按钮走。 */
+.copied-check {
+  animation: copied-pop 0.28s cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+
+.copied-check path {
+  stroke-dasharray: 1;
+  animation: copied-draw 0.32s var(--ease-out) 0.04s backwards;
+}
+
+@keyframes copied-pop {
+  from {
+    transform: scale(0.8);
+  }
+}
+
+@keyframes copied-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
 }
 
 /* 代码一律 13px、20px 一行：对齐 Claude 桌面端（正文 14px，代码只小一号）。
