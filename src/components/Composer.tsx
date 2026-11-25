@@ -9,7 +9,7 @@
  * contenteditable 的块机械在 `../lib/chipEditor`。
  *
  * 本文件只做分派；实现按职责拆在 `./composer/`：底部输入框（ComposerDock）、
- * 消息内联编辑（ComposerEdit）、排队面板、构建键，以及按会话存活的输入框
+ * 消息内联编辑（ComposerEdit）、输入框上方的状态托盘（StatusTray）、构建键，以及按会话存活的输入框
  * 状态（草稿、待发截图、模式缓存）。
  */
 
@@ -19,7 +19,6 @@ import { ComposerDock } from "./composer/ComposerDock";
 import { ComposerEdit, type ComposerEditProps } from "./composer/ComposerEdit";
 
 export type { ComposerEditProps } from "./composer/ComposerEdit";
-export { QueuePanel } from "./composer/QueuePanel";
 export { type PermissionPick, forgetComposerSession } from "./composer/state";
 
 type ComposerDockProps = Parameters<typeof ComposerDock>[0];

@@ -5,7 +5,8 @@ import type { Item } from "../hooks/useSession";
 import { type MessageKey, t, useT } from "../i18n";
 import { openSubagent } from "../lib/subagentLink";
 import { Chevron } from "./Chevron";
-import { StopIcon } from "./icons";
+import type { TraySection } from "./composer/StatusTray";
+import { MultitaskIcon, StopIcon } from "./icons";
 import { Markdown } from "./Markdown";
 import { SmoothFold } from "./SmoothFold";
 
@@ -114,36 +115,31 @@ export const TaskNoticeCard = memo(function TaskNoticeCard({ item }: { item: Not
 });
 
 /**
- * 后台任务面板：这个会话里在跑 / 刚跑完的子 agent。
+ * 托盘里的「后台任务」一类：这个会话里在跑 / 刚跑完的子 agent 和后台命令。
  *
- * 和排队面板一样挂在输入框上方 —— 它们回答同一类问题："除了眼前这条
- * 回答，还有什么在进行"。运行中的一行直播它在做什么（最近调的工具、
- * 刚说的第一句），带停止键；结束的留一行状态，用户看过之后自己收掉
- * 整个面板（不逐条关：结束的任务下一条通知消息里就有汇报，面板行只是
- * 状态灯）。
+ * 和排队一样放在输入框上方 —— 它们回答同一类问题："除了眼前这条回答，
+ * 还有什么在进行"。运行中的一行直播它在做什么（最近调的工具、刚说的第
+ * 一句），带停止键；结束的留一行状态，用户看过之后自己收掉（不逐条关：
+ * 结束的任务下一条通知消息里就有汇报，这里只是状态灯）。
  *
- * 全部结束且用户收起 → 什么都不画。有任务在跑时面板不能被收起来隐藏 ——
- * 那是用户唯一能停掉它们的地方。
+ * 有任务在跑时不给收起键 —— 这里是用户唯一能停掉它们的地方；在跑时也
+ * 默认展开（排在任务清单之后，见 TraySection.autoOpen）。
  *
  * 挂载那一刻已经结束的任务视同收起过：登记表跟着会话落盘，重启 / 切回
- * 会话拿到的快照里带着以前所有跑完的后台任务，每打开一个老会话就弹一次
- * "N 个后台任务已完成"是噪音 —— 它们的汇报早就以通知卡片躺在对话里，
+ * 会话拿到的快照里带着以前所有跑完的后台任务，每打开一个老会话就冒一次
+ * "N 个后台任务已结束"是噪音 —— 它们的汇报早就以通知卡片躺在对话里，
  * 子 agent 的会话也从 Task 卡片和通知卡片点得开。挂载时有任务在跑就不
  * 这么做：用户回来是想看全貌，结束的和跑着的一起列。
  */
-export function BackgroundTasksPanel({
-  tasks,
-  onCancel,
-}: {
-  tasks: BackgroundTaskView[];
-  onCancel: (agentId: string) => void;
-}) {
+export function useTasksSection(
+  tasks: BackgroundTaskView[],
+  onCancel: (agentId: string) => void,
+): TraySection | null {
   const { t, tn } = useT();
-  const [open, setOpen] = useState(true);
   const [dismissedAt, setDismissedAt] = useState<number | null>(() =>
     tasks.some((x) => x.background && x.status === "running") ? null : Date.now(),
   );
-  // 只画后台的：同步子 agent 在对话流里有自己的 Task 卡片直播，再进面板是重复。
+  // 只列后台的：同步子 agent 在对话流里有自己的 Task 卡片直播，再进来是重复。
   const background = tasks.filter((x) => x.background);
   const running = background.filter((x) => x.status === "running");
   // "收起"只收结束的：记下收起那一刻，之后结束的任务照常出现。
@@ -155,96 +151,108 @@ export function BackgroundTasksPanel({
   );
   if (shown.length === 0) return null;
 
-  const head =
-    running.length > 0
-      ? tn("transcript.taskPanel.running", running.length)
-      : tn("transcript.taskPanel.finished", shown.length);
+  return {
+    id: "tasks",
+    icon: <MultitaskIcon />,
+    // 「在跑」由图标上的呼吸点表达，标签只写「后台 N」；完整说法在悬停提示里。
+    label:
+      running.length > 0
+        ? t("transcript.tray.background", { count: running.length })
+        : t("transcript.tray.backgroundDone", { count: shown.length }),
+    hint:
+      running.length > 0
+        ? tn("transcript.taskPanel.running", running.length)
+        : tn("transcript.taskPanel.finished", shown.length),
+    short: String(running.length > 0 ? running.length : shown.length),
+    live: running.length > 0,
+    autoOpen: running.length > 0,
+    body: (
+      <div className="task-panel">
+        {shown.map((task) => (
+          <TaskRow key={task.id} task={task} onCancel={onCancel} />
+        ))}
+      </div>
+    ),
+    ...(running.length === 0
+      ? {
+          dismiss: {
+            label: t("transcript.taskPanel.dismiss"),
+            title: t("transcript.taskPanel.dismissTitle"),
+            onClick: () => setDismissedAt(Date.now()),
+          },
+        }
+      : {}),
+  };
+}
 
+/** 一个后台任务的一行。 */
+function TaskRow({
+  task,
+  onCancel,
+}: {
+  task: BackgroundTaskView;
+  onCancel: (agentId: string) => void;
+}) {
+  const { t, tn } = useT();
   return (
-    <div className="queue-panel task-panel">
-      <div className="task-panel-head">
-        <button type="button" className="queue-head" onClick={() => setOpen((v) => !v)}>
-          <Chevron open={open} />
-          {head}
+    <div className={`queue-row task-row task-row-${task.status}`}>
+      <span
+        className={task.status === "running" ? "task-dot tool-icon-spin" : "task-dot"}
+        aria-hidden
+      >
+        {task.status === "running" ? "◐" : task.status === "completed" ? "✓" : "✕"}
+      </span>
+      <span className="task-kind">{kindLabel(task.kind)}</span>
+      {/* 后台命令没有会话可点开：标题只是标题，活动列显示命令本身。 */}
+      {task.kind === "shell" ? (
+        <span className="task-title">
+          <span className="task-title-text">{task.title}</span>
+        </span>
+      ) : (
+        <button
+          type="button"
+          className="task-title task-link"
+          title={t("transcript.task.openSession")}
+          onClick={() => openSubagent(task.id, task.title)}
+        >
+          {/* 流光挂在里层 span 上：挂在 button 自己身上的话，全局
+              button:hover 的 background 简写会把 background-clip:text
+              重置掉，而字的填充色还是透明 —— 悬停时字直接消失。 */}
+          <span className="task-title-text">{task.title}</span>
         </button>
-        {running.length === 0 ? (
+      )}
+      {/* 它自己的清单进度。「转到后台」之后前台不再显示那份清单
+          （见 TodoPanel），进度就看这里。 */}
+      {task.status === "running" && task.todo ? (
+        <span
+          className="task-todo"
+          title={t("transcript.task.todoProgress", {
+            done: task.todo.done,
+            total: task.todo.total,
+          })}
+        >
+          <span className="task-todo-count">
+            {task.todo.done}/{task.todo.total}
+          </span>
+          {task.todo.current ? <span className="task-todo-current">{task.todo.current}</span> : null}
+        </span>
+      ) : null}
+      <span className="task-activity">
+        {task.status === "running" ? renderUiText(task.activity) : statusLabel(task.status)}
+      </span>
+      <span className="task-meta">{task.tool_uses > 0 ? tn("transcript.steps", task.tool_uses) : ""}</span>
+      {task.status === "running" ? (
+        <span className="queue-actions task-actions">
           <button
             type="button"
-            className="task-panel-dismiss"
-            onClick={() => setDismissedAt(Date.now())}
-            title={t("transcript.taskPanel.dismissTitle")}
+            title={t("transcript.taskPanel.stopTitle")}
+            aria-label={t("common.stop")}
+            onClick={() => onCancel(task.id)}
           >
-            {t("transcript.taskPanel.dismiss")}
+            <StopIcon />
           </button>
-        ) : null}
-      </div>
-      {open
-        ? shown.map((task) => (
-            <div className={`queue-row task-row task-row-${task.status}`} key={task.id}>
-              <span
-                className={task.status === "running" ? "task-dot tool-icon-spin" : "task-dot"}
-                aria-hidden
-              >
-                {task.status === "running" ? "◐" : task.status === "completed" ? "✓" : "✕"}
-              </span>
-              <span className="task-kind">{kindLabel(task.kind)}</span>
-              {/* 后台命令没有会话可点开：标题只是标题，活动列显示命令本身。 */}
-              {task.kind === "shell" ? (
-                <span className="task-title">
-                  <span className="task-title-text">{task.title}</span>
-                </span>
-              ) : (
-                <button
-                  type="button"
-                  className="task-title task-link"
-                  title={t("transcript.task.openSession")}
-                  onClick={() => openSubagent(task.id, task.title)}
-                >
-                  {/* 流光挂在里层 span 上：挂在 button 自己身上的话，全局
-                      button:hover 的 background 简写会把 background-clip:text
-                      重置掉，而字的填充色还是透明 —— 悬停时字直接消失。 */}
-                  <span className="task-title-text">{task.title}</span>
-                </button>
-              )}
-              {/* 它自己的清单进度。「转到后台」之后前台面板不再显示那份
-                  清单（见 TodoPanel），进度就看这里。 */}
-              {task.status === "running" && task.todo ? (
-                <span
-                  className="task-todo"
-                  title={t("transcript.task.todoProgress", {
-                    done: task.todo.done,
-                    total: task.todo.total,
-                  })}
-                >
-                  <span className="task-todo-count">
-                    {task.todo.done}/{task.todo.total}
-                  </span>
-                  {task.todo.current ? (
-                    <span className="task-todo-current">{task.todo.current}</span>
-                  ) : null}
-                </span>
-              ) : null}
-              <span className="task-activity">
-                {task.status === "running" ? renderUiText(task.activity) : statusLabel(task.status)}
-              </span>
-              <span className="task-meta">
-                {task.tool_uses > 0 ? tn("transcript.steps", task.tool_uses) : ""}
-              </span>
-              {task.status === "running" ? (
-                <span className="queue-actions task-actions">
-                  <button
-                    type="button"
-                    title={t("transcript.taskPanel.stopTitle")}
-                    aria-label={t("common.stop")}
-                    onClick={() => onCancel(task.id)}
-                  >
-                    <StopIcon />
-                  </button>
-                </span>
-              ) : null}
-            </div>
-          ))
-        : null}
+        </span>
+      ) : null}
     </div>
   );
 }

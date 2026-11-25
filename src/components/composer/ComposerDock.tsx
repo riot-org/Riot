@@ -106,7 +106,7 @@ import {
   isExecPermissionMode,
   modelLabel,
 } from "../pickers";
-import { BackgroundTasksPanel } from "../TaskPanel";
+import { useTasksSection } from "../TaskPanel";
 import { ShotViewer } from "../ToolCard";
 
 import {
@@ -118,7 +118,8 @@ import {
   shotsCache,
 } from "./state";
 import { BuildButton } from "./BuildButton";
-import { QueuePanel } from "./QueuePanel";
+import { queueSection } from "./QueuePanel";
+import { StatusTray, type TraySection } from "./StatusTray";
 
 /** 块后面默认跟的那一个空格：块和正文之间本来就该有一格，不让用户自己敲。 */
 const SPACE: Seg = { kind: "text", value: " " };
@@ -131,6 +132,13 @@ function slashGroup(c: SlashCommand): "skill" | "command" {
 function slashGroupLabel(g: ReturnType<typeof slashGroup>): string {
   return g === "skill" ? t("composer.slash.group.skills") : t("composer.slash.group.commands");
 }
+
+/** traySections 没给时的默认值。模块级常量：每次渲染给一个新的空数组的话，
+ *  依赖它的东西每次都会判成变了。 */
+const NO_SECTIONS: (TraySection | null)[] = [];
+
+/** 一次性提示停留多久。够读完一句报错，又不至于赖着不走。 */
+const NOTE_MS = 6000;
 
 export function ComposerDock({
   sessionId,
@@ -156,6 +164,7 @@ export function ComposerDock({
   onQueueSendNow,
   tasks = [],
   onTaskCancel,
+  traySections = NO_SECTIONS,
   onSend,
   onStop,
   withdrawn,
@@ -204,6 +213,9 @@ export function ComposerDock({
   /** 后台任务面板：这个会话里在跑 / 刚跑完的子 agent。 */
   tasks?: BackgroundTaskView[];
   onTaskCancel?: (agentId: string) => void;
+  /** 外层给的托盘分区（任务清单、本次改动 —— 数据在会话那一层）。和这里
+   *  的后台任务、排队一起排进输入框上方的状态托盘，见 StatusTray。 */
+  traySections?: (TraySection | null)[];
   /** 返回 false = 没发出去（hook 拦了、模型没配好），输入要放回输入框。
    *  `nudge` 只有「构建」/「并行构建」两个键传，普通发送不传。 */
   onSend: (t: string, images: ImageInput[], refs: string[], nudge?: Nudge) => Promise<boolean>;
@@ -351,6 +363,20 @@ export function ComposerDock({
   const [slashAtCaret, setSlashAtCaret] = useState<string | undefined>(undefined);
   /** 拖/选进来失败的那一条。附件是"扔进去就走"的操作，不报的话用户以为成了。 */
   const [dropError, setDropError] = useState("");
+
+  // 一次性的提示（拖入 / 粘贴出错、斜杠命令的回执）几秒后自己消失：它们
+  // 只是"刚才那一下"的反馈，不该像没配 key 那样常驻在输入框上方占一整条。
+  // 想早点关可以点它。换了内容（又出一次错）就重新计时。
+  useEffect(() => {
+    if (!dropError) return;
+    const id = window.setTimeout(() => setDropError(""), NOTE_MS);
+    return () => window.clearTimeout(id);
+  }, [dropError]);
+  useEffect(() => {
+    if (!slashNote) return;
+    const id = window.setTimeout(() => setSlashNote(""), NOTE_MS);
+    return () => window.clearTimeout(id);
+  }, [slashNote]);
   const [dragging, setDragging] = useState(false);
   /** 从文件树拖过来的那一项此刻悬在输入框上（应用内拖拽，不是系统拖放）。 */
   const [treeOver, setTreeOver] = useState(false);
@@ -1334,6 +1360,17 @@ export function ComposerDock({
     }
   };
 
+  // 托盘四类按优先级排（顺序即「默认展开谁」的优先级，见 TraySection）：
+  // 任务清单 > 后台任务 > 排队 > 本次改动。
+  const tasksSection = useTasksSection(tasks, (id) => onTaskCancel?.(id));
+  const [todoSection = null, changesSection = null] = traySections;
+  const sections = [
+    todoSection,
+    tasksSection,
+    queueSection(queued, (id) => void editQueued(id), onQueueSendNow, onQueueDelete),
+    changesSection,
+  ].filter((x): x is TraySection => x !== null);
+
   return (
     <div className="composer-wrap">
       {/* 落点提示铺满整个窗口 —— 因为落点确实是整个窗口，提示只圈住输入框
@@ -1392,11 +1429,9 @@ export function ComposerDock({
         </button>
       ) : null}
 
-      {tasks.length > 0 ? (
-        <BackgroundTasksPanel tasks={tasks} onCancel={(id) => onTaskCancel?.(id)} />
-      ) : null}
-
-      {queued.length > 0 ? <QueuePanel queued={queued} onEdit={(id) => void editQueued(id)} onSendNow={onQueueSendNow} onDelete={onQueueDelete} /> : null}
+      {/* 任务清单 / 后台任务 / 排队 / 本次改动收成一行标签，点开一类看
+          一类（见 StatusTray）。早先是四条各自独立的横条，同时出现时层层叠起。 */}
+      <StatusTray sections={sections} />
 
       {/* 菜单是 listbox、条目是 option：键盘操作（↑↓/Tab/Enter/Esc）本来就
           做全了，缺的只是让读屏知道"这是一组候选、当前落在第几条" ——

@@ -3808,6 +3808,10 @@ html[data-host='web'] body {
   .plan-card .plan-card-badge,
   .copied-check,
   .copied-check path,
+  .status-tray,
+  .tray-chip,
+  .tray-body,
+  .tray-live-dot,
   .jump-dot,
   .jump-dot::after {
     animation: none;
@@ -3815,7 +3819,7 @@ html[data-host='web'] body {
   .fold-live-icon {
     animation: none;
   }
-  .todo-panel .todo-item.completed .todo-mark {
+  .tray-body .todo-item.completed .todo-mark {
     animation: none;
   }
   .thread-busy {
@@ -4317,17 +4321,216 @@ html[data-host='web'] body {
 .composer-wrap {
   display: flex;
   flex-direction: column;
-  /* 和 dock 里 todo-panel / changes-bar 的 4px 下边距一致：它们和这里的
-     任务面板、排队面板都是"挂在输入框上方的一条"，离输入框得一样近。 */
+  /* 提示条（没配 key、目录丢了……）彼此、以及和输入框之间留 4px。状态托盘
+     不吃这个间距，直接贴在输入框顶上（见 .status-tray）。 */
   gap: 4px;
   min-width: 0;
+}
+
+/* ── 状态托盘（输入框正上方，见 composer/StatusTray）────────────
+   像一张贴在输入框顶上的标签页：左右各缩进 18px（避开输入框 20px 的
+   圆角，底边落在输入框平直的上沿上），只有上面两个角是圆的，底边不画
+   线，和输入框连成一体。margin-bottom 抵掉 .composer-wrap 的 4px 间距。 */
+.status-tray {
+  margin: 0 18px -4px;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 12px 12px 0 0;
+  background: var(--bg-card);
+  font-size: 12px;
+  min-width: 0;
+  animation: tray-in var(--dur-3) var(--ease-out);
+}
+
+@keyframes tray-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+/* 一行标签，永远只占一行、不撑出托盘（撑出去会把输入框一带横向撑开）。
+   宽度分三档（聊天区的 data-narrow / data-tight，见 lib/chatColWidth）：
+   宽 —— 完整文案 + 摘要；≤768 —— 去掉摘要（+x −y 保留）；≤560 —— 只剩
+   图标和数字，完整文案在悬停提示里。再兜底：所有标签都能缩，摘要先缩，
+   放不下的地方显示省略号。 */
+.tray-chips {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.tray-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  padding: 3px 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 12px;
+  white-space: nowrap;
+  animation: tray-chip-in var(--dur-2) var(--ease-out);
+}
+
+.tray-chip:hover:not(:disabled) {
+  color: var(--text-dim);
+  background: var(--bg-hover);
+}
+
+.tray-chip.on,
+.tray-chip.on:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+@keyframes tray-chip-in {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+}
+
+.tray-chip-icon {
+  position: relative;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+}
+
+.tray-chip-icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+.tray-chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 摘要比主文案先缩：flex-shrink 大一个量级。 */
+.tray-chip-extra {
+  flex: 0 100 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-faint);
+}
+
+.tray-chip-short {
+  display: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-col[data-narrow] .tray-chip:not([data-tray='changes']) .tray-chip-extra {
+  display: none;
+}
+
+.chat-col[data-tight] .tray-chip-label,
+.chat-col[data-tight] .tray-chip-extra {
+  display: none;
+}
+
+.chat-col[data-tight] .tray-chip-short {
+  display: inline;
+}
+
+/* 正在进行（任务清单在跑、有后台任务在跑）：图标右上角一个呼吸的点。 */
+.tray-live-dot {
+  position: absolute;
+  top: -2px;
+  right: -3px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: tray-live 1.6s ease-in-out infinite;
+}
+
+@keyframes tray-live {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* 展开那一类时右端的收起 / 关闭键。 */
+.tray-dismiss {
+  flex: none;
+  margin-left: auto;
+  padding: 3px 7px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.tray-dismiss:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+/* 展开区：和标签行之间一条细线；内容长了在这里滚（任务清单例外，它自己
+   限高滚动 —— 要能把进行中的那项滚进视野，见 TodoPanel）。 */
+.tray-body {
+  border-top: 1px solid var(--border);
+  padding: 4px 6px 6px;
+  max-height: 42vh;
+  overflow-y: auto;
+  /* 到头不回弹，也不把滚动交给对话区。 */
+  overscroll-behavior: none;
+  animation: tray-body-in var(--dur-2) var(--ease-out);
+}
+
+.tray-body[data-tray='todo'] {
+  max-height: none;
+  overflow: visible;
+}
+
+@keyframes tray-body-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+/* 改动列表的行之间留 1px（原改动条的列表就是这样排的）。 */
+.tray-body[data-tray='changes'] {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.tray-body .todo-list {
+  margin: 0;
+  padding: 2px 8px;
+}
+
+/* 托盘标签里的排队图标比行里的小一号。 */
+.tray-chip-icon .queue-ring {
+  width: 8px;
+  height: 8px;
 }
 
 .key-banner {
   border: 1px solid var(--warn-border);
   background: var(--warn-bg);
   color: var(--warn);
-  /* 和它上面的改动条（.changes-bar）同一个圆角，叠在一起才像一组。 */
+  /* 圆角和状态托盘一档（12px），叠在输入框上方时像一组。 */
   border-radius: 12px;
   padding: 8px 14px;
   text-align: center;
@@ -4604,33 +4807,13 @@ html[data-host='web'] body {
   color: var(--text-faint);
 }
 
-/* 排队面板：跑轮中发的插话停在输入框上方（Cursor 同款），注入对话后
-   才变成气泡。整体偏暗偏小 —— 它是"待办的输入"，不该比正文抢眼。 */
+/* 排队：跑轮中发的插话停在状态托盘里（Cursor 同款），注入对话后才变成
+   气泡。整体偏暗偏小 —— 它是"待办的输入"，不该比正文抢眼。 */
 .queue-panel {
-  border: 1px solid var(--border);
-  background: var(--bg-card);
-  border-radius: 12px;
-  padding: 4px 6px;
   font-size: 12px;
 }
 
-.queue-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  border: none;
-  background: transparent;
-  color: var(--text-faint);
-  font-size: 12px;
-  padding: 4px 6px;
-  cursor: pointer;
-  user-select: none;
-}
 
-.queue-head:hover {
-  color: var(--text-dim);
-}
 
 .queue-row {
   display: flex;
@@ -4706,31 +4889,10 @@ html[data-host='web'] body {
   color: var(--text);
 }
 
-/* ── 后台任务面板：复用排队面板的壳（同一格、同一类问题），行内多几列。 ── */
-.task-panel-head {
-  display: flex;
-  align-items: center;
-}
+/* ── 后台任务（状态托盘里）：复用排队的行（同一类问题），行内多几列。 ── */
 
-.task-panel-head .queue-head {
-  flex: 1;
-}
 
-.task-panel-dismiss {
-  flex: none;
-  border: none;
-  background: transparent;
-  color: var(--text-faint);
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 6px;
-  cursor: pointer;
-}
 
-.task-panel-dismiss:hover {
-  color: var(--text);
-  background: var(--bg-hover);
-}
 
 .task-dot {
   flex-shrink: 0;
@@ -5339,8 +5501,8 @@ html[data-host='web'] body {
   color: var(--text-dim);
 }
 
-/* 计划的待办进度：正文末尾一块卡，样式对齐输入框上方的任务面板
-   （.todo-panel）—— 同是"清单 + 进度头"，条目复用 .todo-list。 */
+/* 计划的待办进度：正文末尾一块卡，样式对齐状态托盘里的任务清单 ——
+   同是"清单 + 进度头"，条目复用 .todo-list。 */
 .plan-panel-todos {
   margin: 18px 0 0;
   border: 1px solid var(--border);
@@ -8624,7 +8786,7 @@ button.ta-resize-grip:hover:not(:disabled),
 
 /* ── 任务清单 ───────────────────────────────
    两个宿主共用 .todo-list：对话流里 TodoWrite 卡片点开的历史快照，
-   和输入框上方就地更新的常驻面板（.todo-panel）。 */
+   和输入框上方状态托盘里就地更新的那份（.tray-body）。 */
 
 .todo-list {
   list-style: none;
@@ -8677,89 +8839,20 @@ button.ta-resize-grip:hover:not(:disabled),
   transition: color var(--dur-3) var(--ease-out);
 }
 
-/* ── 常驻任务面板（输入框上方，就地更新）──────
-   外观对齐排队面板（queue-panel）：同是"挂在输入框上的辅助状态"。 */
 
-.todo-panel {
-  border: 1px solid var(--border);
-  background: var(--bg-card);
-  border-radius: 12px;
-  padding: 4px 6px;
-}
 
-/* 钉在 composer-dock 里时和输入框同宽同轴。 */
-.composer-dock .todo-panel {
-  max-width: 720px;
-  margin: 0 auto 4px;
-}
 
-.todo-panel-row {
-  display: flex;
-  align-items: center;
-}
 
-.todo-panel-head {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  border: none;
-  background: transparent;
-  color: var(--text-faint);
-  font-size: 12px;
-  padding: 4px 6px;
-  cursor: pointer;
-  user-select: none;
-}
 
-.todo-panel-head:hover:not(:disabled) {
-  color: var(--text-dim);
-  /* 同 changes-bar-head：卡片里不再套一块灰底。 */
-  background: transparent;
-}
 
-/* 关闭按钮平时淡着，扫到面板上才亮 —— 它是逃生口，不是常用操作。 */
-.todo-panel-close {
-  flex-shrink: 0;
-  border: none;
-  background: transparent;
-  color: transparent;
-  font-size: 11px;
-  padding: 4px 8px;
-  cursor: pointer;
-  border-radius: 6px;
-}
 
-.todo-panel:hover .todo-panel-close,
-.changes-bar:hover .todo-panel-close,
-.todo-panel-close:focus-visible {
-  color: var(--text-faint);
-}
 
-.todo-panel-close:hover:not(:disabled) {
-  color: var(--text-dim);
-  background: transparent;
-}
 
-.todo-panel-title {
-  flex-shrink: 0;
-  font-weight: 500;
-}
-
-/* 收起时提到标题上的"正在做什么"。 */
-.todo-panel-doing {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-dim);
-}
 
 /* 勾选的那一下"啵"。动画挂在 .completed 类的出现上 —— 面板就地更新、
    条目按下标取 key，DOM 节点存续，状态翻转时类一换动画就走一遍。
    对话流里的历史快照一出生就是 completed，也会闪一下，无妨。 */
-.todo-panel .todo-item.completed .todo-mark {
+.tray-body .todo-item.completed .todo-mark {
   animation: todo-pop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
@@ -8772,69 +8865,19 @@ button.ta-resize-grip:hover:not(:disabled),
   }
 }
 
-/* ── 会话改动条（输入框上方，和任务面板共用一格）──────
-   外观对齐 todo-panel：同是"挂在输入框上的辅助状态"。 */
+/* ── 本次改动的增删行数（托盘标签里） ── */
 
-.changes-bar {
-  border: 1px solid var(--border);
-  background: var(--bg-card);
-  border-radius: 12px;
-  padding: 4px 6px;
-}
 
 /* 钉在 composer-dock 里时和输入框同宽同轴。 */
-.composer-dock .changes-bar {
-  max-width: 720px;
-  margin: 0 auto 4px;
-}
 
-.changes-bar-row {
-  display: flex;
-  align-items: center;
-}
 
-.changes-bar-head {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  border: none;
-  background: transparent;
-  color: var(--text-faint);
-  font-size: 12px;
-  padding: 4px 6px;
-  cursor: pointer;
-  user-select: none;
-}
 
-.changes-bar-head:hover:not(:disabled) {
-  color: var(--text-dim);
-  /* 压住全局 button:hover 的底色：条本身已经是一块卡片，里面再亮一块
-     灰底，像框里套了个框。悬停只提亮字。 */
-  background: transparent;
-}
 
-.changes-bar-title {
-  flex-shrink: 0;
-  font-weight: 500;
-}
 
 .changes-bar-stat {
   font-family: var(--mono);
 }
 
-/* 展开的文件列表：向上长，但不能把对话流顶没了 —— 限高自己滚。 */
-.changes-bar-list {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  padding: 4px 0 6px;
-  max-height: 42vh;
-  overflow-y: auto;
-  /* 同 .change-diff：到头不回弹。 */
-  overscroll-behavior: none;
-}
 
 /* 设置页的选择列表：竖排行，名字截断，超高滚动。MCP 服务器和提示词
    共用一套 —— 两处都是"左边一列条目、右边跟着编辑器"，长得不一样只会
@@ -13155,7 +13198,7 @@ button.ctx-cat-line:focus-visible {
    diff 上滚到底，diff 不把滚动交给列表（overscroll-behavior:none），最后
    一截压在列表下沿、也就是输入框背后，怎么都看不到；WebKit 的 overlay
    滚动条还不受外层裁剪，diff 的滚动条画到了输入框上。横向照旧自己滚。 */
-.changes-bar-list .change-diff {
+.tray-body[data-tray='changes'] .change-diff {
   background: var(--bg-side);
   max-height: none;
   /* 竖向不再自己滚，也就不能拦着竖向滚动往列表传（x、y 分开写）。 */
@@ -13167,14 +13210,14 @@ button.ctx-cat-line:focus-visible {
    （只盖 thumb 颜色、不动 scrollbar-width —— 见文件顶部的互斥约束。
    macOS 不写伪元素，留给系统 overlay，避免又打成 classic 槽。） */
 :is(html[data-vibrancy='win'], html:not([data-vibrancy]))
-  .changes-bar-list::-webkit-scrollbar-thumb,
+  .tray-body::-webkit-scrollbar-thumb,
 :is(html[data-vibrancy='win'], html:not([data-vibrancy])) .changes-body::-webkit-scrollbar-thumb,
 :is(html[data-vibrancy='win'], html:not([data-vibrancy])) .change-diff::-webkit-scrollbar-thumb {
   background-color: transparent;
 }
 
 :is(html[data-vibrancy='win'], html:not([data-vibrancy]))
-  .changes-bar-list:hover::-webkit-scrollbar-thumb,
+  .tray-body:hover::-webkit-scrollbar-thumb,
 :is(html[data-vibrancy='win'], html:not([data-vibrancy]))
   .changes-body:hover::-webkit-scrollbar-thumb,
 :is(html[data-vibrancy='win'], html:not([data-vibrancy]))
@@ -13395,8 +13438,8 @@ button.ctx-cat-line:focus-visible {
 
 /* ── 对话卡片 P2 批量修复 ───── */
 
-/* 长清单限高：限定 .todo-panel，不影响 ToolCard 快照里的同名类 */
-.todo-panel .todo-list {
+/* 长清单限高：限定在托盘里，不影响 ToolCard 快照里的同名类 */
+.tray-body .todo-list {
   max-height: 240px;
   overflow-y: auto;
 }
@@ -14651,6 +14694,13 @@ button.ctx-cat-line:focus-visible {
   body,
   #root {
     height: 100dvh;
+  }
+
+  /* 主区放开 500px 的下限（见 .main）：手机布局里侧栏、右侧面板都是浮层，
+     没有并排的列跟它抢地方；留着下限的话窗口窄过 500px（手机远程访问）
+     时主区右边一截被窗口切掉。 */
+  .main {
+    min-width: 0;
   }
 
   /* ── 侧栏：左侧抽屉 ── */

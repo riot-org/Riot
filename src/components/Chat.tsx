@@ -9,8 +9,8 @@ import {
   type PermissionResponse,
   type ThinkingPolicy,
 } from "../bridge";
-import { SessionChangesBar } from "./SessionChangesBar";
-import { hasActiveTodos, TodoPanel } from "./TodoPanel";
+import { useChangesSection } from "./SessionChangesBar";
+import { hasActiveTodos, useTodoSection } from "./TodoPanel";
 import { thinkingClock, useSession, waitStartedAt } from "../hooks/useSession";
 import { assistantMessageId, latestForkPoint } from "../hooks/session/history";
 import { t, useT } from "../i18n";
@@ -275,6 +275,16 @@ export function Chat({
   // 任务临时顶掉改动条;清单全部完成、或轮子停了(含切回已结束的
   // 会话),任务自动让位 —— 它是进行时的进度,不是要留档的结果。
   const todoActive = busy && hasActiveTodos(session.items);
+  // 状态托盘里归会话这一层的两类：任务清单、本次改动。交给输入框，和那边
+  // 的后台任务、排队排成一行（见 composer/StatusTray）。
+  const todoSection = useTodoSection(session.items, todoActive);
+  const changesSection = useChangesSection({
+    sessionId,
+    refreshKey: `${changesKey}/${session.filesRev}`,
+    paused: !visible,
+  });
+  // 输入框是 memo 的：数组每次新建的话它每帧都会重画（见 Composer.tsx）。
+  const traySections = useMemo(() => [todoSection, changesSection], [todoSection, changesSection]);
 
   // 所有询问都走对话流里的内联卡（照 Claude Code，不弹窗）：换模式的建议、
   // 选择题、环境变量表单，以及 Bash / Write 这类权限确认 —— 后者的卡片
@@ -390,6 +400,7 @@ export function Chat({
       onQueueSendNow={session.queueSendNow}
       tasks={session.tasks}
       onTaskCancel={session.cancelTask}
+      traySections={traySections}
       onSend={send}
       onStop={session.stop}
       {...(onFork ? { onFork: forkLatest } : {})}
@@ -414,18 +425,6 @@ export function Chat({
    */
   const dock = (
     <div className="composer-dock">
-      {/* 任务清单和改动条共用输入框上方这一格:跑轮时看进度,
-          其余时间看改动(Cursor 同款)。两个都常驻会叠成两层横条,
-          把输入框越垫越高。空会话时两者都渲染成空,不占位置。 */}
-      {todoActive ? (
-        <TodoPanel items={session.items} />
-      ) : (
-        <SessionChangesBar
-          sessionId={sessionId}
-          refreshKey={`${changesKey}/${session.filesRev}`}
-          paused={!visible}
-        />
-      )}
       {composer}
     </div>
   );
