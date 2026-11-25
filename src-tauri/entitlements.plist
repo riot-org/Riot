@@ -24,7 +24,7 @@
   都不需要。
 
   构建后验证（主二进制、随包内核、以及嵌在 Resources 里的浏览器 .app 各查一遍）：
-    codesign -dv --entitlements - "target/release/bundle/macos/Riot.app/Contents/MacOS/Riot"
+    用 codesign 显示签名信息时带上 entitlements 参数，逐个检查。
 -->
 <plist version="1.0">
 <dict>
