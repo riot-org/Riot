@@ -112,7 +112,6 @@ export function useChangesSection({
       ),
       body: <FileChangeList changes={changes} />,
       dismiss: {
-        label: "✕",
         title: t("transcript.changesBar.closeTitle"),
         onClick: () => {
           setDismissedAt(signature);

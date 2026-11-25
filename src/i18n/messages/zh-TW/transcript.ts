@@ -119,8 +119,7 @@ export default {
   "transcript.tray.background": "背景 {count}",
   "transcript.tray.backgroundDone": "背景 {count} · 已結束",
   "transcript.tray.queue": "排隊 {count}",
-  "transcript.taskPanel.dismiss": "收合",
-  "transcript.taskPanel.dismissTitle": "收合已結束的任務",
+  "transcript.taskPanel.dismissTitle": "隱藏已結束的任務（再有任務結束時會重新出現）",
   "transcript.taskPanel.stopTitle": "停止這個背景任務",
   "transcript.subagent.gone": "找不到這個子 agent 的記錄（它的記錄檔可能已被刪除，或者它當時沒來得及寫下任何內容）。",
   "transcript.subagent.prompt": "任務",
@@ -231,8 +230,7 @@ export default {
   "transcript.mode.switchAgentSub": "權限檔：{mode}",
 
   "transcript.todo.title": "任務 {done}/{total}",
-  "transcript.todo.close": "關閉任務面板",
-  "transcript.todo.closeTitle": "關閉（清單再次更新時會重新出現）",
+  "transcript.todo.closeTitle": "隱藏清單（清單再更新時會重新出現）",
 
   "transcript.scope.title": "滲透授權範圍",
   "transcript.scope.info":
@@ -257,8 +255,7 @@ export default {
   "transcript.change.unchanged": "內容沒有變化。",
   "transcript.change.truncated": "變更太大，只顯示了前面一段。完整內容請看檔案本身。",
   "transcript.changesBar.label": "本次變更 {count} 個檔案",
-  "transcript.changesBar.close": "關閉改動條",
-  "transcript.changesBar.closeTitle": "關閉（再有改動時會重新出現）",
+  "transcript.changesBar.closeTitle": "隱藏改動（之後再改檔案時會重新出現）",
   "transcript.changesBar.title":
     "本次會話經編輯工具寫入磁碟的淨變更。提交到 git 之後這裡依然保留，直到會話結束。",
 

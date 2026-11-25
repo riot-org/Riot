@@ -31,12 +31,26 @@ export interface TraySection {
   /** 展开后的内容。 */
   body: ReactNode;
   /**
-   * 用户没手动开合过时，是否默认展开它。几类都想默认展开时按标签顺序取
+   * 用户没手动开合过时，是否默认展开它。几类都想默认展开时按传进来的顺序取
    * 第一个（顺序即优先级：任务清单 > 后台任务 > 排队 > 改动）。
    */
   autoOpen?: boolean;
-  /** 展开时标签行右端的收起 / 关闭键（各类的规则不同，由各自的 hook 给）。 */
-  dismiss?: { label: ReactNode; title: string; onClick: () => void };
+  /**
+   * 标签上的 ×（悬停才出现，像浏览器标签页）：把这一类从托盘里拿掉，直到
+   * 有新内容（清单更新、又改了文件、又有任务结束）再回来。各类"什么算新
+   * 内容"不同，由各自的 hook 给；`title` 说清这一类什么时候回来。
+   *
+   * 放在标签自己身上，而不是标签行右端：那个角上的键看着像关掉整个面板
+   * （甚至窗口），也说不清关的是哪一类。
+   */
+  dismiss?: { title: string; onClick: () => void };
+}
+
+/** 上次的顺序 + 这次在场的 id → 新顺序：留下的保持原位，新来的接在后面。
+ *  没变时原样返回同一个数组（调用方拿引用判断要不要更新）。 */
+export function arrivalOrder<T>(prev: readonly T[], present: readonly T[]): readonly T[] {
+  const next = [...prev.filter((id) => present.includes(id)), ...present.filter((id) => !prev.includes(id))];
+  return next.length === prev.length && next.every((id, i) => id === prev[i]) ? prev : next;
 }
 
 export function StatusTray({ sections }: { sections: TraySection[] }) {
@@ -46,7 +60,17 @@ export function StatusTray({ sections }: { sections: TraySection[] }) {
    * 自动 —— 否则托盘会卡在一个不存在的展开态上，什么都不显示。
    */
   const [choice, setChoice] = useState<TraySection["id"] | null | undefined>(undefined);
+  /**
+   * 标签按出现先后排：后冒出来的接在尾巴上，已有的不挪位置 —— 像标签页，
+   * 不然新来一类就把别的往右挤，手正要点的那个跑了。消失的从顺序里拿掉，
+   * 再出现时又排到最后。传进来的 `sections` 顺序只管"默认展开谁"的优先级。
+   */
+  const ids = sections.map((s) => s.id);
+  const [order, setOrder] = useState<readonly TraySection["id"][]>(ids);
+  const nextOrder = arrivalOrder(order, ids);
+  if (nextOrder !== order) setOrder(nextOrder);
   if (sections.length === 0) return null;
+  const shown = nextOrder.map((id) => sections.find((s) => s.id === id)).filter((s): s is TraySection => !!s);
 
   const auto = sections.find((s) => s.autoOpen)?.id ?? null;
   const openId =
@@ -56,43 +80,44 @@ export function StatusTray({ sections }: { sections: TraySection[] }) {
   return (
     <div className={open ? "status-tray open" : "status-tray"}>
       <div className="tray-chips">
-        {sections.map((s) => {
+        {shown.map((s) => {
           const on = s.id === openId;
           return (
-            <button
-              key={s.id}
-              type="button"
-              className={on ? "tray-chip on" : "tray-chip"}
-              data-tray={s.id}
-              aria-expanded={on}
-              title={s.hint ?? s.label}
-              onClick={() => setChoice(on ? null : s.id)}
-            >
-              <span className="tray-chip-icon" aria-hidden>
-                {s.icon}
-                {s.live ? <span className="tray-live-dot" /> : null}
-              </span>
-              <span className="tray-chip-label">{s.label}</span>
-              {/* 窄屏只显示这一份（见 styles.css 的 .chat-col[data-tight]）。 */}
-              <span className="tray-chip-short">{s.short}</span>
-              {s.extra ? <span className="tray-chip-extra">{s.extra}</span> : null}
-            </button>
+            <span key={s.id} className={s.dismiss ? "tray-tab closable" : "tray-tab"}>
+              <button
+                type="button"
+                className={on ? "tray-chip on" : "tray-chip"}
+                data-tray={s.id}
+                aria-expanded={on}
+                title={s.hint ?? s.label}
+                onClick={() => setChoice(on ? null : s.id)}
+              >
+                <span className="tray-chip-icon" aria-hidden>
+                  {s.icon}
+                  {s.live ? <span className="tray-live-dot" /> : null}
+                </span>
+                <span className="tray-chip-label">{s.label}</span>
+                {/* 窄屏只显示这一份（见 styles.css 的 .chat-col[data-tight]）。 */}
+                <span className="tray-chip-short">{s.short}</span>
+                {s.extra ? <span className="tray-chip-extra">{s.extra}</span> : null}
+              </button>
+              {s.dismiss ? (
+                <button
+                  type="button"
+                  className="tray-chip-close"
+                  title={s.dismiss.title}
+                  aria-label={s.dismiss.title}
+                  onClick={() => {
+                    s.dismiss?.onClick();
+                    if (on) setChoice(undefined);
+                  }}
+                >
+                  <CloseIcon />
+                </button>
+              ) : null}
+            </span>
           );
         })}
-        {open?.dismiss ? (
-          <button
-            type="button"
-            className="tray-dismiss"
-            title={open.dismiss.title}
-            aria-label={open.dismiss.title}
-            onClick={() => {
-              open.dismiss?.onClick();
-              setChoice(undefined);
-            }}
-          >
-            {open.dismiss.label}
-          </button>
-        ) : null}
       </div>
       {/* key 跟着展开的那一类走：换一类时内容区重挂，入场动画重播一次。 */}
       {open ? (
@@ -101,5 +126,13 @@ export function StatusTray({ sections }: { sections: TraySection[] }) {
         </div>
       ) : null}
     </div>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 16 16" fill="none" aria-hidden>
+      <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
   );
 }

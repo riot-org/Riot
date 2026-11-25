@@ -131,8 +131,7 @@ export default {
   "transcript.tray.background": "后台 {count}",
   "transcript.tray.backgroundDone": "后台 {count} · 已结束",
   "transcript.tray.queue": "排队 {count}",
-  "transcript.taskPanel.dismiss": "收起",
-  "transcript.taskPanel.dismissTitle": "收起已结束的任务",
+  "transcript.taskPanel.dismissTitle": "隐藏已结束的任务（再有任务结束时会重新出现）",
   "transcript.taskPanel.stopTitle": "停止这个后台任务",
   "transcript.subagent.gone": "找不到这个子 agent 的记录（它的记录文件可能已被删除，或者它当时没来得及写下任何内容）。",
   "transcript.subagent.prompt": "任务",
@@ -249,8 +248,7 @@ export default {
 
   // 待办面板
   "transcript.todo.title": "任务 {done}/{total}",
-  "transcript.todo.close": "关闭任务面板",
-  "transcript.todo.closeTitle": "关闭（清单再次更新时会重新出现）",
+  "transcript.todo.closeTitle": "隐藏清单（清单再更新时会重新出现）",
 
   // 渗透授权范围
   "transcript.scope.title": "渗透授权范围",
@@ -277,8 +275,7 @@ export default {
   "transcript.change.unchanged": "内容没有变化。",
   "transcript.change.truncated": "改动太大，只显示了前面一截。完整内容请看文件本身。",
   "transcript.changesBar.label": "本次改动 {count} 个文件",
-  "transcript.changesBar.close": "关闭改动条",
-  "transcript.changesBar.closeTitle": "关闭（再有改动时会重新出现）",
+  "transcript.changesBar.closeTitle": "隐藏改动（之后再改文件时会重新出现）",
   "transcript.changesBar.title":
     "本次会话经编辑工具落盘的净改动。提交到 git 之后这里依然保留，直到会话结束。",
 

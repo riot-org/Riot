@@ -100,8 +100,7 @@ export function useTodoSection(items: Item[], active: boolean): TraySection | nu
       autoOpen: done < todos.length,
       body: <TodoList todos={todos} />,
       dismiss: {
-        label: "✕",
-        title: t("transcript.todo.close"),
+        title: t("transcript.todo.closeTitle"),
         onClick: () => setDismissedAt(callId),
       },
     } satisfies TraySection;

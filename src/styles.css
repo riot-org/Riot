@@ -4490,21 +4490,56 @@ html[data-host='web'] body {
   }
 }
 
-/* 展开那一类时右端的收起 / 关闭键。 */
-.tray-dismiss {
-  flex: none;
-  margin-left: auto;
-  padding: 3px 7px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-faint);
-  font-size: 11px;
+/* 标签当标签页用：悬停时右端浮出 ×，把这一类隐藏（见 TraySection.dismiss）。
+   × 盖在标签文字的尾巴上，左边一段渐变把文字淡出去，标签宽度不变、不跳。 */
+.tray-tab {
+  position: relative;
+  display: inline-flex;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
-.tray-dismiss:hover:not(:disabled) {
-  color: var(--text);
+.tray-chip-close {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 4px 0 14px;
+  border: none;
+  border-radius: 0 8px 8px 0;
+  /* 两层：底下是卡片底色，上面叠标签悬停色 —— 合起来正好是标签的底色。 */
+  background:
+    linear-gradient(90deg, transparent, var(--bg-hover) 12px),
+    linear-gradient(90deg, transparent, var(--bg-card) 12px);
+  color: var(--text-faint);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-1) var(--ease-out);
+}
+
+/* 指针移到 × 上时标签本身不再 :hover，底色要照样留着。 */
+.tray-tab:hover .tray-chip:not(.on) {
+  color: var(--text-dim);
   background: var(--bg-hover);
+}
+
+.tray-tab.closable:hover .tray-chip-close,
+.tray-chip-close:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.tray-chip-close svg {
+  box-sizing: content-box;
+  padding: 3px;
+  border-radius: 5px;
+}
+
+.tray-chip-close:hover svg {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 12%, transparent);
 }
 
 /* 展开区：和标签行之间一条细线；内容长了在这里滚（任务清单例外，它自己

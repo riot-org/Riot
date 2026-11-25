@@ -176,7 +176,6 @@ export function useTasksSection(
     ...(running.length === 0
       ? {
           dismiss: {
-            label: t("transcript.taskPanel.dismiss"),
             title: t("transcript.taskPanel.dismissTitle"),
             onClick: () => setDismissedAt(Date.now()),
           },

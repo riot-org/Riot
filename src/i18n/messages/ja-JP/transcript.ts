@@ -121,8 +121,7 @@ export default {
   "transcript.tray.background": "バックグラウンド {count}",
   "transcript.tray.backgroundDone": "バックグラウンド {count} · 終了",
   "transcript.tray.queue": "待機 {count}",
-  "transcript.taskPanel.dismiss": "閉じる",
-  "transcript.taskPanel.dismissTitle": "終了したタスクを閉じる",
+  "transcript.taskPanel.dismissTitle": "終了したタスクを非表示（別のタスクが終わると再表示）",
   "transcript.taskPanel.stopTitle": "このバックグラウンドタスクを停止",
   "transcript.subagent.gone": "このサブエージェントの記録が見つかりません（記録ファイルが削除されたか、何も書き残す前に終わった可能性があります）。",
   "transcript.subagent.prompt": "タスク",
@@ -233,8 +232,7 @@ export default {
   "transcript.mode.switchAgentSub": "権限レベル：{mode}",
 
   "transcript.todo.title": "タスク {done}/{total}",
-  "transcript.todo.close": "タスクパネルを閉じる",
-  "transcript.todo.closeTitle": "閉じる（リストが更新されると再表示）",
+  "transcript.todo.closeTitle": "リストを非表示（更新されると再表示）",
 
   "transcript.scope.title": "ペンテスト許可範囲",
   "transcript.scope.info":
@@ -259,8 +257,7 @@ export default {
   "transcript.change.unchanged": "内容に変化はありません。",
   "transcript.change.truncated": "変更が大きすぎるため、先頭部分のみ表示しています。全文はファイル自体を確認してください。",
   "transcript.changesBar.label": "今回の変更 {count} ファイル",
-  "transcript.changesBar.close": "変更バーを閉じる",
-  "transcript.changesBar.closeTitle": "閉じる（さらに変更があると再表示）",
+  "transcript.changesBar.closeTitle": "変更を非表示（さらに変更があると再表示）",
   "transcript.changesBar.title":
     "このセッションで編集ツールがディスクに書き込んだ正味の変更。git にコミットした後もセッション終了までここに残ります。",
 

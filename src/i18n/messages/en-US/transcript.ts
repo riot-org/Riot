@@ -134,8 +134,7 @@ export default {
   "transcript.tray.backgroundDone": "Background {count} · done",
   "transcript.tray.queue": "Queued {count}",
   "transcript.taskPanel.finished#one": "{count} background task finished",
-  "transcript.taskPanel.dismiss": "Dismiss",
-  "transcript.taskPanel.dismissTitle": "Dismiss finished tasks",
+  "transcript.taskPanel.dismissTitle": "Hide finished tasks (comes back when another task finishes)",
   "transcript.taskPanel.stopTitle": "Stop this background task",
   "transcript.subagent.gone":
     "No record of this subagent could be found (its transcript may have been deleted, or it never got to write anything).",
@@ -252,8 +251,7 @@ export default {
   "transcript.mode.switchAgentSub": "Permissions: {mode}",
 
   "transcript.todo.title": "Tasks {done}/{total}",
-  "transcript.todo.close": "Close task panel",
-  "transcript.todo.closeTitle": "Close (reappears when the list updates)",
+  "transcript.todo.closeTitle": "Hide the list (comes back when it updates)",
 
   "transcript.scope.title": "Pentest scope",
   "transcript.scope.info":
@@ -279,8 +277,7 @@ export default {
   "transcript.change.truncated":
     "The change is too large; only the beginning is shown. See the file for the full content.",
   "transcript.changesBar.label": "{count} files changed",
-  "transcript.changesBar.close": "Close changes bar",
-  "transcript.changesBar.closeTitle": "Close (comes back when more files change)",
+  "transcript.changesBar.closeTitle": "Hide changes (comes back when more files change)",
   "transcript.changesBar.label#one": "{count} file changed",
   "transcript.changesBar.title":
     "Net changes written to disk by edit tools in this session. Stays here after committing to git, until the session ends.",

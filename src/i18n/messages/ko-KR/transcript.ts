@@ -130,8 +130,7 @@ export default {
   "transcript.tray.background": "백그라운드 {count}",
   "transcript.tray.backgroundDone": "백그라운드 {count} · 종료",
   "transcript.tray.queue": "대기 {count}",
-  "transcript.taskPanel.dismiss": "접기",
-  "transcript.taskPanel.dismissTitle": "종료된 작업 접기",
+  "transcript.taskPanel.dismissTitle": "종료된 작업 숨기기 (다른 작업이 끝나면 다시 표시)",
   "transcript.taskPanel.stopTitle": "이 백그라운드 작업 중지",
   "transcript.subagent.gone": "이 하위 agent의 기록을 찾을 수 없습니다(기록 파일이 삭제되었거나, 아무것도 남기지 못하고 끝났을 수 있습니다).",
   "transcript.subagent.prompt": "작업",
@@ -248,8 +247,7 @@ export default {
 
   // 할 일 패널
   "transcript.todo.title": "작업 {done}/{total}",
-  "transcript.todo.close": "작업 패널 닫기",
-  "transcript.todo.closeTitle": "닫기 (목록이 다시 업데이트되면 다시 나타남)",
+  "transcript.todo.closeTitle": "목록 숨기기 (목록이 업데이트되면 다시 표시)",
 
   // 침투 테스트 권한 범위
   "transcript.scope.title": "침투 테스트 권한 범위",
@@ -276,8 +274,7 @@ export default {
   "transcript.change.unchanged": "내용에 변화가 없습니다.",
   "transcript.change.truncated": "변경이 너무 커서 앞부분만 표시했습니다. 전체 내용은 파일을 직접 확인하세요.",
   "transcript.changesBar.label": "이번 변경 파일 {count}개",
-  "transcript.changesBar.close": "변경 막대 닫기",
-  "transcript.changesBar.closeTitle": "닫기 (파일이 더 바뀌면 다시 표시)",
+  "transcript.changesBar.closeTitle": "변경 숨기기 (파일이 더 바뀌면 다시 표시)",
   "transcript.changesBar.title":
     "이 세션에서 편집 도구가 디스크에 기록한 순 변경 사항입니다. git에 커밋한 뒤에도 세션이 끝날 때까지 여기에 남습니다.",
 

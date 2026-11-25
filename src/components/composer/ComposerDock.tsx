@@ -1360,8 +1360,8 @@ export function ComposerDock({
     }
   };
 
-  // 托盘四类按优先级排（顺序即「默认展开谁」的优先级，见 TraySection）：
-  // 任务清单 > 后台任务 > 排队 > 本次改动。
+  // 托盘四类按优先级传（顺序即「默认展开谁」的优先级，见 TraySection）：
+  // 任务清单 > 后台任务 > 排队 > 本次改动。标签的显示顺序是出现先后，托盘自己排。
   const tasksSection = useTasksSection(tasks, (id) => onTaskCancel?.(id));
   const [todoSection = null, changesSection = null] = traySections;
   const sections = [
