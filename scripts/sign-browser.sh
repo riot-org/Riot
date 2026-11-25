@@ -20,6 +20,7 @@
 #   ./scripts/sign-browser.sh [path/to/riot-browser.app]
 #
 # 没设 APPLE_SIGNING_IDENTITY 时直接跳过 —— 本地开发仍可打未签名包。
+# 本地修复已签坏的开发包：APPLE_SIGNING_IDENTITY=- ./scripts/sign-browser.sh
 
 set -euo pipefail
 
@@ -93,8 +94,20 @@ if [[ -n "${APPLE_CERTIFICATE:-}" ]]; then
   security list-keychains -d user -s "$KC" "${ORIG_KC[@]}" >/dev/null
 fi
 
+# 第二个参数是 entitlements 文件，可省。
+#
+# [约束] 跑 V8 的进程必须带 JIT 权限（scripts/entitlements/）。hardened
+# runtime 默认不许申请可执行内存，没有 allow-jit 的渲染进程一启动就崩
+# （"Failed to reserve virtual memory for CodeRange"），面板永远停在
+# "浏览器启动中"。v0.1.20 就是这么发出去的。
+#
+# IDENTITY 为 "-" 时是本地临时签名（开发用）：不能带安全时间戳。
+ENT_DIR="$ROOT/scripts/entitlements"
 sign() {
-  codesign --force --options runtime --timestamp --sign "$IDENTITY" "$1"
+  local args=(--force --options runtime --sign "$IDENTITY")
+  [[ "$IDENTITY" != "-" ]] && args+=(--timestamp)
+  [[ -n "${2:-}" ]] && args+=(--entitlements "$2")
+  codesign "${args[@]}" "$1"
 }
 
 # 1. CEF 自带的 dylib
@@ -110,16 +123,30 @@ if [[ -d "$APP/Contents/Frameworks/Chromium Embedded Framework.framework" ]]; th
   sign "$APP/Contents/Frameworks/Chromium Embedded Framework.framework"
 fi
 
-# 3. 五个 helper .app
+# 3. 五个 helper .app，按各自的活儿给权限（对照 Chromium 自己的 helper）：
+#    Renderer / GPU / 无后缀的 Helper（网络服务里的 PAC 解析）跑 V8 → JIT；
+#    Plugin 还要加载别家签名的库；Alerts 只弹通知，什么都不用。
 while IFS= read -r -d '' h; do
-  sign "$h"
+  case "$(basename "$h")" in
+    *"Helper (Plugin).app") sign "$h" "$ENT_DIR/browser-plugin.plist" ;;
+    *"Helper (Alerts).app") sign "$h" ;;
+    *) sign "$h" "$ENT_DIR/browser-jit.plist" ;;
+  esac
 done < <(find "$APP/Contents/Frameworks" -maxdepth 1 -type d -name '*.app' -print0)
 
-# 4. 主可执行文件
-sign "$APP/Contents/MacOS/riot-browser"
+# 4. 主可执行文件（浏览器主进程同样跑 V8）
+sign "$APP/Contents/MacOS/riot-browser" "$ENT_DIR/browser-jit.plist"
 
-# 5. 整个 .app
-sign "$APP"
+# 5. 整个 .app（签外层会重写主可执行文件的签名，权限要再带一次）
+sign "$APP" "$ENT_DIR/browser-jit.plist"
+
+# 发出去之前确认渲染进程真的带上了 JIT 权限 —— 少了它浏览器整个打不开，
+# 而签名校验、公证都不会报错。
+RENDERER="$APP/Contents/Frameworks/riot-browser Helper (Renderer).app"
+if ! codesign -d --entitlements - --xml "$RENDERER" 2>/dev/null | grep -q "com.apple.security.cs.allow-jit"; then
+  echo "渲染进程没有 allow-jit 权限，浏览器会一启动就崩" >&2
+  exit 1
+fi
 
 codesign --verify --deep --strict --verbose=2 "$APP"
 echo "内置浏览器签名完成: $APP"

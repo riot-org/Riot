@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  内置浏览器（CEF）里要跑 V8 的进程：主进程、Renderer、GPU、无后缀的 Helper
+  （网络服务里的 PAC 解析也是 V8）。见 scripts/sign-browser.sh。
+
+  hardened runtime 默认不许申请可写又可执行的内存。V8 的 JIT 要的正是这个 ——
+  没有 allow-jit，渲染进程启动时就报 "Failed to reserve virtual memory for
+  CodeRange" 然后自己断点退出，面板永远停在"浏览器启动中"。
+  allow-unsigned-executable-memory 给 WebAssembly 和 V8 的部分代码区。
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+</dict>
+</plist>
