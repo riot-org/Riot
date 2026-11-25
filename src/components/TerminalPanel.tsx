@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { FitAddon } from "@xterm/addon-fit";
-import { type ITheme, Terminal } from "@xterm/xterm";
+import { type IMarker, type ITheme, Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 
 import {
@@ -20,6 +20,15 @@ import { type ConfirmRequest, ConfirmDialog } from "./ConfirmDialog";
 import { TerminalIcon } from "./icons";
 import { t as msg, useT } from "../i18n";
 import { setRunningAgentTerminals, subscribeAgentTerminalOpen } from "../lib/agentTerminals";
+import { shellPlatform } from "../lib/commandRun";
+import {
+  type RunRequest,
+  getRun,
+  patchRun,
+  putRun,
+  setRunSession,
+  subscribeRunRequests,
+} from "../lib/terminalRuns";
 import { basename } from "../pathDisplay";
 import { type Theme, getTheme, useTheme } from "../theme";
 
@@ -99,6 +108,13 @@ export function TerminalPanel({
    */
   const closeTab = (uid: string, opts?: { hostDead?: boolean; keepHost?: boolean }) => {
     const inst = instances.current.get(uid);
+    // 代码块那头还挂着"正在运行"的话，标签一关就永远等不到结果了。
+    const pend = pendingRuns.current.get(uid);
+    if (pend) {
+      pendingRuns.current.delete(uid);
+      patchRun(pend.sid, pend.req.command, { phase: "done", exitCode: null, endedAt: Date.now() });
+    }
+    if (inst?.run) settleRun(inst, null);
     if (inst) {
       inst.ro.disconnect();
       // 排着队的 fit 必须撤掉：安静期里关标签的话，它会打在已经
@@ -200,6 +216,148 @@ export function TerminalPanel({
     });
   };
 
+  /** 新开来跑命令的标签：等它的 shell 出提示符再把命令写进去（见 mount）。 */
+  const pendingRuns = useRef(new Map<string, { sid: string | null; req: RunRequest & { kind: "run" } }>());
+  const defaultRootRef = useRef(defaultRoot);
+  defaultRootRef.current = defaultRoot;
+
+  /**
+   * 回答里点了「运行」：挑一个能用的标签把命令写进去，没有就新开一个。
+   *
+   * 能用 = 本会话组里用户自己的 shell（不是模型起的服务）、目录就是这次
+   * 要的目录、前台没在跑东西、也没挂着别的运行。正看着的那个优先 ——
+   * 命令出现在用户眼前的那个终端里最自然。
+   */
+  const startRun = async (req: RunRequest & { kind: "run" }) => {
+    const sid = sessionRef.current;
+    // 欢迎页没有会话，终端组无处归属（见上面自动开标签的 effect）。
+    if (sid == null) return;
+    const root = req.root || defaultRootRef.current;
+    const prev = req.execute ? getRun(sid, req.command) : undefined;
+    if (prev && prev.phase !== "done") {
+      // 连点两下不该跑两遍：还在跑就只是切过去看。
+      if (prev.tabUid) setState((p) => ({ ...p, active: prev.tabUid ?? p.active }));
+      return;
+    }
+    const active = stateRef.current.active;
+    const candidates = stateRef.current.tabs
+      .filter(
+        (t) =>
+          t.sessionId === sid &&
+          !t.fromAgent &&
+          !t.exited &&
+          t.hostId != null &&
+          (t.root ?? null) === (root ?? null),
+      )
+      .sort((a, b) => Number(b.uid === active) - Number(a.uid === active));
+    for (const tab of candidates) {
+      const inst = instances.current.get(tab.uid);
+      if (!inst || inst.disposed || inst.run || inst.hostId == null) continue;
+      const busy = await termBusy(inst.hostId).catch(() => true);
+      // 等待期间这个标签可能被别的运行占了 / 关了。
+      if (busy || inst.disposed || inst.run) continue;
+      setState((p) => ({ ...p, active: tab.uid }));
+      sendRun(tab.uid, sid, req);
+      return;
+    }
+    const tab = mkTab(
+      root,
+      stateRef.current.tabs.filter((t) => t.sessionId === sid),
+      sid,
+    );
+    pendingRuns.current.set(tab.uid, { sid, req });
+    if (req.execute) {
+      putRun(sid, {
+        command: req.command,
+        phase: "starting",
+        exitCode: null,
+        startedAt: Date.now(),
+        tabUid: tab.uid,
+        tabTitle: tab.title,
+      });
+    }
+    setState((p) => ({ tabs: [...p.tabs, tab], active: tab.uid }));
+  };
+
+  /**
+   * 把命令写进 shell。整段一次写完：分几次 IPC 的话宿主那边可能乱序。
+   *
+   * - 先发 Ctrl-U 清掉提示符上没敲完的半截，不然会拼到命令前面。
+   * - shell 开着括号粘贴（zsh、bash 5）就按粘贴送：多行命令整段进编辑区，
+   *   一次回车整段执行，不会前几行先跑起来。
+   * - 没开（macOS 自带的 bash 3.2）的多行命令包进 `{ … }`：shell 读到右
+   *   括号才执行，算一条命令，退出码也只有一个。
+   */
+  const sendRun = (uid: string, sid: string | null, req: RunRequest & { kind: "run" }) => {
+    const inst = instances.current.get(uid);
+    if (!inst || inst.disposed || inst.hostId == null) return;
+    const unix = shellPlatform() === "unix";
+    const cmd = req.command;
+    const bracketed = inst.term.modes.bracketedPasteMode;
+    let body = cmd.replace(/\r?\n/g, "\r");
+    if (unix && req.execute && !bracketed && cmd.includes("\n")) body = `{\r${body}\r}`;
+    const data =
+      (unix ? "\x15" : "") +
+      (bracketed ? `\x1b[200~${body}\x1b[201~` : body) +
+      (req.execute ? "\r" : "");
+    if (req.execute) {
+      const title = stateRef.current.tabs.find((t) => t.uid === uid)?.title;
+      inst.run = {
+        sid,
+        command: cmd,
+        start: inst.term.registerMarker(0),
+        precise: false,
+        sentAt: Date.now(),
+        sawBusy: false,
+        poll: 0,
+      };
+      putRun(sid, {
+        command: cmd,
+        phase: "running",
+        exitCode: null,
+        startedAt: Date.now(),
+        tabUid: uid,
+        ...(title ? { tabTitle: title } : {}),
+      });
+      pollRun(inst);
+    }
+    void termWrite(inst.hostId, data).catch(() => {
+      if (inst.run?.command === cmd) settleRun(inst, null);
+    });
+  };
+
+  /**
+   * 盯着命令跑完。装了 shell 集成的终端靠 OSC 133 的 D 拿到准确的结束点
+   * 和退出码（见 mount 里的 registerOscHandler），这里只兜底：
+   *
+   * - 没装集成（fish、sh、PowerShell，或者用户关了）：看前台进程 ——
+   *   忙过又闲下来就是跑完了；一直没忙起来（`echo` 这种瞬间结束的）
+   *   过一会儿也算跑完。拿不到退出码。
+   * - 装了集成却一直没等到命令开始的标记（整段只有注释、被 shell 吞了）：
+   *   不能一直挂着"运行中"，同样按前台进程判。
+   */
+  const pollRun = (inst: Inst) => {
+    const run = inst.run;
+    if (!run || inst.hostId == null) return;
+    const id = inst.hostId;
+    run.poll = window.setTimeout(() => {
+      if (inst.run !== run || inst.disposed) return;
+      void termBusy(id)
+        .catch(() => false)
+        .then((busy) => {
+          if (inst.run !== run || inst.disposed) return;
+          if (busy) run.sawBusy = true;
+          const idleFor = Date.now() - run.sentAt;
+          const done = !busy && (run.sawBusy || idleFor > 1500);
+          if (done && !run.precise) {
+            settleRun(inst, null);
+            return;
+          }
+          pollRun(inst);
+        });
+    }, 500);
+  };
+
   // 模型起的终端退出后自己收掉，不然一次次跑下来标签越攒越多。留一小会儿
   // 让"已退出"被看见。正看着的那个也收 —— 它常常是组里唯一的标签，等用户
   // "切走"就永远等不到；最后的输出模型照样读得到（宿主条目留着），有结论
@@ -241,6 +399,30 @@ export function TerminalPanel({
             hostId == null ? own[own.length - 1] : own.find((x) => x.hostId === hostId);
           return target && target.uid !== prev.active ? { ...prev, active: target.uid } : prev;
         });
+      }),
+    [],
+  );
+
+  // 代码块那头按会话读运行状态。
+  useEffect(() => setRunSession(sessionId), [sessionId]);
+
+  // 回答里的「运行 / 停止 / 查看终端」（开面板是 App 的事）。回调走 ref：
+  // 订阅只挂一次，而 startRun 每次渲染都是新的闭包。
+  const startRunRef = useRef(startRun);
+  startRunRef.current = startRun;
+  useEffect(
+    () =>
+      subscribeRunRequests((r) => {
+        const run = r.kind === "run" ? undefined : getRun(sessionRef.current, r.command);
+        if (r.kind === "run") {
+          void startRunRef.current(r);
+        } else if (r.kind === "stop") {
+          const inst = run?.tabUid ? instances.current.get(run.tabUid) : undefined;
+          if (inst?.hostId != null && inst.run) void termWrite(inst.hostId, "\x03").catch(() => {});
+        } else if (run?.tabUid) {
+          const uid = run.tabUid;
+          setState((p) => (p.tabs.some((t) => t.uid === uid) ? { ...p, active: uid } : p));
+        }
       }),
     [],
   );
@@ -443,8 +625,37 @@ export function TerminalPanel({
       fitTimer: 0,
       disposed: false,
       onEvent: null,
+      integrated: false,
+      atPrompt: false,
+      onReady: null,
+      readyTimer: 0,
+      run: null,
     };
     instances.current.set(tab.uid, inst);
+
+    // shell 集成（宿主起 zsh/bash 时注入，见 src-tauri/src/shell_integration.rs）
+    // 打的 OSC 133 标记：A 提示符出来了，C 命令开始输出，D;<码> 命令结束。
+    // 一键运行靠它拿准确的结束点、退出码和这条命令自己的输出。
+    term.parser.registerOscHandler(133, (data) => {
+      const [kind, arg] = data.split(";");
+      if (kind === "A") {
+        inst.integrated = true;
+        inst.atPrompt = true;
+        fireReady(inst);
+      } else if (kind === "C") {
+        inst.atPrompt = false;
+        const run = inst.run;
+        if (run && !run.precise) {
+          run.precise = true;
+          run.start.dispose();
+          run.start = term.registerMarker(0);
+        }
+      } else if (kind === "D") {
+        const code = Number(arg);
+        if (inst.run?.precise) settleRun(inst, Number.isFinite(code) ? code : null);
+      }
+      return true;
+    });
 
     // 字体就绪后再 open：xterm 在 open 时量字符格宽度，早于字体加载的话
     // 量的是回退字体，列数和渲染宽度都会错一截。字体是本地资源，这里
@@ -491,6 +702,8 @@ export function TerminalPanel({
       if (inst.disposed) return;
       if (ev.kind === "data") {
         term.write(b64ToBytes(ev.data));
+        // 等着跑命令、又没有集成标记可等：输出安静下来就当提示符出来了。
+        if (inst.onReady && !inst.integrated) armReady(inst, READY_QUIET_MS);
         return;
       }
       if (sawExit) return;
@@ -551,8 +764,22 @@ export function TerminalPanel({
         inst.pending = [];
         // 等待期间尺寸可能变了，按现在的实际列数对齐一次
         void termResize(id, term.cols, term.rows).catch(() => {});
+        // 为跑命令开的标签：等提示符出来再写（rc 文件还在加载时写进去的
+        // 字，有的 shell 会吞掉）。
+        const pend = pendingRuns.current.get(tab.uid);
+        if (pend) {
+          pendingRuns.current.delete(tab.uid);
+          inst.onReady = () => sendRun(tab.uid, pend.sid, pend.req);
+          if (inst.atPrompt) fireReady(inst);
+          else armReady(inst, READY_MAX_MS);
+        }
       })
       .catch((e: unknown) => {
+        const pend = pendingRuns.current.get(tab.uid);
+        if (pend) {
+          pendingRuns.current.delete(tab.uid);
+          patchRun(pend.sid, pend.req.command, { phase: "done", exitCode: null, endedAt: Date.now() });
+        }
         if (inst.disposed) return;
         const text = t("errors.withDetail", {
           text: t("panels.terminal.startFailed"),
@@ -800,6 +1027,77 @@ interface Inst {
    * `termAttach` —— 那时旧通道已经作废，输出得从新通道进来。
    */
   onEvent: ((ev: TermEvent) => void) | null;
+  /** 见过 shell 集成的 OSC 133 标记。没见过的按前台进程猜（见 pollRun）。 */
+  integrated: boolean;
+  /** 停在提示符上（最近一个标记是 A）。 */
+  atPrompt: boolean;
+  /** 提示符出来后要做的事（新开标签上等着写的命令）。只做一次。 */
+  onReady: (() => void) | null;
+  readyTimer: number;
+  /** 正在这个终端里跑的、从回答里点出来的命令。 */
+  run: ActiveRun | null;
+}
+
+interface ActiveRun {
+  sid: string | null;
+  command: string;
+  /** 输出从哪一行开始。写命令时先标在当前行，等到 C 再挪到真正的起点。 */
+  start: IMarker;
+  /** 见到了 C：结束点和退出码以 D 为准，不再按前台进程猜。 */
+  precise: boolean;
+  sentAt: number;
+  sawBusy: boolean;
+  poll: number;
+}
+
+/** 新开的 shell 最多等这么久出提示符（rc 文件慢的机器上 oh-my-zsh 要一两秒）。 */
+const READY_MAX_MS = 5000;
+/** 没有集成标记时，输出安静这么久就当提示符出来了。 */
+const READY_QUIET_MS = 400;
+
+function fireReady(inst: Inst) {
+  const fn = inst.onReady;
+  if (!fn || inst.hostId == null) return;
+  inst.onReady = null;
+  window.clearTimeout(inst.readyTimer);
+  fn();
+}
+
+function armReady(inst: Inst, ms: number) {
+  window.clearTimeout(inst.readyTimer);
+  inst.readyTimer = window.setTimeout(() => fireReady(inst), ms);
+}
+
+/**
+ * 一条运行收尾：读出它的输出，推给代码块。
+ *
+ * 输出取标记行到光标行。准的（见过 C）从命令真正开始输出的那行起，不含
+ * 回显；猜的从写命令那行起，含回显，最后一行是新的提示符，去掉。
+ */
+function settleRun(inst: Inst, exitCode: number | null) {
+  const run = inst.run;
+  if (!run) return;
+  inst.run = null;
+  window.clearTimeout(run.poll);
+  let output = "";
+  if (!inst.disposed) {
+    const buf = inst.term.buffer.active;
+    const from = Math.max(0, run.start.line);
+    const to = buf.baseY + buf.cursorY;
+    const lines: string[] = [];
+    for (let y = from; y <= to; y++) {
+      const line = buf.getLine(y);
+      if (!line) continue;
+      const text = line.translateToString(true);
+      // 软折行接回上一行，"发给 agent"时不该在终端宽度处断开。
+      if (line.isWrapped && lines.length) lines[lines.length - 1] += text;
+      else lines.push(text);
+    }
+    if (!run.precise) lines.pop();
+    output = lines.join("\n").replace(/\s+$/, "");
+  }
+  run.start.dispose();
+  patchRun(run.sid, run.command, { phase: "done", exitCode, endedAt: Date.now(), output });
 }
 
 /**

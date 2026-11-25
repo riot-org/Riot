@@ -93,6 +93,7 @@ import {
   subscribeAgentTerminalOpen,
   useRunningAgentTerminals,
 } from "./lib/agentTerminals";
+import { subscribeRunRequests, subscribeRunShare } from "./lib/terminalRuns";
 import { transcriptView } from "./components/Transcript";
 import {
   ContextMenu,
@@ -749,6 +750,20 @@ export function App() {
   // 模型起的终端：顶栏计数、工具卡片的"查看终端"。选哪个标签是
   // TerminalPanel 的事，这里只管把面板打开。
   useEffect(() => subscribeAgentTerminalOpen(() => setShowTerm(true)), []);
+  // 回答里的命令点了运行 / 查看终端：面板弹出来（挑标签、写命令是
+  // TerminalPanel 的事）。停止不弹 —— 用户只是想让它停。
+  useEffect(
+    () =>
+      subscribeRunRequests((r) => {
+        if (r.kind !== "stop") setShowTerm(true);
+      }),
+    [],
+  );
+  // 运行结果「发给 agent」：和终端选中内容同一条路，塞进输入框不直接发。
+  useEffect(
+    () => subscribeRunShare((text) => setTermSnippet(encodePlainForComposer(text))),
+    [],
+  );
   // 计划面板：对话里的计划卡点开它。
   useEffect(() => subscribePlanOpen(() => openTab({ kind: "plan" })), [openTab]);
   // 历史会话：回答里的 `riot://session/<id>` 链接。会话已删就告诉链接

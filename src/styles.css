@@ -3812,6 +3812,10 @@ html[data-host='web'] body {
   .tray-chip,
   .tray-body,
   .tray-live-dot,
+  .run-dot,
+  .run-foot,
+  .run-confirm,
+  .run-foot-wrap,
   .jump-dot,
   .jump-dot::after {
     animation: none;
@@ -11905,6 +11909,180 @@ button.field-slider-state:hover {
 .codeblock-copy .copied-check {
   width: 11px;
   height: 11px;
+}
+
+/* 标题条右端的一组键（运行、复制）。 */
+.codeblock-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* 「运行」和复制同一档：都是代码块的附属操作，不抢代码本身的视线。
+   图标和字之间同样 4px。 */
+.codeblock-run svg {
+  flex: none;
+}
+
+.codeblock-run.on {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.codeblock-run:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.codeblock-run:disabled:hover {
+  color: var(--text-faint);
+  background: none;
+}
+
+/* 代码块底部：运行状态 / 高风险确认。一条细线和代码分开，字号和
+   标题条一致 —— 它是代码块的一部分，不是一张新卡片。 */
+.run-foot,
+.run-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 4px 6px 4px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-dim);
+  animation: run-foot-in var(--dur-2) var(--ease-out);
+}
+
+.run-foot-wrap .run-foot {
+  animation: none;
+}
+
+.run-foot-wrap {
+  animation: run-foot-in var(--dur-2) var(--ease-out);
+}
+
+@keyframes run-foot-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+
+.run-status {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-took {
+  color: var(--text-faint);
+}
+
+/* 运行中：和托盘标签上那个呼吸点同一个。 */
+.run-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: tray-live 1.6s ease-in-out infinite;
+}
+
+.run-mark {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.run-mark .copied-check {
+  width: 12px;
+  height: 12px;
+}
+
+.run-foot[data-state="ok"] .run-mark {
+  color: var(--ok);
+}
+
+.run-foot[data-state="fail"] .run-mark,
+.run-foot[data-state="fail"] .run-label {
+  color: var(--danger);
+}
+
+.run-foot[data-state="stopped"] .run-mark,
+.run-foot[data-state="ended"] .run-mark {
+  color: var(--text-faint);
+  font-size: 8px;
+}
+
+.run-btn {
+  flex: none;
+  border: none;
+  background: none;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.run-btn:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+/* 每个状态最多一个强调键：失败时是「发给 agent」，确认时是「运行」。 */
+.run-btn.primary {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.run-btn.primary:hover {
+  background: var(--bg-active, var(--bg-hover));
+}
+
+/* 失败时最后几行输出：比代码小一号、淡一档，最多 6 行（commandRun.TAIL_LINES）。 */
+.run-tail {
+  margin: 0;
+  padding: 0 14px 10px 32px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* 高风险确认：黄底只铺这一条，说清楚哪里危险、在哪个目录跑。 */
+.run-confirm {
+  background: var(--warn-bg);
+  color: var(--text);
+  flex-wrap: wrap;
+}
+
+.run-warn-icon {
+  flex: none;
+  color: var(--warn);
+}
+
+.run-confirm-text {
+  flex: 1;
+  min-width: 12em;
+  line-height: 1.5;
+}
+
+.run-confirm .run-btn.primary {
+  color: var(--bg);
+  background: var(--text);
+}
+
+.run-confirm .run-btn.primary:hover {
+  opacity: 0.88;
 }
 
 /* 复制成功：对勾一笔画出来，图标同时轻轻弹一下（0.8 → 1）。三处共用，

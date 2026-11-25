@@ -207,6 +207,7 @@ fn assemble(input: &SystemPromptInput<'_>) -> (Sections, Sections) {
         .push("environment_awareness", ENVIRONMENT_AWARENESS)
         .push("citing_code", CITING_CODE)
         .push("visualizations", VISUALIZATIONS)
+        .push("commands_for_the_user", COMMANDS_FOR_THE_USER)
         .push("linking_to_local_files", LINKING_TO_LOCAL_FILES)
         .push("showing_images", SHOWING_IMAGES);
 
@@ -543,6 +544,18 @@ flowchart LR
 
 The UI draws it. Do NOT write HTML, pull in mermaid.js, and open a browser to show someone a \
 diagram — the browser is for checking pages you changed, not for use as a drawing surface.";
+
+/// 回答里给用户的命令：前端给 shell 围栏加了「运行」键（一键写进终端
+/// 面板、回报退出码），见前端 lib/commandRun.ts。
+///
+/// 不写进提示词的话模型不知道这件事：它会把命令写进行内代码、带上 `$ `
+/// 提示符、把输出和命令混在一个块里 —— 这些块要么没有运行键，要么跑出来
+/// 是错的。占位符的写法也要约定：前端靠它判断「只填不回车」。
+const COMMANDS_FOR_THE_USER: &str = "\
+Commands for the user to run go in a ```bash fence (```powershell on Windows): the UI adds a Run \
+button that types it into their terminal and reports the exit code. Write only what should run — \
+no `$ ` prompt, no output. Mark what the user must fill in as `<your-token>`; the command is then \
+pasted without Enter.";
 
 const LINKING_TO_LOCAL_FILES: &str = "\
 To point at a local file, use a Markdown link whose target is its path: relative to the working \
@@ -1166,6 +1179,15 @@ mod tests {
         );
     }
 
+    /// 给用户的命令要写成 shell 围栏：前端只给这种块加「运行」键。
+    #[test]
+    fn 提示词里有给用户的命令写成_shell_围栏() {
+        let p = system_prompt(&base());
+        assert!(p.contains("Run button"), "要说清这种块能一键运行");
+        assert!(p.contains("no `$ ` prompt"), "要禁止带提示符");
+        assert!(p.contains("<your-token>"), "要约定占位符写法");
+    }
+
     /// 本地文件必须写成路径链接。不写进提示词的话，模型会编一个
     /// `http://localhost:…` 假下载地址 —— 那是 webview 自己的页，点开不是文件。
     /// 链接文字也要管：模型按网页习惯写「下载 xxx」，可文件就在本地磁盘上，
@@ -1773,6 +1795,7 @@ mod tests {
                 "environment_awareness",
                 "citing_code",
                 "visualizations",
+                "commands_for_the_user",
                 "linking_to_local_files",
                 "showing_images",
             ]
@@ -2035,12 +2058,15 @@ mod tests {
     /// 改成"动手改之前"，多出一句"看一眼代码可以，别从调研滑进实现"
     /// （约 0.12k）—— 旧措辞让模型没看代码就编理由弹卡，那句是修这个的，
     /// 而节里没有可删的赘句。撞线时**先删再抬**，抬的时候把新的理由写在这里。
+    /// 再之后抬到 15.6k：`commands_for_the_user` 一节约 0.35k（初稿 0.78k，
+    /// 删到只剩写法约定）。前端给 shell 围栏加了「运行」键，模型不知道的话
+    /// 会带 `$ ` 提示符、把输出混进命令块，运行键跑出来是错的。
     #[test]
     fn 静态前缀不超预算() {
         let p = system_prompt(&base());
         let n = p.chars().count();
         assert!(
-            n < 15_200,
+            n < 15_600,
             "system prompt 涨到 {n} 字符了，先确认每一节都还值这个价"
         );
     }

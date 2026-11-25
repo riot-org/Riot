@@ -34,6 +34,7 @@ import { BrowserIcon, CopiedCheck, FolderIcon, ForkIcon } from "./icons";
 import { AudioPlayer } from "./AudioPlayer";
 import { FullscreenGlyph, MediaBar, VolumeGlyph, useMediaPlayback, useVideoFullscreen } from "./MediaControls";
 import { MermaidBlock } from "./Mermaid";
+import { useCodeRun } from "./CodeRun";
 import { ShotViewer } from "./ToolCard";
 
 import hljsDarkCss from "highlight.js/styles/github-dark-dimmed.css?inline";
@@ -119,7 +120,7 @@ type MdNode = {
   value?: string;
   lang?: string | null;
   url?: string;
-  position?: { start?: { offset?: number } };
+  position?: { start?: { offset?: number }; end?: { offset?: number } };
   data?: { hProperties?: Record<string, string> };
   children?: MdNode[];
 };
@@ -207,6 +208,32 @@ function remarkSoftBreaks() {
         });
       }
       if (split) node.children = out;
+    });
+  };
+}
+
+/**
+ * 还没闭合的围栏代码块挂上 `data-open`。
+ *
+ * 流式输出时最后一块代码常常写到一半，remark 照样把它解析成完整的
+ * code 节点（一直延伸到文末）。这时给「运行」的话，跑的是半截命令 ——
+ * `rm -rf ./build` 写到 `rm -rf ./` 就被点了。是否闭合只能看源文本：
+ * 节点的原文以一行围栏结尾才算。
+ */
+function remarkOpenFences() {
+  return (tree: MdNode, file: { value?: unknown }) => {
+    const src = typeof file.value === "string" ? file.value : String(file.value ?? "");
+    walk(tree, (node) => {
+      if (node.type !== "code") return;
+      const from = node.position?.start?.offset;
+      const to = node.position?.end?.offset;
+      if (from == null || to == null) return;
+      const raw = src.slice(from, to);
+      const fence = /^[ \t]*(`{3,}|~{3,})/.exec(raw)?.[1];
+      if (!fence) return; // 缩进式代码块，没有围栏可言
+      const closed = new RegExp(`\\n[ \\t]*\\${fence[0]}{${fence.length},}[ \\t]*$`).test(raw);
+      if (closed) return;
+      node.data = { ...node.data, hProperties: { ...node.data?.hProperties, "data-open": "" } };
     });
   };
 }
@@ -336,6 +363,7 @@ export const Markdown = memo(function Markdown({
 }) {
   return (
     <div className="md" {...(animated ? { "data-md-animated": "" } : {})}>
+      <MdStreamingContext.Provider value={animated}>
       {animated ? (
         // key 用下标：块只会在末尾长出来，前面的块下标不变、实例不换，
         // DOM 原地复用，淡入不会重播。
@@ -345,6 +373,7 @@ export const Markdown = memo(function Markdown({
       ) : (
         <MdChunk text={text} breaks={breaks} />
       )}
+      </MdStreamingContext.Provider>
     </div>
   );
 });
@@ -358,12 +387,17 @@ export const Markdown = memo(function Markdown({
  * `**第一，防止踩踏。**昨天…` —— 不加这两个插件的话，两对星号原样露出来。
  * 英文的判定不变。
  */
+/** 这段正文正在流（见 Markdown 的 `animated`）。代码块据此判断没闭合的
+ *  围栏是「还在写」还是「模型忘了收尾」—— 后者照常能运行。 */
+const MdStreamingContext = createContext(false);
+
 export const REMARK_PLUGINS = [
   remarkGfm,
   remarkCjkFriendly,
   remarkCjkFriendlyGfmStrikethrough,
   remarkCjkAutolinks,
   remarkCodeRefs,
+  remarkOpenFences,
   remarkTableCellFloor,
   remarkRelinkPaths,
 ];
@@ -1279,6 +1313,13 @@ function CodeBlock({
 
   const lines = refStart === refEnd ? `${refStart}` : `${refStart}-${refEnd}`;
   const source = extractText(child?.props?.children);
+  const streaming = useContext(MdStreamingContext);
+  const runCtl = useCodeRun({
+    lang: refPath ? "" : lang,
+    source,
+    root,
+    open: streaming && typeof attrs["data-open"] === "string",
+  });
 
   if (lang === "mermaid") {
     return <MermaidBlock source={source} />;
@@ -1303,6 +1344,8 @@ function CodeBlock({
         ) : (
           <span className="codeblock-lang">{lang}</span>
         )}
+        <span className="codeblock-actions">
+        {runCtl?.button}
         <button type="button" className="codeblock-copy" onClick={copy}>
           {copied === "ok"
             ? (
@@ -1315,8 +1358,10 @@ function CodeBlock({
               ? t("transcript.md.copyFailed")
               : t("common.copy")}
         </button>
+        </span>
       </div>
       <pre {...props} />
+      {runCtl?.footer}
     </div>
   );
 }

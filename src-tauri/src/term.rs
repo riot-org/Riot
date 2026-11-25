@@ -211,7 +211,13 @@ impl Terminals {
             })
             .map_err(|e| ui_error!("host.term.spawnFailed"; format!("openpty: {e}")))?;
 
-        let mut cmd = default_shell();
+        // 用户自己开的交互式 shell 装上集成（命令开始 / 结束的标记，见
+        // shell_integration）；带命令的是 `-c` 跑完就退，用不上。
+        let mut cmd = if command.is_none() {
+            crate::shell_integration::interactive_shell()
+        } else {
+            default_shell()
+        };
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
         if let Some(dir) = root

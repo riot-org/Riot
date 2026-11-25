@@ -52,6 +52,7 @@ pub mod plugins;
 pub mod preview;
 pub mod remote;
 pub mod schedule;
+pub mod shell_integration;
 pub mod state;
 pub mod term;
 pub mod term_access;
