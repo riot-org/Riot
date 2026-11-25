@@ -1816,7 +1816,7 @@ export function ComposerDock({
                 {handoffPending ? t("composer.handoff.pending") : t("composer.handoff")}
               </button>
             ) : null}
-            {busy ? (
+            {busy && !canSend ? (
               <button
                 type="button"
                 className="send stop"
@@ -1834,7 +1834,11 @@ export function ComposerDock({
               </button>
             ) : null}
             {/* 计划写好、还在规划模式、输入框没字：发送键的位置换成「构建」
-                （Cursor 同款）。打字就是在提意见，发送键回来。 */}
+                （Cursor 同款）。打字就是在提意见，发送键回来。
+
+                正在生成时这个位置同一时刻只有一个键（Claude 同款）：输入框空着
+                是停止键；一打字就变成发送键（发出去会排队），清空又变回停止。以前两个一样大的圆键并排，看起来就是
+                两个发送键。打着字想停：清空输入，或者先把这句排出去。 */}
             {showBuild ? (
               <BuildButton
                 disabled={building || !hasKey || !sessionModelId}
@@ -1844,8 +1848,10 @@ export function ComposerDock({
             ) : !busy || canSend ? (
               <button
                 type="submit"
-                className="send"
                 disabled={!canSend || !hasKey || !sessionModelId}
+                // key 跟着两态走：停止 → 排队发送是换一个元素，图标的入场动画重播。
+                key={busy ? "queue" : "send"}
+                className={busy ? "send queue" : "send"}
                 title={
                   busy
                     ? t("composer.send.queueTitle")
