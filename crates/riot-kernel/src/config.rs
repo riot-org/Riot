@@ -1748,11 +1748,14 @@ pub fn config_path() -> PathBuf {
 ///
 /// 参数化 `config_path` 的理由同 [`load_at`]：删除路径有单元测试，而它
 /// 绝不能落到用户真实的目录上。
+///
+/// `[约束]` 调试构建用另一个目录（`browser-profile-dev`）。开发版和装好的
+/// 正式版共用同一个配置目录，profile 也共用的话，就撞上面那把单例锁：
+/// 后起的那个的浏览器进程一启动就退出，面板停在"浏览器启动中"。代价是
+/// 开发版的浏览器登录态和正式版不通，要自动化的站点在开发版里得单独登一次。
 pub fn browser_profile_dir(config_path: &Path) -> PathBuf {
-    config_path
-        .parent()
-        .unwrap_or(Path::new("."))
-        .join("browser-profile")
+    let name = if cfg!(debug_assertions) { "browser-profile-dev" } else { "browser-profile" };
+    config_path.parent().unwrap_or(Path::new(".")).join(name)
 }
 
 /// "一个会话一份 profile"那个时代的根目录（注意是复数）。
