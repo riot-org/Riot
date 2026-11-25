@@ -1,6 +1,7 @@
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 
-import { defineConfig } from "vite";
+import { type Plugin, defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { fileViewerRenderers } from "@file-viewer/vite-plugin";
 
@@ -16,6 +17,35 @@ const decodePlain = createRequire(req.resolve("micromark")).resolve(
   "decode-named-character-reference",
 );
 
+/**
+ * 回答里 HTML/SVG 组件的沙箱页（src-tauri/assets/widget-frame.html）。
+ *
+ * 桌面版由 riot-widget:// 协议、网页版由远程服务的 /__riot_widget 端出，
+ * 两处都在 Rust 里（src-tauri/src/widget_frame.rs）。直接开 Vite 做网页版
+ * 开发时请求打到这里，按同一条 CSP 端出 —— 改 CSP 要两边一起改。
+ */
+const WIDGET_CSP =
+  "default-src 'none'; " +
+  "script-src 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://unpkg.com; " +
+  "style-src 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; " +
+  "font-src data: https://fonts.gstatic.com https://cdn.jsdelivr.net; " +
+  "img-src data: blob:; media-src data: blob:; " +
+  "connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'";
+
+function widgetFrame(): Plugin {
+  return {
+    name: "riot-widget-frame",
+    configureServer(server) {
+      server.middlewares.use("/__riot_widget", (_req, res) => {
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        res.setHeader("Content-Security-Policy", WIDGET_CSP);
+        res.setHeader("Cache-Control", "no-cache");
+        res.end(readFileSync(new URL("./src-tauri/assets/widget-frame.html", import.meta.url)));
+      });
+    },
+  };
+}
+
 export default defineConfig({
   resolve: {
     alias: {
@@ -24,6 +54,7 @@ export default defineConfig({
   },
   plugins: [
     react(),
+    widgetFrame(),
     // 文件预览（@file-viewer）：formats 精确装配，只注入白名单要的
     // 渲染模块和资产（对照 FilePreview.tsx 的 PREVIEWABLE_EXTS）。
     // 'pptx' 命中 presentation 的 OpenXML 子入口 —— 二进制 .ppt 的

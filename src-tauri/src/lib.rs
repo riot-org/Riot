@@ -58,6 +58,7 @@ pub mod term;
 pub mod term_access;
 pub mod tree;
 pub mod update;
+pub mod widget_frame;
 #[cfg(feature = "desktop")]
 mod vibrancy;
 pub mod worktree;
@@ -2130,6 +2131,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        // 回答里 HTML/SVG 组件的沙箱页，独立 origin + 独立 CSP（见 widget_frame）。
+        .register_uri_scheme_protocol("riot-widget", |_ctx, _req| widget_frame::response())
         .manage(state)
         .manage(terminals)
         .manage(remote::Remote::default())

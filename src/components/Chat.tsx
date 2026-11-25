@@ -20,6 +20,10 @@ import { SubagentsContext } from "../lib/subagentLink";
 import { type ForkChild, Transcript } from "./Transcript";
 import { Composer, type PermissionPick } from "./Composer";
 import { FolderIcon, RiotMark } from "./icons";
+import { subscribeWidgetPrompt } from "../lib/widgetPrompt";
+
+/** 组件发出的话多久之内被撤回算"组件的"（撤回只发生在模型开口之前，几秒内）。 */
+const WIDGET_WITHDRAW_MS = 60_000;
 
 /** 跑完之后改动条要重算的工具。三个文件工具落基线；Bash 也算 —— 它能
  *  按字面记基线（`cp` / `mv` / `rm`），更要紧的是能把已在改动栏里的文件
@@ -371,6 +375,35 @@ export function Chat({
     },
     [sessionId, sessionSend],
   );
+  // 回答里的组件点了按钮（sendPrompt）：作为用户消息发出去。只有正看着
+  // 的会话接 —— 保活在后台的会话也渲染着组件，但用户点不到它们。正在
+  // 生成时 send 自己会进排队。
+  const sendRef = useRef(send);
+  sendRef.current = send;
+  /** 组件刚替用户发出去的话 → 发出时刻。撤回判断要用（见下面的 withdrawnForComposer）。 */
+  const widgetSent = useRef(new Map<string, number>());
+  useEffect(() => {
+    if (!visible) return;
+    return subscribeWidgetPrompt((text) => {
+      widgetSent.current.set(text, Date.now());
+      void sendRef.current(text);
+    });
+  }, [visible]);
+  // 组件发出的话在模型开口前被停掉（撤回）：不放回输入框。手打的话放回去
+  // 是为了改了再发；组件那句不是用户打的，放回去只会留在框里 —— 再点一次
+  // 组件，新消息照常发出，框里却还躺着上一句，停止键旁边多出一个排队发送键。
+  const clearWithdrawn = session.clearWithdrawn;
+  const fromWidget =
+    withdrawn != null &&
+    withdrawn.images.length === 0 &&
+    withdrawn.refs.length === 0 &&
+    Date.now() - (widgetSent.current.get(withdrawn.text) ?? 0) < WIDGET_WITHDRAW_MS;
+  useEffect(() => {
+    if (!fromWidget || !withdrawn) return;
+    widgetSent.current.delete(withdrawn.text);
+    clearWithdrawn();
+  }, [fromWidget, withdrawn, clearWithdrawn]);
+  const withdrawnForComposer = fromWidget ? null : withdrawn;
   const redoRestore = session.redoRestore;
   const onRedo = useCallback(() => void redoRestore(), [redoRestore]);
 
@@ -404,7 +437,7 @@ export function Chat({
       onSend={send}
       onStop={session.stop}
       {...(onFork ? { onFork: forkLatest } : {})}
-      withdrawn={session.withdrawn}
+      withdrawn={withdrawnForComposer}
       onWithdrawnRestored={session.clearWithdrawn}
       onOpenSettings={onOpenSettings}
       permissionPick={permissionPick}

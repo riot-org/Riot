@@ -1,0 +1,190 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  回答里 HTML/SVG 组件的沙箱页（前端 components/Widget.tsx）。
+
+  桌面版由 riot-widget:// 协议端出，网页版由远程服务的 /__riot_widget 端出，
+  开发时由 vite 插件端出 —— 三处都带同一条 CSP 响应头（见 widget_frame.rs）：
+  脚本只认内联和几个公共 CDN，不许联网（connect-src 'none'）、不许提交表单、
+  不许再嵌框。父页面给 iframe 加 sandbox="allow-scripts"（不给 same-origin），
+  所以这里是不透明 origin：碰不到 Riot 的界面、存储和 IPC。
+
+  这页只有一段桥接脚本。组件内容由父页面 postMessage 过来，桥接脚本把它
+  铺进 body 并按顺序执行其中的脚本。桥接本身给组件提供：
+    riot.sendPrompt(text)  —— 把一句话作为用户消息发出去（用户点了才算）
+    riot.openLink(url)     —— 用系统浏览器打开网址
+  并负责：高度回报（父页面据此撑开 iframe）、主题变量、点链接外开。
+-->
+<style id="riot-base">
+  :root { color-scheme: light dark; }
+  html, body { margin: 0; padding: 0; background: transparent; }
+  body {
+    font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    color: var(--text);
+    overflow-x: auto;
+    -webkit-font-smoothing: antialiased;
+  }
+  * { box-sizing: border-box; }
+  a { color: var(--accent); }
+  h1, h2, h3 { font-weight: 600; line-height: 1.35; margin: 0 0 .5em; }
+  h1 { font-size: 20px; } h2 { font-size: 17px; } h3 { font-size: 15px; }
+  p { margin: 0 0 .7em; }
+  code, pre, kbd { font-family: "Riot Mono", Menlo, ui-monospace, monospace; font-size: 12.5px; }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  button {
+    padding: 5px 12px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--border-strong); background: var(--bg-card);
+  }
+  button:hover { background: var(--bg-hover); }
+  input, select, textarea {
+    padding: 5px 8px; border-radius: 8px;
+    border: 1px solid var(--border-strong); background: var(--bg);
+  }
+  input[type="range"], input[type="checkbox"], input[type="radio"] { padding: 0; accent-color: var(--accent); }
+  table { border-collapse: collapse; }
+  th, td { padding: 6px 10px; border-bottom: 1px solid var(--border); text-align: left; }
+  svg { max-width: 100%; height: auto; }
+  /* ```svg 只写了 viewBox 时会撑满整行，宽图还好，方图能有半屏高 —— 封个顶，居中。 */
+  body.riot-svg > svg { display: block; margin: 0 auto; max-height: 420px; }
+</style>
+<script>
+(() => {
+  "use strict";
+  const parentWin = window.parent;
+  const post = (msg) => parentWin.postMessage(Object.assign({ riotWidget: true }, msg), "*");
+
+  // ── 主题：父页面把 Riot 的颜色 token 发过来，挂在 :root 上 ─────────────
+  const applyTheme = (vars, scheme) => {
+    const root = document.documentElement;
+    for (const [k, v] of Object.entries(vars || {})) {
+      if (/^--[\w-]+$/.test(k) && typeof v === "string") root.style.setProperty(k, v);
+    }
+    if (scheme === "dark" || scheme === "light") {
+      root.dataset.theme = scheme;
+      root.style.colorScheme = scheme;
+    }
+  };
+
+  // ── 高度：内容多高 iframe 就多高，不出现内层滚动条 ───────────────────
+  let lastH = -1;
+  const reportHeight = () => {
+    const b = document.body;
+    if (!b) return;
+    const h = Math.ceil(Math.max(b.scrollHeight, b.getBoundingClientRect().height));
+    if (h !== lastH) {
+      lastH = h;
+      post({ type: "height", height: h });
+    }
+  };
+  const ro = new ResizeObserver(reportHeight);
+
+  // ── 组件可调用的接口 ─────────────────────────────────────────────
+  const api = {
+    sendPrompt(text) {
+      if (typeof text !== "string" || !text.trim()) return;
+      // 只认用户刚刚的操作：脚本自己在加载时调的，父页面同样会拦
+      //（见 Widget.tsx 的 acceptPrompt）。
+      const act = navigator.userActivation;
+      if (act && !act.isActive) return;
+      post({ type: "prompt", text: text.slice(0, 4000) });
+    },
+    openLink(url) {
+      if (typeof url === "string") post({ type: "open", url });
+    },
+  };
+  Object.freeze(api);
+  Object.defineProperty(window, "riot", { value: api });
+  // 和 Claude 的组件同名的全局，模型写惯了的代码直接能用。
+  window.sendPrompt = (t) => api.sendPrompt(t);
+  window.openLink = (u) => api.openLink(u);
+
+  // 点链接：沙箱里不能自己导航（父页面也不许嵌别的页），统一交给系统浏览器。
+  document.addEventListener("click", (e) => {
+    const a = e.target instanceof Element ? e.target.closest("a[href]") : null;
+    if (!a) return;
+    const href = a.getAttribute("href") || "";
+    if (href.startsWith("#")) return;
+    e.preventDefault();
+    try {
+      const u = new URL(href);
+      if (u.protocol === "http:" || u.protocol === "https:") api.openLink(u.href);
+    } catch (_) {}
+  }, true);
+
+  // ── 把组件铺进页面、按文档顺序执行脚本 ─────────────────────────────
+  // DOMParser 解析出来的 <script> 是不执行的，得逐个换成新建的 script 元素；
+  // 外链脚本等它加载完再跑下一个，模型写的「先引 Chart.js 再用它」才成立。
+  const runScripts = async (scripts) => {
+    for (const old of scripts) {
+      const s = document.createElement("script");
+      for (const attr of Array.from(old.attributes)) s.setAttribute(attr.name, attr.value);
+      if (old.src) {
+        await new Promise((resolve) => {
+          s.onload = s.onerror = resolve;
+          old.replaceWith(s);
+        });
+      } else {
+        s.textContent = old.textContent;
+        old.replaceWith(s);
+      }
+    }
+  };
+
+  let mounted = false;
+  const mount = async (kind, source) => {
+    if (mounted) return;
+    mounted = true;
+    const doc = new DOMParser().parseFromString(
+      kind === "svg" ? "<!doctype html><body>" + source + "</body>" : source,
+      "text/html",
+    );
+    // 组件自己的 <head> 里的样式 / 脚本 / 字体链接都搬过来，<title> 之类丢掉。
+    // 只执行组件自己的脚本（桥接脚本也在 head 里，不能再跑一遍）。
+    const scripts = [];
+    for (const el of Array.from(doc.head.children)) {
+      if (!/^(STYLE|SCRIPT|LINK)$/.test(el.tagName)) continue;
+      if (el.tagName === "SCRIPT") scripts.push(el);
+      document.head.appendChild(document.adoptNode(el));
+    }
+    scripts.push(...Array.from(doc.body.querySelectorAll("script")));
+    for (const attr of Array.from(doc.body.attributes)) document.body.setAttribute(attr.name, attr.value);
+    if (kind === "svg") document.body.classList.add("riot-svg");
+    while (doc.body.firstChild) document.body.appendChild(document.adoptNode(doc.body.firstChild));
+    ro.observe(document.body);
+    reportHeight();
+    try {
+      await runScripts(scripts);
+    } catch (err) {
+      post({ type: "error", message: String(err && err.message || err) });
+    }
+    // 模型写的代码常常等 DOMContentLoaded / load —— 那两个早就过去了，补发一次。
+    document.dispatchEvent(new Event("DOMContentLoaded", { bubbles: true }));
+    window.dispatchEvent(new Event("load"));
+    reportHeight();
+    post({ type: "mounted" });
+  };
+
+  window.addEventListener("error", (e) => {
+    post({ type: "error", message: String(e.message || "script error") });
+  });
+
+  window.addEventListener("message", (e) => {
+    if (e.source !== parentWin) return;
+    const m = e.data;
+    if (!m || m.riotHost !== true) return;
+    if (m.type === "theme") applyTheme(m.vars, m.scheme);
+    else if (m.type === "render") {
+      applyTheme(m.vars, m.scheme);
+      void mount(m.kind === "svg" ? "svg" : "html", String(m.source || ""));
+    }
+  });
+
+  post({ type: "ready" });
+})();
+</script>
+</head>
+<body></body>
+</html>

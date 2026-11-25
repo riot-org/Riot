@@ -35,3 +35,30 @@ describe("中文强调（remark-cjk-friendly）", () => {
     expect(out).not.toContain("<strong>");
   });
 });
+
+describe("没闭合的围栏（remarkOpenFences）", () => {
+  it("写到一半的代码块挂 data-open", () => {
+    expect(html("看这条：\n\n```bash\nrm -rf ./")).toContain("data-open");
+  });
+
+  it("闭合了就不挂", () => {
+    expect(html("```bash\nls\n```")).not.toContain("data-open");
+    expect(html("~~~~bash\nls\n~~~~\n\n后文")).not.toContain("data-open");
+  });
+
+  it("里面出现更短的围栏不算闭合", () => {
+    expect(html("````md\n```\nx")).toContain("data-open");
+  });
+});
+
+describe("组件围栏（remarkWidgetFences）", () => {
+  it("```widget 换成 html 语言并打上 data-widget", () => {
+    const out = html("```widget\n<p>hi</p>\n```");
+    expect(out).toContain("data-widget");
+    expect(out).toContain("language-html");
+  });
+
+  it("```html 不动：那是要抄进文件的代码", () => {
+    expect(html("```html\n<p>hi</p>\n```")).not.toContain("data-widget");
+  });
+});

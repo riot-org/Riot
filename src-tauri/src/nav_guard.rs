@@ -44,6 +44,13 @@ pub fn decide(url: &Url, dev_url: Option<&Url>) -> Verdict {
     if url.scheme() == "tauri" || url.host_str() == Some("tauri.localhost") {
         return Verdict::Allow;
     }
+    // 回答里 HTML/SVG 组件的沙箱页（见 widget_frame）。这个钩子在 macOS 上
+    // 管的不只是顶层导航，iframe 的加载也问它 —— 不放行的话每个组件都是一块
+    // 空白。顶层被导到这里最多是一张空壳页（没有内容、没有权限），不构成
+    // 绕过：组件的 iframe 没有 allow-top-navigation，导不动主窗口。
+    if url.scheme() == "riot-widget" || url.host_str() == Some("riot-widget.localhost") {
+        return Verdict::Allow;
+    }
     // WebView 初始化时会先停在空白页，拦它没有意义。
     if url.as_str() == "about:blank" {
         return Verdict::Allow;
@@ -68,6 +75,14 @@ mod tests {
 
     fn u(s: &str) -> Url {
         Url::parse(s).expect("合法 URL")
+    }
+
+    /// 组件的 iframe 也走这个钩子，拦了就是一块空白。Windows 上的形态是
+    /// `http://riot-widget.localhost`，不能被当成外部网址丢给系统浏览器。
+    #[test]
+    fn 组件沙箱页放行() {
+        assert_eq!(decide(&u("riot-widget://localhost/"), None), Verdict::Allow);
+        assert_eq!(decide(&u("http://riot-widget.localhost/"), None), Verdict::Allow);
     }
 
     #[test]

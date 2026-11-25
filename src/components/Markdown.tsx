@@ -35,6 +35,7 @@ import { AudioPlayer } from "./AudioPlayer";
 import { FullscreenGlyph, MediaBar, VolumeGlyph, useMediaPlayback, useVideoFullscreen } from "./MediaControls";
 import { MermaidBlock } from "./Mermaid";
 import { useCodeRun } from "./CodeRun";
+import { WidgetFrame, type WidgetKind, WidgetPending } from "./Widget";
 import { ShotViewer } from "./ToolCard";
 
 import hljsDarkCss from "highlight.js/styles/github-dark-dimmed.css?inline";
@@ -208,6 +209,23 @@ function remarkSoftBreaks() {
         });
       }
       if (split) node.children = out;
+    });
+  };
+}
+
+/**
+ * ```widget 围栏：模型要画出来的 HTML 组件（见 Widget.tsx）。语言换成
+ * html 让切到源码时照常高亮，身份记在 `data-widget` 上。
+ *
+ * 为什么不直接把 ```html 画出来：模型给用户写网页代码时也用 ```html，
+ * 那是要抄进文件的代码，自作主张跑起来就错了。那种块只多一个「预览」。
+ */
+function remarkWidgetFences() {
+  return (tree: MdNode) => {
+    walk(tree, (node) => {
+      if (node.type !== "code" || node.lang?.toLowerCase() !== "widget") return;
+      node.lang = "html";
+      node.data = { ...node.data, hProperties: { ...node.data?.hProperties, "data-widget": "" } };
     });
   };
 }
@@ -398,6 +416,7 @@ export const REMARK_PLUGINS = [
   remarkCjkAutolinks,
   remarkCodeRefs,
   remarkOpenFences,
+  remarkWidgetFences,
   remarkTableCellFloor,
   remarkRelinkPaths,
 ];
@@ -1325,6 +1344,25 @@ function CodeBlock({
     return <MermaidBlock source={source} />;
   }
 
+  const widget = typeof attrs["data-widget"] === "string";
+  if (!refPath && (widget || lang === "svg" || lang === "html")) {
+    const open = streaming && typeof attrs["data-open"] === "string";
+    return (
+      <WidgetBlock
+        label={widget ? t("transcript.widget.label") : lang}
+        kind={lang === "svg" ? "svg" : "html"}
+        source={source}
+        // 组件和 SVG 默认画出来；```html 是要抄进文件的网页代码，默认看源码。
+        preview={widget || lang === "svg"}
+        open={open}
+        widget={widget}
+        copy={copy}
+        copied={copied}
+        pre={<pre {...props} />}
+      />
+    );
+  }
+
   return (
     <div className={refPath ? "codeblock is-ref" : "codeblock"}>
       <div className="codeblock-bar">
@@ -1362,6 +1400,87 @@ function CodeBlock({
       </div>
       <pre {...props} />
       {runCtl?.footer}
+    </div>
+  );
+}
+
+/**
+ * 组件 / SVG / HTML 代码块：标题条上多一个「源码 ↔ 预览」的切换。
+ *
+ * 还在写的组件（围栏没闭合）不画也不刷源码，给一行占位 —— 几百行 HTML
+ * 一路刷下来是噪音，画到一半的组件更没意义。SVG / HTML 在写的时候照常
+ * 显示源码（那本来就是它们的默认样子之一），写完再按默认切到预览。
+ */
+function WidgetBlock({
+  label,
+  kind,
+  source,
+  preview,
+  open,
+  widget,
+  copy,
+  copied,
+  pre,
+}: {
+  label: string;
+  kind: WidgetKind;
+  source: string;
+  preview: boolean;
+  open: boolean;
+  widget: boolean;
+  copy: () => void;
+  copied: "idle" | "ok" | "fail";
+  pre: React.ReactNode;
+}) {
+  const { t } = useT();
+  /** 用户要看预览（按钮的状态，点了立刻翻）。 */
+  const [want, setWant] = useState(preview);
+  /** 组件挂过了就一直挂着（切到源码只是藏起来）。 */
+  const [kept, setKept] = useState(preview);
+  /** 组件已经渲染好、量过高度。 */
+  const [ready, setReady] = useState(false);
+  if (open && widget) return <WidgetPending lines={source.split("\n").length} />;
+  // 默认就是预览的（组件、SVG）第一次直接在原位渲染；从源码切过来的，等
+  // 组件在后台渲染好再换上 —— 见 WidgetFrame 的 hidden。
+  const showFrame = !open && want && (ready || preview);
+  return (
+    <div className={showFrame ? "codeblock widget-block is-rendered" : "codeblock widget-block"}>
+      <div className="codeblock-bar">
+        <span className="codeblock-lang">{label}</span>
+        <span className="codeblock-actions">
+          {open ? null : (
+            <button
+              type="button"
+              className="codeblock-copy"
+              aria-pressed={want}
+              onClick={() => {
+                setWant((v) => !v);
+                setKept(true);
+              }}
+            >
+              {want ? t("transcript.widget.showSource") : t("transcript.widget.showPreview")}
+            </button>
+          )}
+          <button type="button" className="codeblock-copy" onClick={copy}>
+            {copied === "ok" ? (
+              <>
+                <CopiedCheck />
+                {t("common.copied")}
+              </>
+            ) : copied === "fail" ? (
+              t("transcript.md.copyFailed")
+            ) : (
+              t("common.copy")
+            )}
+          </button>
+        </span>
+      </div>
+      <div className="widget-stack">
+        {showFrame ? null : pre}
+        {kept && !open ? (
+          <WidgetFrame kind={kind} source={source} hidden={!showFrame} onMounted={() => setReady(true)} />
+        ) : null}
+      </div>
     </div>
   );
 }

@@ -542,8 +542,14 @@ flowchart LR
     A --> B
 ```
 
-The UI draws it. Do NOT write HTML, pull in mermaid.js, and open a browser to show someone a \
-diagram — the browser is for checking pages you changed, not for use as a drawing surface.";
+The UI draws it. For anything richer — a chart, a calculator, an interactive explainer — write \
+a ```widget fence holding an HTML fragment; the UI runs it in a sandbox inside the reply (an \
+```svg fence is drawn too). Color it with var(--text), var(--text-dim), var(--border), \
+var(--accent), var(--bg-card) so it follows the theme; scripts may load from cdn.jsdelivr.net, \
+cdnjs.cloudflare.com or unpkg.com, but network requests are blocked. A button can call \
+sendPrompt(text) to send the user's next message. Do NOT write an HTML file and open a browser \
+to show someone a diagram — the browser is for checking pages you changed, not for use as a \
+drawing surface.";
 
 /// 回答里给用户的命令：前端给 shell 围栏加了「运行」键（一键写进终端
 /// 面板、回报退出码），见前端 lib/commandRun.ts。
@@ -1173,6 +1179,8 @@ mod tests {
     fn 提示词里有_mermaid_围栏会画成图() {
         let p = system_prompt(&base());
         assert!(p.contains("```mermaid"), "要给出围栏写法");
+        assert!(p.contains("```widget"), "要给出组件围栏写法");
+        assert!(p.contains("sendPrompt"), "要说组件能替用户发消息");
         assert!(
             p.contains("not for use as a drawing surface"),
             "要禁止借浏览器当画板"
@@ -2061,12 +2069,15 @@ mod tests {
     /// 再之后抬到 15.6k：`commands_for_the_user` 一节约 0.35k（初稿 0.78k，
     /// 删到只剩写法约定）。前端给 shell 围栏加了「运行」键，模型不知道的话
     /// 会带 `$ ` 提示符、把输出混进命令块，运行键跑出来是错的。
+    /// 再之后抬到 16.2k：`visualizations` 加了 ```widget 组件的写法约 0.5k
+    /// （主题变量、能引哪些 CDN、不能联网、sendPrompt）。不写的话模型要么
+    /// 不知道能画交互组件，要么写出深色主题里一片黑字、fetch 失败的组件。
     #[test]
     fn 静态前缀不超预算() {
         let p = system_prompt(&base());
         let n = p.chars().count();
         assert!(
-            n < 15_600,
+            n < 16_200,
             "system prompt 涨到 {n} 字符了，先确认每一节都还值这个价"
         );
     }

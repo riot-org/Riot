@@ -3816,6 +3816,7 @@ html[data-host='web'] body {
   .run-foot,
   .run-confirm,
   .run-foot-wrap,
+  .widget-frame,
   .jump-dot,
   .jump-dot::after {
     animation: none;
@@ -11909,6 +11910,67 @@ button.field-slider-state:hover {
 .codeblock-copy .copied-check {
   width: 11px;
   height: 11px;
+}
+
+/* 回答里的组件 / SVG / HTML 预览（Widget.tsx）。画出来的时候底色回到
+   正文的底（代码块那层沉一档的底是给代码的），四周留白和正文段落对齐。 */
+.widget-block.is-rendered {
+  background: var(--bg);
+}
+
+.widget-body {
+  padding: 12px 14px;
+}
+
+/* 高度由组件自己回报（不出内层滚动条）。脚本跑完之前先透明着，免得
+   闪一下没上样式的半成品。 */
+.widget-frame {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color-scheme: normal;
+  opacity: 0;
+  /* 只淡入，不过渡高度：高度动画会把整页一截截往下推。 */
+  transition: opacity var(--dur-2) var(--ease-out);
+}
+
+.widget-frame.ready {
+  opacity: 1;
+}
+
+/* 源码和组件叠在一起：藏起来的那个绝对定位、照常排版（宽度不变才量得
+   准高度），不占位置、不接点击。 */
+.widget-stack {
+  position: relative;
+}
+
+.widget-body.widget-hidden {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.widget-error {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--danger);
+}
+
+/* 组件还在写：一行占位，不刷源码。 */
+.widget-pending {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0.7em 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 12px;
+  color: var(--text-dim);
 }
 
 /* 标题条右端的一组键（运行、复制）。 */

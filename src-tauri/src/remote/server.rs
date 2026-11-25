@@ -43,7 +43,7 @@ struct Ctx {
 const CSP: &str = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; \
     worker-src 'self' blob:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; \
     font-src 'self' data:; media-src 'self' blob: data:; \
-    connect-src 'self' ws: wss: data: blob:; frame-ancestors 'none'";
+    connect-src 'self' ws: wss: data: blob:; frame-src 'self'; frame-ancestors 'none'";
 
 pub fn router(
     host: HostCtx,
@@ -97,6 +97,27 @@ async fn static_asset(State(ctx): State<Ctx>, req: Request) -> Response {
     let uri: &Uri = req.uri();
     let path = uri.path().to_owned();
     let assets = &ctx.host.assets;
+
+    // 组件沙箱页（见 widget_frame）：自己的 CSP。
+    //
+    // `[约束]` 不能加 `frame-ancestors 'self'`：iframe 是 sandbox 的不透明
+    // origin，'self' 解析成它自己，和父页面永远对不上 —— 整页被拦、一行
+    // 脚本都不跑。这一页只是个空壳桥接，内容都由嵌它的页面发进来，被谁
+    // 嵌都没有可利用的东西，所以不限制。
+    // 放在开发重定向之前 —— 它不是前端产物，Vite 那边没有这一页。
+    if path == "/__riot_widget" {
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+            .header(
+                header::CONTENT_SECURITY_POLICY,
+                crate::widget_frame::CSP,
+            )
+            .header(header::CACHE_CONTROL, "no-cache")
+            .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+            .body(axum::body::Body::from(crate::widget_frame::HTML))
+            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+    }
 
     // 开发模式（`tauri dev`）：前端在 Vite 那边热更新，磁盘上的 dist/ 多半
     // 是上次 build 留下的陈货，端出去只会让人对着旧界面排查新代码。一律
