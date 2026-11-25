@@ -77,8 +77,10 @@ export function hasPlaceholder(cmd: string): boolean {
 
 /** 零宽字符、文字方向控制符、软连字符、BOM 和 C0 控制字符（\t \n 除外）。
  *  双向控制符能让屏幕上看到的命令和实际执行的顺序不一样 —— 提示词
- *  注入最常用的就是这一招。 */
-const HIDDEN = /[\u0000-\u0008\u000B-\u001F\u007F­​-‏‪-‮⁠-⁤⁦-⁩﻿]/;
+ *  注入最常用的就是这一招。
+ *  C0 控制符写在正则字面量里会触发 no-control-regex，它们正是要拦的。 */
+// eslint-disable-next-line no-control-regex -- 检测对象就是 C0 控制字符（\t \n 除外）
+const HIDDEN = /[\u0000-\u0008\u000B-\u001F\u007F\u00AD\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/;
 
 export type RunRisk =
   | "delete"
