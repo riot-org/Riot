@@ -4,6 +4,7 @@ import {
   startTransition,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -19,6 +20,8 @@ import { t, useT } from "../i18n";
 import { openSession, sessionIdFromHref } from "../lib/sessionLink";
 import { AGENT_LINK_SCHEME, openSubagent } from "../lib/subagentLink";
 import { splitMarkdownBlocks } from "../lib/mdBlocks";
+import { mayHaveMath, useMathPlugins } from "../lib/mathPlugins";
+import { normalizeMath } from "../lib/mathText";
 import {
   browserOpenableFile,
   fileUrlOf,
@@ -432,14 +435,29 @@ const MD_COMPONENTS = { pre: CodeBlock, a: MdLink, img: MdImage };
  * `.md > *` 的那些样式（首尾外边距、淡入）不受切分影响。
  */
 const MdChunk = memo(function MdChunk({ text, breaks }: { text: string; breaks: boolean }) {
+  // 公式：这段里有记号才去要 KaTeX（按需加载，见 lib/mathPlugins）。插件
+  // 还没到时先按原文显示，不提前改写 —— 改写后的 `$$x$$` 原样露出来更难看。
+  const math = useMathPlugins(mayHaveMath(text));
+  const remarkPlugins = breaks ? REMARK_PLUGINS_BREAKS : REMARK_PLUGINS;
+  const plugins = useMemo(
+    () =>
+      math
+        ? {
+            remark: [...remarkPlugins, ...math.remark],
+            // KaTeX 排在高亮前面：公式节点先被换掉，高亮不会拿它当代码。
+            rehype: [...math.rehype, ...REHYPE_PLUGINS],
+          }
+        : { remark: remarkPlugins, rehype: REHYPE_PLUGINS },
+    [math, remarkPlugins],
+  );
   return (
     <ReactMarkdown
-      remarkPlugins={breaks ? REMARK_PLUGINS_BREAKS : REMARK_PLUGINS}
-      rehypePlugins={REHYPE_PLUGINS}
+      remarkPlugins={plugins.remark}
+      rehypePlugins={plugins.rehype}
       urlTransform={keepFileUrls}
       components={MD_COMPONENTS}
     >
-      {text}
+      {math ? normalizeMath(text) : text}
     </ReactMarkdown>
   );
 });

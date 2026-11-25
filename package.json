@@ -33,6 +33,7 @@
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "highlight.js": "^11.11.1",
+    "katex": "^0.16.47",
     "mermaid": "^11.16.1",
     "micromark": "^4.0.2",
     "micromark-extension-gfm": "^3.0.0",
@@ -40,9 +41,11 @@
     "react-dom": "^19.2.0",
     "react-markdown": "^10.1.0",
     "rehype-highlight": "^7.0.2",
+    "rehype-katex": "^7.0.1",
     "remark-cjk-friendly": "^2.3.3",
     "remark-cjk-friendly-gfm-strikethrough": "^2.3.2",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

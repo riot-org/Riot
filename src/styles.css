@@ -11912,6 +11912,25 @@ button.field-slider-state:hover {
   height: 11px;
 }
 
+/* 公式（KaTeX，按需加载，见 lib/mathPlugins）。KaTeX 默认比正文大一号
+   （1.21em），夹在 14px 的中文里显得突兀，收到和正文同一视觉大小。块级
+   公式太宽时在自己的框里横向滚动，不撑破对话区。 */
+.md .katex {
+  font-size: 1.05em;
+}
+
+/* 写错的公式：KaTeX 原样显示源码并写死 #cc0000，换成主题的危险色。 */
+.md .katex-error {
+  color: var(--danger) !important;
+}
+
+.md .katex-display {
+  margin: 0.8em 0;
+  padding: 2px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
 /* 回答里的组件 / SVG / HTML 预览（Widget.tsx）。画出来的时候底色回到
    正文的底（代码块那层沉一档的底是给代码的），四周留白和正文段落对齐。 */
 .widget-block.is-rendered {
