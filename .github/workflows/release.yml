@@ -222,6 +222,14 @@ jobs:
           } >> "$GITHUB_ENV"
           echo "已启用 Apple 签名（证书 ${#_CERT} 字节）"
 
+      # Tauri 不会递归签 Resources 里的嵌套 .app。CEF 的 Framework、
+      # 5 个 helper 和 dylib 必须在被拷进 Riot.app 之前就签好，否则
+      # 公证会逐条报 "not signed with a valid Developer ID certificate"。
+      - name: 签名内置浏览器
+        if: runner.os == 'macOS'
+        shell: bash
+        run: ./scripts/sign-browser.sh
+
       # beforeBuildCommand 会再跑 stage-kernel / stage-browser / 前端构建。
       # 浏览器包必须已经在 crates/riot-browser/target/bundle/，否则 stage-browser 直接失败。
       - name: 打安装包并上传 Release
