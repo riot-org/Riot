@@ -22,6 +22,7 @@ import { AGENT_LINK_SCHEME, openSubagent } from "../lib/subagentLink";
 import { splitMarkdownBlocks } from "../lib/mdBlocks";
 import { mayHaveMath, useMathPlugins } from "../lib/mathPlugins";
 import { normalizeMath } from "../lib/mathText";
+import { findBareLocalUrls, isLocalDevUrl, localUrlOfCode } from "../lib/localUrl";
 import {
   browserOpenableFile,
   fileUrlOf,
@@ -38,6 +39,9 @@ import { AudioPlayer } from "./AudioPlayer";
 import { FullscreenGlyph, MediaBar, VolumeGlyph, useMediaPlayback, useVideoFullscreen } from "./MediaControls";
 import { MermaidBlock } from "./Mermaid";
 import { useCodeRun } from "./CodeRun";
+import { usePatchApply } from "./PatchApply";
+import { shareRunOutput } from "../lib/terminalRuns";
+import { MdTable } from "./MdTable";
 import { WidgetFrame, type WidgetKind, WidgetPending } from "./Widget";
 import { ShotViewer } from "./ToolCard";
 
@@ -82,6 +86,8 @@ subscribeTheme(applyHljsTheme);
  * 会话里是个不变的字符串。
  */
 export const ProjectRootContext = createContext<string>("");
+/** 当前会话的 id。补丁块「应用到文件」要按会话找项目根（宿主那边定）。 */
+export const SessionIdContext = createContext<string>("");
 
 /**
  * 代码引用的 info string：`起始行:结束行:路径`。
@@ -171,6 +177,77 @@ function remarkCjkAutolinks() {
         text.value = value.slice(0, m.index);
         link.url = url.slice(0, url.length - tail.length);
         kids.splice(i + 1, 0, { type: "text", value: tail });
+      }
+    });
+  };
+}
+
+/**
+ * 本机开发服务的网址变成可点的链接（点了开进内置浏览器，见 MdLink）。
+ *
+ * 模型写这种网址很随意：常包在行内代码里（`` `http://localhost:5173` ``），
+ * 或者不带协议（`localhost:5173`）。前者是代码 span、后者 GFM 不认，
+ * 原样渲染都点不动 —— 而"服务起好了"之后用户要做的正是点开它。
+ * 行内代码保留代码的样子，外面套一层链接。已经在链接里的不碰。
+ */
+function remarkLocalUrls() {
+  const visit = (node: MdNode, inLink: boolean) => {
+    const kids = node.children;
+    if (!kids) return;
+    const out: MdNode[] = [];
+    for (const c of kids) {
+      if (!inLink && c.type === "inlineCode") {
+        const url = localUrlOfCode(c.value ?? "");
+        out.push(url ? { type: "link", url, children: [c] } : c);
+        continue;
+      }
+      if (!inLink && c.type === "text" && c.value) {
+        const hits = findBareLocalUrls(c.value);
+        if (hits.length) {
+          let at = 0;
+          for (const h of hits) {
+            if (h.index > at) out.push({ type: "text", value: c.value.slice(at, h.index) });
+            out.push({ type: "link", url: h.url, children: [{ type: "text", value: h.text }] });
+            at = h.index + h.text.length;
+          }
+          if (at < c.value.length) out.push({ type: "text", value: c.value.slice(at) });
+          continue;
+        }
+      }
+      visit(c, inLink || c.type === "link" || c.type === "linkReference");
+      out.push(c);
+    }
+    node.children = out;
+  };
+  return (tree: MdNode) => visit(tree, false);
+}
+
+/** 颜色值：十六进制、rgb()/hsl()/oklch() 这几种函数写法。括号里不许再有
+ *  括号、分号、花括号 —— 这个值会进 style，不能让它带出别的声明。 */
+const COLOR_CODE =
+  /^(?:#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})|(?:rgba?|hsla?|oklch|oklab|lab|lch)\([^(){};]{1,60}\))$/i;
+
+/** 快捷键：至少一个修饰键，后面跟一个键。单独的 `Esc`、`Enter` 不算（太像普通词）。 */
+const KBD_CODE =
+  /^(?:(?:⌘|⌥|⇧|⌃|ctrl|cmd|command|alt|option|opt|shift|win|super|meta|fn)\s*[+-]?\s*)+(?:[a-z0-9]|f\d{1,2}|enter|return|esc|escape|tab|space|backspace|delete|del|home|end|pageup|pagedown|up|down|left|right|[`~!@#$%^&*()_=+\[\]{};:'",.<>/?\\|]|↑|↓|←|→|⏎|⌫|↵)$/i;
+
+/**
+ * 行内代码的两种小装饰：颜色值前面挂一个色块，快捷键画成键帽（样式见
+ * styles.css 的 code[data-swatch] / code[data-kbd]）。只打标记不改内容 ——
+ * 复制出来还是原文。
+ */
+function remarkInlineCodeHints() {
+  return (tree: MdNode) => {
+    walk(tree, (node) => {
+      if (node.type !== "inlineCode") return;
+      const v = (node.value ?? "").trim();
+      if (COLOR_CODE.test(v)) {
+        node.data = {
+          ...node.data,
+          hProperties: { ...node.data?.hProperties, "data-swatch": "", style: `--md-swatch:${v}` },
+        };
+      } else if (KBD_CODE.test(v)) {
+        node.data = { ...node.data, hProperties: { ...node.data?.hProperties, "data-kbd": "" } };
       }
     });
   };
@@ -417,6 +494,8 @@ export const REMARK_PLUGINS = [
   remarkCjkFriendly,
   remarkCjkFriendlyGfmStrikethrough,
   remarkCjkAutolinks,
+  remarkLocalUrls,
+  remarkInlineCodeHints,
   remarkCodeRefs,
   remarkOpenFences,
   remarkWidgetFences,
@@ -427,7 +506,7 @@ const REMARK_PLUGINS_BREAKS = [...REMARK_PLUGINS, remarkSoftBreaks];
 const REHYPE_PLUGINS: NonNullable<Parameters<typeof ReactMarkdown>[0]["rehypePlugins"]> = [
   [rehypeHighlight, { ignoreMissing: true, detect: false }],
 ];
-const MD_COMPONENTS = { pre: CodeBlock, a: MdLink, img: MdImage };
+const MD_COMPONENTS = { pre: CodeBlock, a: MdLink, img: MdImage, table: MdTable };
 
 /**
  * 一段 Markdown 的解析结果，不带外层容器。react-markdown 渲染出来的是
@@ -599,7 +678,9 @@ function MdLink({
       revealInFinder(target.value).catch(() => flashErr(true));
       return;
     }
-    if (target.kind === "browser" && openInPanelBrowser(target.value)) return;
+    // ⌘ / Ctrl 点击：本来要进内置浏览器的网址改走系统浏览器。
+    const external = (e.metaKey || e.ctrlKey) && /^https?:/i.test(target.value);
+    if (target.kind === "browser" && !external && openInPanelBrowser(target.value)) return;
     openInBrowser(target.value).catch(() => flashErr(true));
   };
 
@@ -705,6 +786,16 @@ function resolveMdLink(href: string | undefined, label: string, root: string): M
         const name = rel || label.trim();
         if (!name) return null;
         return fileTarget(looksAbsPath(name) ? name : joinRoot(root, name));
+      }
+      // 本机的开发服务默认开进内置浏览器（⌘ 点击走系统浏览器，见 MdLink）：
+      // 回答里给出它，就是要用户看一眼刚起好的页面，不该把人带出窗口。
+      if (isLocalDevUrl(u.href)) {
+        return {
+          kind: "browser",
+          value: u.href,
+          href: u.href,
+          title: t("transcript.md.openLocal", { url: u.href }),
+        };
       }
       return { kind: "url", value: u.href, href: u.href, title: u.href };
     } catch {
@@ -1357,6 +1448,14 @@ function CodeBlock({
     root,
     open: streaming && typeof attrs["data-open"] === "string",
   });
+  const sessionId = useContext(SessionIdContext);
+  const patchCtl = usePatchApply({
+    lang: refPath ? "" : lang,
+    source,
+    sessionId,
+    root,
+    open: streaming && typeof attrs["data-open"] === "string",
+  });
 
   if (lang === "mermaid") {
     return <MermaidBlock source={source} />;
@@ -1402,6 +1501,21 @@ function CodeBlock({
         )}
         <span className="codeblock-actions">
         {runCtl?.button}
+        {patchCtl?.button}
+        <button
+          type="button"
+          className="codeblock-copy"
+          title={t("transcript.md.quoteTitle")}
+          onClick={() => {
+            // 放进输入框（不发送）：用户接着写"这段为什么…"。带上语言和
+            // 文件位置，模型知道说的是哪一段。
+            const where = refPath ? `${refPath}:${lines}\n` : "";
+            const fence = source.includes("```") ? "````" : "```";
+            shareRunOutput(`${where}${fence}${lang}\n${source.replace(/\n$/, "")}\n${fence}\n`);
+          }}
+        >
+          {t("transcript.md.quote")}
+        </button>
         <button type="button" className="codeblock-copy" onClick={copy}>
           {copied === "ok"
             ? (
@@ -1418,6 +1532,7 @@ function CodeBlock({
       </div>
       <pre {...props} />
       {runCtl?.footer}
+      {patchCtl?.footer}
     </div>
   );
 }

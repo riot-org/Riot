@@ -11259,6 +11259,105 @@ button.field-slider-state:hover {
   background: var(--lift-1);
 }
 
+/* 表格外面一层（MdTable）：给「复制 CSV」一个定位的锚。外边距挪到这层，
+   表格自己贴着它。 */
+.md-table-wrap {
+  position: relative;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0.8em 0;
+}
+
+.md-table-wrap > table {
+  margin: 0;
+}
+
+/* 复制 CSV：和 mermaid 的复制源码一样，hover / 键盘聚焦才出现，不常驻压住
+   表头的右上角。 */
+.md-table-copy {
+  position: absolute;
+  top: 5px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+  font-size: 11px;
+  color: var(--text-faint);
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--ease-out);
+}
+
+.md-table-wrap:hover .md-table-copy,
+.md-table-copy:focus-visible {
+  opacity: 1;
+}
+
+.md-table-copy:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.md-table-copy .copied-check {
+  width: 11px;
+  height: 11px;
+}
+
+/* 可排序的表头：整格可点，箭头平时很淡，排着的那列才亮。
+   箭头放在右侧内边距里（绝对定位），不跟在文字后面排 —— 跟着排的话，
+   窄列里它会被挤到第二行（列宽是按表头文字估的，见 lib/tableCellFloor）。
+   为它多留的 14px 同时加进 padding 和保底宽度，文字的可用宽度不变。 */
+.md th.md-th-sort {
+  position: relative;
+  cursor: pointer;
+  user-select: none;
+  padding-right: calc(var(--md-cell-pad-x) + 14px);
+  min-width: calc(var(--md-cell-floor, 6em) + 2 * var(--md-cell-pad-x) + 14px);
+}
+
+.md-sort-mark {
+  position: absolute;
+  right: calc(var(--md-cell-pad-x) - 4px);
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 11px;
+  color: var(--text-faint);
+  opacity: 0.45;
+}
+
+.md-th-sort:hover .md-sort-mark {
+  opacity: 0.9;
+}
+
+.md-th-sort.on .md-sort-mark {
+  color: var(--accent);
+  opacity: 1;
+}
+
+/* 宽表横向滚动时首列钉住：读到右边几列还知道是哪一行。钉住的格子要有
+   实底，不然滚过去的内容从它底下透出来；hover 行的底色同样要盖住。 */
+.md table :is(th, td):first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+}
+
+.md table td:first-child {
+  background: var(--bg);
+}
+
+/* 表头底色和 hover 底色都是半透明的，叠一层不透明的 --bg 在下面。 */
+.md table th:first-child {
+  background: linear-gradient(var(--md-th-bg), var(--md-th-bg)), var(--bg);
+}
+
+.md tbody tr:hover > td:first-child {
+  background: linear-gradient(var(--lift-1), var(--lift-1)), var(--bg);
+}
+
 .md hr {
   border: none;
   border-top: 1px solid var(--border);
@@ -11912,6 +12011,33 @@ button.field-slider-state:hover {
   height: 11px;
 }
 
+/* 行内代码里的颜色值：前面挂一个色块（remarkInlineCodeHints）。描一圈
+   半透明边，接近底色的颜色（纯黑、纯白）在两种主题里都看得出轮廓。 */
+.md code[data-swatch]::before {
+  content: "";
+  display: inline-block;
+  width: 0.85em;
+  height: 0.85em;
+  margin-right: 0.35em;
+  border-radius: 3px;
+  vertical-align: -0.08em;
+  background: var(--md-swatch);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 25%, transparent);
+}
+
+/* 快捷键（⌘K、Ctrl+Shift+P）：画成键帽 —— 底边加厚一点，像一颗按下去的键。 */
+.md code[data-kbd] {
+  padding: 1px 6px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--bg-card);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.86em;
+  white-space: nowrap;
+}
+
 /* 公式（KaTeX，按需加载，见 lib/mathPlugins）。KaTeX 默认比正文大一号
    （1.21em），夹在 14px 的中文里显得突兀，收到和正文同一视觉大小。块级
    公式太宽时在自己的框里横向滚动，不撑破对话区。 */
@@ -12125,6 +12251,24 @@ button.field-slider-state:hover {
 
 .run-btn.primary:hover {
   background: var(--bg-active, var(--bg-hover));
+}
+
+/* 补丁应用到了哪些文件：点文件名打开预览。 */
+.patch-file {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text-dim);
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 2px;
+}
+
+.patch-file:hover {
+  color: var(--accent);
 }
 
 /* 失败时最后几行输出：比代码小一号、淡一档，最多 6 行（commandRun.TAIL_LINES）。 */
@@ -13749,10 +13893,16 @@ button.ctx-cat-line:focus-visible {
   cursor: zoom-in;
 }
 
-.md-mermaid-copy {
+/* 右上角那组按钮（复制图片 / 复制源码）。 */
+.md-mermaid-actions {
   position: absolute;
   top: 8px;
   right: 8px;
+  display: flex;
+  gap: 4px;
+}
+
+.md-mermaid-copy {
   padding: 2px 7px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -13765,6 +13915,7 @@ button.ctx-cat-line:focus-visible {
 }
 
 .md-mermaid-wrap:hover .md-mermaid-copy,
+.md-mermaid-actions:focus-within .md-mermaid-copy,
 .md-mermaid-copy:focus-visible {
   opacity: 1;
 }

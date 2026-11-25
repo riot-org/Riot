@@ -461,6 +461,7 @@ export function MermaidBlock({ source }: { source: string }) {
   // 要一两秒，这期间闪现源码再切成图，对话流会跳一下。
   const [settled, setSettled] = useState(() => svgCache.has(cacheKey));
   const [copied, flashCopied] = useTimedFlag<"idle" | "ok" | "fail">("idle", 1500);
+  const [copiedImg, flashCopiedImg] = useTimedFlag<"idle" | "ok" | "fail">("idle", 1500);
   const [viewer, setViewer] = useState(false);
 
   useEffect(() => {
@@ -510,6 +511,24 @@ export function MermaidBlock({ source }: { source: string }) {
 
   const label = t(kindOf(source));
 
+  /**
+   * 复制成 PNG。`[约束]` 剪贴板写入必须在点击的同一拍里发起（WebKit 的
+   * 规矩），所以先把 ClipboardItem 交出去，PNG 作为 Promise 稍后兑现 ——
+   * 先 await 画布再写，WKWebView 会以"不是用户操作"拒掉。
+   */
+  const copyImage = () => {
+    if (!svg) return;
+    const png = svgToPng(svgImage(svg, theme));
+    try {
+      navigator.clipboard.write([new ClipboardItem({ "image/png": png })]).then(
+        () => flashCopiedImg("ok"),
+        () => flashCopiedImg("fail"),
+      );
+    } catch {
+      flashCopiedImg("fail");
+    }
+  };
+
   const copySrc = () => {
     navigator.clipboard.writeText(source).then(
       () => flashCopied("ok"),
@@ -534,14 +553,24 @@ export function MermaidBlock({ source }: { source: string }) {
             dangerouslySetInnerHTML={{ __html: svg }}
           />
         </button>
-        {/* 渲染成图之后源码就没处看了，hover 给条复制的路 */}
-        <button type="button" className="md-mermaid-copy" onClick={copySrc}>
-          {copied === "ok"
-            ? t("common.copied")
-            : copied === "fail"
-              ? t("transcript.md.copyFailed")
-              : t("transcript.mermaid.copySource")}
-        </button>
+        {/* 渲染成图之后源码就没处看了，hover 给条复制的路；图本身也能复制走
+            （贴进文档、聊天软件），宿主没有"另存为"，剪贴板是最近的出口。 */}
+        <span className="md-mermaid-actions">
+          <button type="button" className="md-mermaid-copy" onClick={copyImage}>
+            {copiedImg === "ok"
+              ? t("common.copied")
+              : copiedImg === "fail"
+                ? t("transcript.md.copyFailed")
+                : t("transcript.mermaid.copyImage")}
+          </button>
+          <button type="button" className="md-mermaid-copy" onClick={copySrc}>
+            {copied === "ok"
+              ? t("common.copied")
+              : copied === "fail"
+                ? t("transcript.md.copyFailed")
+                : t("transcript.mermaid.copySource")}
+          </button>
+        </span>
         {viewer ? (
           <MermaidViewer svg={svg} theme={theme} label={label} onClose={() => setViewer(false)} />
         ) : null}
@@ -591,6 +620,28 @@ function MermaidViewer({
 }) {
   const src = useMemo(() => svgImage(svg, theme), [svg, theme]);
   return <ShotViewer src={src} alt={label} onClose={onClose} />;
+}
+
+/**
+ * SVG 图片（data URL）画到画布上转成 PNG。按设备像素比放大，贴到别处不糊。
+ * 宽度已经由 svgImage 写明（见那边），这里只管栅格化。
+ */
+function svgToPng(src: string): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(2, window.devicePixelRatio || 1);
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.naturalWidth * scale);
+      canvas.height = Math.round(img.naturalHeight * scale);
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return reject(new Error("no canvas"));
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("toBlob failed"))), "image/png");
+    };
+    img.onerror = () => reject(new Error("svg load failed"));
+    img.src = src;
+  });
 }
 
 /** 图四周留的边（SVG 坐标单位）。 */

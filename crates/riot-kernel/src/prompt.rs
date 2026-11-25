@@ -139,13 +139,18 @@ impl Sections {
         }
     }
 
-    /// 某一节渲染后的字节数（含标签）。没有这一节就是 0。上下文明细按它
-    /// 把自定义指令从系统提示词里单拎出来。
+    /// 某一节渲染后的字节数（含标签，也含它和相邻一节之间的 `\n\n`）。
+    /// 没有这一节就是 0。上下文明细按它把自定义指令从系统提示词里单拎出来。
+    ///
+    /// `[约束]` 分隔符要算进来：拿总长减它得到的「内置部分」必须和没有这一节
+    /// 时的总长一字不差。少算两个字节，换算成 token 时一跨取整边界，加一条
+    /// 自定义指令就会让内置部分凭空多出 1 个 token。
     fn rendered_len(&self, name: &str) -> usize {
+        let sep = if self.items.len() > 1 { "\n\n".len() } else { 0 };
         self.items
             .iter()
             .filter(|s| s.name == name)
-            .map(|s| self.render_one(s).len())
+            .map(|s| self.render_one(s).len() + sep)
             .sum()
     }
 
@@ -561,7 +566,9 @@ const COMMANDS_FOR_THE_USER: &str = "\
 Commands for the user to run go in a ```bash fence (```powershell on Windows): the UI adds a Run \
 button that types it into their terminal and reports the exit code. Write only what should run — \
 no `$ ` prompt, no output. Mark what the user must fill in as `<your-token>`; the command is then \
-pasted without Enter.";
+pasted without Enter. A change you show instead of making (the user wants to review it first, \
+or you can't edit right now) goes in a ```diff fence as a unified diff with `--- a/path` and \
+`+++ b/path` headers relative to the working directory; the UI gives it an Apply button.";
 
 const LINKING_TO_LOCAL_FILES: &str = "\
 To point at a local file, use a Markdown link whose target is its path: relative to the working \
@@ -1194,6 +1201,7 @@ mod tests {
         assert!(p.contains("Run button"), "要说清这种块能一键运行");
         assert!(p.contains("no `$ ` prompt"), "要禁止带提示符");
         assert!(p.contains("<your-token>"), "要约定占位符写法");
+        assert!(p.contains("```diff"), "要约定补丁块写法");
     }
 
     /// 本地文件必须写成路径链接。不写进提示词的话，模型会编一个
@@ -2069,6 +2077,9 @@ mod tests {
     /// 再之后抬到 15.6k：`commands_for_the_user` 一节约 0.35k（初稿 0.78k，
     /// 删到只剩写法约定）。前端给 shell 围栏加了「运行」键，模型不知道的话
     /// 会带 `$ ` 提示符、把输出混进命令块，运行键跑出来是错的。
+    /// 再之后抬到 16.5k：`commands_for_the_user` 加了补丁块的写法约 0.25k。
+    /// 前端给带文件头的 ```diff 加了「应用」键，没有 `--- a/路径` 文件头的
+    /// 片段不知道改哪个文件，按不了 —— 模型得知道要写全。
     /// 再之后抬到 16.2k：`visualizations` 加了 ```widget 组件的写法约 0.5k
     /// （主题变量、能引哪些 CDN、不能联网、sendPrompt）。不写的话模型要么
     /// 不知道能画交互组件，要么写出深色主题里一片黑字、fetch 失败的组件。
@@ -2077,7 +2088,7 @@ mod tests {
         let p = system_prompt(&base());
         let n = p.chars().count();
         assert!(
-            n < 16_200,
+            n < 16_500,
             "system prompt 涨到 {n} 字符了，先确认每一节都还值这个价"
         );
     }

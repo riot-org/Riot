@@ -62,3 +62,39 @@ describe("组件围栏（remarkWidgetFences）", () => {
     expect(html("```html\n<p>hi</p>\n```")).not.toContain("data-widget");
   });
 });
+
+describe("本地网址变链接（remarkLocalUrls）", () => {
+  it("行内代码里的本地网址套上链接，保留代码样子", () => {
+    const out = html("服务起好了：`http://localhost:5173`");
+    expect(out).toContain('<a href="http://localhost:5173"><code>http://localhost:5173</code></a>');
+  });
+
+  it("不带协议的也认", () => {
+    expect(html("打开 localhost:3000/admin。")).toContain('<a href="http://localhost:3000/admin">localhost:3000/admin</a>');
+  });
+
+  it("代码块、别的行内代码、已有链接不动", () => {
+    expect(html("```\nhttp://localhost:5173\n```")).not.toContain("<a");
+    expect(html("`npm run dev`")).not.toContain("<a");
+    expect(html("[后台](http://localhost:3000)")).toContain('<a href="http://localhost:3000">后台</a>');
+  });
+});
+
+describe("行内代码小装饰（remarkInlineCodeHints）", () => {
+  it("颜色值挂色块", () => {
+    const out = html("主色 `#3b82f6`，辅色 `rgb(16, 185, 129)`");
+    expect(out).toContain('data-swatch=""');
+    expect(out).toContain("--md-swatch:#3b82f6");
+    expect(out).toContain("--md-swatch:rgb(16, 185, 129)");
+  });
+
+  it("带分号的不当颜色（不能把别的声明带进 style）", () => {
+    expect(html("`rgb(1,2,3);color:red`")).not.toContain("data-swatch");
+  });
+
+  it("快捷键画成键帽，普通代码不动", () => {
+    expect(html("按 `⌘K` 或 `Ctrl+Shift+P`")).toContain('data-kbd=""');
+    expect(html("`Esc` 和 `npm run dev`")).not.toContain("data-kbd");
+    expect(html("`#define`")).not.toContain("data-swatch");
+  });
+});

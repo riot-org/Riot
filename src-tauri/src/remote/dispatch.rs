@@ -251,6 +251,7 @@ pub async fn dispatch(
 
         // ── 会话与项目 ──
         "session_changes" => ok(crate::session_changes(st, a.take("sessionId")?).await),
+        "apply_patch" => ok(crate::apply_patch(st, a.take("sessionId")?, a.take("patch")?, a.take("reverse")?).await),
         "session_git_changes" => {
             ok(crate::session_git_changes(st, a.take("sessionId")?, a.take("base")?).await)
         }

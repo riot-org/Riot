@@ -1945,6 +1945,11 @@ impl AppState {
         &self.0.env_alerts
     }
 
+    /// 会话的项目根（给宿主命令用，比如补丁块的「应用到文件」）。
+    pub async fn project_root(&self, id: &str) -> HostResult<PathBuf> {
+        self.session_root(id).await
+    }
+
     /// 会话的项目根。
     async fn session_root(&self, id: &str) -> HostResult<PathBuf> {
         self.0

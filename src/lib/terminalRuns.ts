@@ -98,7 +98,8 @@ export function subscribeRunRequests(cb: (r: RunRequest) => void): () => void {
   return () => requestSubs.delete(cb);
 }
 
-/** 「发给 agent」：一段整理好的文字塞进输入框（不直接发送）。 */
+/** 一段整理好的文字塞进输入框（不直接发送）。运行结果的「发给 agent」、
+ *  代码块的「引用」都走这里。 */
 export function shareRunOutput(text: string): void {
   for (const f of shareSubs) f(text);
 }

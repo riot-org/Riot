@@ -114,6 +114,7 @@
     "allow-task-history",
     "allow-session-compact",
     "allow-session-changes",
+    "allow-apply-patch",
     "allow-session-git-changes",
     "allow-session-context-breakdown",
     "allow-slash-commands",

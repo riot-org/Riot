@@ -1112,6 +1112,20 @@ export function sessionChanges(sessionId: string): Promise<FileChange[]> {
   return invoke<FileChange[]>("session_changes", { sessionId });
 }
 
+/** 补丁块「应用到文件」的结果（宿主 patch_apply::PatchOutcome）。 */
+export type PatchOutcome =
+  | { status: "applied"; files: string[] }
+  | { status: "alreadyApplied"; files: string[] }
+  | { status: "failed"; reason: string };
+
+/**
+ * 把回答里的一份补丁应用到会话的项目里（`reverse` 时撤销）。路径出了
+ * 项目根、有一块对不上，都不动任何文件（见宿主 patch_apply）。
+ */
+export function applyPatch(sessionId: string, patch: string, reverse = false): Promise<PatchOutcome> {
+  return invoke<PatchOutcome>("apply_patch", { sessionId, patch, reverse });
+}
+
 /**
  * 工作区相对所选基线的差异（侧边抽屉的 Git 面板）。
  *

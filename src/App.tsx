@@ -67,7 +67,7 @@ import {
 } from "./components/FilePreview";
 import type { TreeTarget } from "./components/FileTree";
 import { MissingProjectDialog } from "./components/MissingProjectDialog";
-import { ProjectRootContext } from "./components/Markdown";
+import { ProjectRootContext, SessionIdContext } from "./components/Markdown";
 import { PlanPanel } from "./components/PlanPanel";
 import { Settings } from "./components/Settings";
 import { Onboarding, onboardingSkipped } from "./components/Onboarding";
@@ -724,7 +724,7 @@ export function App() {
     return subscribePanelBrowser((url) => {
       openTab({ kind: "browser" });
       void slidesSettled()
-        .then(() => browserState(sid))
+        .then(() => browserStateWithTab(sid))
         .then(async (s) => {
           const plan = planPanelOpen(s, url);
           if (plan.kind === "select") {
@@ -1740,6 +1740,7 @@ export function App() {
 
   return (
     <ProjectRootContext.Provider value={activeSession?.root ?? ""}>
+    <SessionIdContext.Provider value={activeSession?.id ?? ""}>
     <div className="shell" data-fullscreen={fullscreen ? "" : undefined}>
       {/* anchor=end：内层贴壳的**右**缘。侧栏的左缘钉死在窗口左边，
           收起时动的是右缘 —— 内层跟着右缘走，整条侧栏才是被主区往左
@@ -2402,7 +2403,26 @@ export function App() {
         />
       ) : null}
     </div>
+    </SessionIdContext.Provider>
     </ProjectRootContext.Provider>
   );
 }
 
+/**
+ * 内置浏览器的状态，但等它至少有一页。
+ *
+ * 面板第一次打开时，挂载那边的 browser_open 会建一个空白的「新标签页」。
+ * 链接这边若在那之前就看到「一页都没有」、发出导航，导航落在宿主自己开
+ * 的第一页上，随后又被面板建的空白页顶成激活页 —— 表现是点了链接面板开
+ * 了，却停在新标签页。等第一页出现再按 planPanelOpen 走（激活页是空白
+ * 新标签就在它上面导航），两边就不抢了。浏览器起不来时最多等 8 秒，照
+ * 原来的路子走。
+ */
+async function browserStateWithTab(sid: string) {
+  for (let i = 0; i < 40; i++) {
+    const s = await browserState(sid).catch(() => null);
+    if (s && s.tabs.length > 0) return s;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  return browserState(sid);
+}

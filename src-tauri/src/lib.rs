@@ -47,6 +47,7 @@ pub mod notification;
 pub mod open_local;
 #[cfg(feature = "desktop")]
 pub mod pasteboard;
+pub mod patch_apply;
 pub mod persist;
 pub mod plugins;
 pub mod preview;
@@ -700,6 +701,21 @@ async fn session_changes(
     session_id: String,
 ) -> HostResult<Vec<changes::FileChange>> {
     state.changes(&session_id).await
+}
+
+/// 回答里的补丁块「应用到文件」/「撤销」（见 patch_apply）。路径限定在
+/// 会话的项目根下，整份补丁对得上才动文件。
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn apply_patch(
+    state: State<'_, AppState>,
+    session_id: String,
+    patch: String,
+    reverse: bool,
+) -> HostResult<patch_apply::PatchOutcome> {
+    let root = state.project_root(&session_id).await?;
+    Ok(tokio::task::spawn_blocking(move || patch_apply::apply(&root, &patch, reverse))
+        .await
+        .unwrap_or_else(|e| patch_apply::PatchOutcome::Failed { reason: e.to_string() }))
 }
 
 /// 工作区相对所选基线的差异（侧边抽屉的 Git 面板）。
@@ -2186,6 +2202,7 @@ pub fn run() {
             schedule_ack_missed,
             interrupt,
             session_changes,
+            apply_patch,
             session_git_changes,
             session_context_breakdown,
             respond_permission,
