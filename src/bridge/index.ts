@@ -431,6 +431,8 @@ export interface AppConfig {
    * 默认开。老配置可能没有这个字段（缺 = 开）。
    */
   sessionRecall?: boolean;
+  /** 一轮做完时的收尾卡片（NextStep 工具）。默认开。 */
+  nextStep?: boolean;
   /**
    * 远程访问（网页版）。老配置可能没有这个字段（缺 = 关）。令牌不在
    * 配置里，看 `remoteStatus()`。

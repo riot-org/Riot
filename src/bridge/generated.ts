@@ -1688,6 +1688,11 @@ export interface TurnConfig {
    */
   multitask?: boolean;
   /**
+   * 一轮做完时的收尾卡片（NextStep 工具）开不开。设置里的开关，默认开。
+   * 关掉时内核装配工具时把它摘掉 —— 不发给模型，也不占描述的 token。
+   */
+  next_step?: boolean;
+  /**
    * 本轮生效的插件（已安装且启用的），按 id 排序。
    *
    * 宿主是插件注册表的权威（装了什么、开没开都记在它的配置里），内核

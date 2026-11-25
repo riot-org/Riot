@@ -114,6 +114,7 @@ export default {
 
   // ── Tool descriptions: tasks and plans ───────────────
   "tools.todo.update": "Update the to-do list ({count} items)",
+  "tools.nextStep.describe": "Wrap-up: {recap}",
   "tools.todo.progress": "{done}/{total} done",
   "tools.todo.progressActive": "{done}/{total} done · {active}",
   "tools.plan.create": "Write plan “{name}”",

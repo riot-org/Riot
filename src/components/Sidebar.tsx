@@ -3,6 +3,7 @@
  * 宽度/开合等布局真值仍在 App，这里管分组折叠与每行的交互。
  */
 
+import { firstSentence, useNextStepWaiting } from "../lib/nextStep";
 import { type ReactNode, useCallback, useState } from "react";
 
 import { projectRootOf, type SessionInfo } from "../bridge";
@@ -325,6 +326,7 @@ function ProjectGroup(
     recency,
   } = props;
   const name = basename(root) || root;
+  const waitingMap = useNextStepWaiting();
   const { t } = useT();
   // 同一时刻只有一行在改名，一个 guard 够用。
   const ime = useImeGuard();
@@ -353,6 +355,7 @@ function ProjectGroup(
 
   /** 一行会话。`date` 有值 = 组里的一次运行，标签只写日期。 */
   const renderRow = (s: SessionInfo, date: string | null) => {
+    const waitingRecap = waitingMap.get(s.id);
     if (renaming === s.id) {
       return (
         <input
@@ -392,12 +395,13 @@ function ProjectGroup(
               title={t("common.running")}
               aria-label={t("common.running")}
             />
-          ) : s.awaitingUser ? (
-            // 停在等用户决定：不在跑，但得回来点卡片。
+          ) : s.awaitingUser || waitingRecap ? (
+            // 停在等用户决定：不在跑，但得回来点卡片（权限 / 提问卡，或者
+            // 收尾卡片里待决的问题）。
             <span
               className="thread-awaiting"
-              title={t("app.session.awaiting")}
-              aria-label={t("app.session.awaiting")}
+              title={s.awaitingUser ? t("app.session.awaiting") : t("transcript.nextStep.waiting")}
+              aria-label={s.awaitingUser ? t("app.session.awaiting") : t("transcript.nextStep.waiting")}
             />
           ) : null}
           {date !== null ? (
@@ -434,6 +438,13 @@ function ProjectGroup(
               ) : null}
             </>
           )}
+          {/* 收尾卡片在等你拍板：标题下面一行小结的第一句（见 lib/nextStep）。
+              只给这种会话加第二行 —— 每个会话都两行，侧栏会长一倍。 */}
+          {waitingRecap && !s.busy ? (
+            <span className="thread-status" title={waitingRecap}>
+              {firstSentence(waitingRecap)}
+            </span>
+          ) : null}
         </button>
         <button
           className="row-btn"

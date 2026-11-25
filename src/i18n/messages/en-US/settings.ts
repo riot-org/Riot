@@ -380,6 +380,9 @@ export default {
   "settings.permission.compactAt.aria": "Default compaction threshold (tokens)",
 
   "settings.permission.memory": "Memory",
+  "settings.permission.chat": "Conversation",
+  "settings.permission.nextStep": "Wrap-up card",
+  "settings.permission.nextStep.desc": "When a turn of work is done, pin a card under the reply: a short recap, plus a question with answer buttons when you need to decide. Turn it off if your model overuses it or forgets it.",
   "settings.permission.recall": "Session recall",
   "settings.permission.recall.desc":
     "Lets the model look through this project's other sessions: answer “how did we end up solving that last time” and link to that session. Excerpts are stored per project in Riot's own data directory, never in the project. When off, the prompt no longer mentions it; each session still maintains its own excerpts, which the model uses to recover summarized-away text after compaction. Excerpts are deleted along with the session.",

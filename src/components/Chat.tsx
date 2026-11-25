@@ -21,6 +21,7 @@ import { type ForkChild, Transcript } from "./Transcript";
 import { Composer, type PermissionPick } from "./Composer";
 import { FolderIcon, RiotMark } from "./icons";
 import { subscribeWidgetPrompt } from "../lib/widgetPrompt";
+import { NextStepContext, nextStepState, readNextStep, setNextStepWaiting, useNextStepDismissed } from "../lib/nextStep";
 
 /** 组件发出的话多久之内被撤回算"组件的"（撤回只发生在模型开口之前，几秒内）。 */
 const WIDGET_WITHDRAW_MS = 60_000;
@@ -404,6 +405,15 @@ export function Chat({
     clearWithdrawn();
   }, [fromWidget, withdrawn, clearWithdrawn]);
   const withdrawnForComposer = fromWidget ? null : withdrawn;
+  // 收尾卡片：哪张是活的（按钮可点）、哪张被回复过（见 lib/nextStep）。
+  // 活卡片带着问题时告诉侧栏"这个会话在等你拍板"。
+  const nextStep = useMemo(() => nextStepState(session.items, session.busy), [session.items, session.busy]);
+  const activeDismissed = useNextStepDismissed(nextStep.active ?? "");
+  useEffect(() => {
+    const it = nextStep.active ? session.items.find((x) => x.id === nextStep.active) : undefined;
+    const data = it && it.kind === "tool" ? readNextStep(it.input) : null;
+    setNextStepWaiting(sessionId, data?.ask && !activeDismissed ? data.recap : null);
+  }, [nextStep, session.items, sessionId, activeDismissed]);
   const redoRestore = session.redoRestore;
   const onRedo = useCallback(() => void redoRestore(), [redoRestore]);
 
@@ -489,6 +499,7 @@ export function Chat({
       ) : (
         // 子 agent 视图给 Task 卡片认领（按 tool_use_id 直播标题/模型/动作）。
         <SubagentsContext.Provider value={session.tasks}>
+          <NextStepContext.Provider value={nextStep}>
           <Transcript
             sessionId={sessionId}
             items={session.items}
@@ -522,6 +533,7 @@ export function Chat({
             permAsks={permAsks}
             onAnswerPermission={onAnswerPermission}
           />
+        </NextStepContext.Provider>
         </SubagentsContext.Provider>
       )}
       {dock}

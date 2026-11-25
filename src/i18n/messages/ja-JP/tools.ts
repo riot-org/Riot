@@ -113,6 +113,7 @@ export default {
 
   // ── ツール説明：タスクと計画 ─────────────────────────
   "tools.todo.update": "タスクリストを更新（{count} 件）",
+  "tools.nextStep.describe": "まとめ：{recap}",
   "tools.todo.progress": "{done}/{total} 完了",
   "tools.todo.progressActive": "{done}/{total} 完了 · {active}",
   "tools.plan.create": "計画「{name}」を作成",

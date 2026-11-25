@@ -60,7 +60,10 @@ export type Block =
  * AskUserQuestion 也不折：答完它留成那张选择题卡、标着用户点的那项，
  * 这是对话本身的一部分（谁拍了什么板），不是过程。
  */
-const KEEP_VISIBLE = new Set(["Task", PLAN_TOOL, "AskUserQuestion"]);
+//
+// NextStep（收尾卡片）同理：它是这一轮给用户的结论和待决的问题，折进
+// "N 步"里就没人看见了。
+const KEEP_VISIBLE = new Set(["Task", PLAN_TOOL, "AskUserQuestion", "NextStep"]);
 
 function foldable(it: Item): it is FoldItem {
   if (it.kind === "thinking") return true;

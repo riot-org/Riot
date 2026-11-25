@@ -855,6 +855,12 @@ pub struct AppConfig {
     /// 找回被总结掉的原文，那不是用户该关的东西。
     #[serde(default = "default_true")]
     pub session_recall: bool,
+    /// 一轮做完时的收尾卡片：小结 + 需要拍板时的问题和按钮（NextStep 工具）。
+    ///
+    /// 默认开。有的模型用不好它（忘了调、或者每轮都问），关掉后工具不再
+    /// 发给模型，已有对话里的卡片照常显示。
+    #[serde(default = "default_true")]
+    pub next_step: bool,
     /// 远程访问（网页版）：宿主开一个 HTTP + WebSocket 服务，浏览器里的
     /// 同一套界面经它操作这台机器上的 Riot。令牌不在这里，见
     /// [`REMOTE_TOKEN_KEY`]。
@@ -1388,6 +1394,7 @@ impl Default for AppConfig {
             sandbox: SandboxMode::default(),
             sandbox_allow_read: Vec::new(),
             session_recall: true,
+            next_step: true,
             remote: RemoteConfig::default(),
             plugins: Vec::new(),
             plugin_marketplaces: default_marketplaces(),
@@ -2190,6 +2197,7 @@ fn migrate(old: LegacyConfig) -> AppConfig {
         sandbox: SandboxMode::default(),
         sandbox_allow_read: Vec::new(),
         session_recall: true,
+        next_step: true,
         remote: RemoteConfig::default(),
         plugins: Vec::new(),
         plugin_marketplaces: default_marketplaces(),

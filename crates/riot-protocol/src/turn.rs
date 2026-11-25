@@ -218,6 +218,14 @@ pub struct TurnConfig {
     /// （见 riot-tools 的 `user_env`）。每轮带全量：内核重启过也能对上。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub user_env: Vec<UserEnvVar>,
+    /// 一轮做完时的收尾卡片（NextStep 工具）开不开。设置里的开关，默认开。
+    /// 关掉时内核装配工具时把它摘掉 —— 不发给模型，也不占描述的 token。
+    #[serde(default = "yes")]
+    pub next_step: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// 一个用户环境变量。

@@ -1,4 +1,6 @@
 import { memo, startTransition, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { NextStepCard } from "./NextStepCard";
+import { NEXT_STEP_TOOL } from "../lib/nextStep";
 import { createPortal } from "react-dom";
 
 import { type BackgroundTaskView, readImage, renderUiText } from "../bridge";
@@ -66,6 +68,10 @@ export const ToolCard = memo(function ToolCard({
   if (tool.name === "Task") return <TaskCard tool={tool} />;
   // 计划也有自己的卡：标题 + 概述，点开是右侧抽屉里的计划面板。
   if (tool.name === PLAN_TOOL) return <PlanCard tool={tool} />;
+  // 收尾卡片：照着工具输入画（小结 + 待决问题 + 按钮），见 NextStepCard。
+  if (tool.name === NEXT_STEP_TOOL) {
+    return tool.status === "ok" ? <NextStepCard id={tool.id} input={tool.input} /> : null;
+  }
   // 选择题答完之后留着原来那张卡，标出用户点的那项。还在等回答时对话
   // 底部有可点的那张（AskChoiceCard），这里只占一行。
   if (tool.name === "AskUserQuestion" && tool.status !== "running") {

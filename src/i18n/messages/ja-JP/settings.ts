@@ -359,6 +359,9 @@ export default {
   "settings.permission.compactAt.aria": "デフォルトの圧縮しきい値（token）",
 
   "settings.permission.memory": "メモリ",
+  "settings.permission.chat": "会話",
+  "settings.permission.nextStep": "まとめカード",
+  "settings.permission.nextStep.desc": "作業が一区切りしたら、回答の下に短いまとめと、判断が必要なときは質問と回答ボタンを表示します。モデルがうまく使えない場合はオフにできます。",
   "settings.permission.recall": "過去のセッションの想起",
   "settings.permission.recall.desc":
     "モデルがこのプロジェクトの他のセッションを参照できるようにします。「前回のあの問題は結局どう解決したか」に答え、そのセッションへのリンクを示します。抜粋はプロジェクトごとに Riot 自身のデータフォルダに保存され、プロジェクトには入りません。オフにするとプロンプトで言及しなくなりますが、各セッション自身の抜粋は維持されます —— コンテキスト圧縮後、モデルはそれを使って要約で消えた原文を取り戻します。抜粋はセッションと一緒に削除されます。",

@@ -22,6 +22,7 @@ pub mod grep;
 pub mod memfs;
 pub mod mode;
 pub mod names;
+pub mod next_step;
 pub mod path;
 pub mod pentest;
 pub mod plan;
@@ -101,6 +102,10 @@ pub fn builtin() -> Vec<Arc<dyn Tool>> {
     // 向用户要环境变量（API key、密码）：表单收值、注入命令、不进上下文。
     // 追加在末尾，不动前缀。
     tools.push(Arc::new(env::RequestEnv));
+    // 一轮做完时的收尾卡片（小结 + 待决的问题）。设置里能关，关掉时会话
+    // 装配工具时把它摘掉（见 riot-kernel 的 Session::next_step）。追加在
+    // 末尾，不动前缀。
+    tools.push(Arc::new(next_step::NextStep));
     tools
 }
 

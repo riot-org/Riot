@@ -2232,6 +2232,7 @@ impl AppState {
             multitask,
             plugins: config.plugin_refs(&self.0.config_path),
             user_env: self.user_env_vars().await,
+            next_step: config.next_step,
         })
     }
 

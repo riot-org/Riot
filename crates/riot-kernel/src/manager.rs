@@ -420,6 +420,7 @@ impl SessionManager {
             .await;
         session.set_thinking(config.thinking).await;
         session.set_multitask(config.multitask);
+        session.set_next_step(config.next_step);
         session.set_plugins(config.plugins.clone()).await;
 
         // 能力现装(和内嵌期 send_turn 同一套,只是从 setup 而非 AppConfig)。

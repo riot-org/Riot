@@ -359,6 +359,9 @@ export default {
   "settings.permission.compactAt.aria": "기본 압축 임계값 (token)",
 
   "settings.permission.memory": "기억",
+  "settings.permission.chat": "대화",
+  "settings.permission.nextStep": "마무리 카드",
+  "settings.permission.nextStep.desc": "한 차례 작업이 끝나면 답변 아래에 짧은 요약과, 결정이 필요할 때 질문과 답변 버튼을 보여 줍니다. 모델이 잘 다루지 못하면 끌 수 있습니다.",
   "settings.permission.recall": "이전 세션 회상",
   "settings.permission.recall.desc":
     "모델이 이 프로젝트의 다른 세션을 살펴볼 수 있게 합니다. 「지난번 그 문제는 결국 어떻게 해결했지」 같은 질문에 답하고 해당 세션으로 가는 링크를 제공합니다. 발췌는 프로젝트별 폴더로 Riot 자체 데이터 폴더에 저장되며 프로젝트에는 들어가지 않습니다. 끄면 프롬프트에서 더 이상 언급하지 않지만, 각 세션 자체의 발췌는 계속 유지되어 컨텍스트 압축 후 모델이 요약된 원문을 되찾는 데 사용합니다. 발췌는 세션과 함께 삭제됩니다.",

@@ -361,6 +361,9 @@ export default {
   "settings.permission.compactAt.aria": "默认压缩阈值（token）",
 
   "settings.permission.memory": "记忆",
+  "settings.permission.chat": "对话",
+  "settings.permission.nextStep": "收尾卡片",
+  "settings.permission.nextStep.desc": "一轮做完时，在回答下面给一张卡片：两三句小结，需要你拍板时附一个问题和按钮，点按钮就是回复。有的模型用不好它（忘了给或每轮都问），可以关掉。",
   "settings.permission.recall": "历史会话回忆",
   "settings.permission.recall.desc":
     "让模型能翻本项目的其它会话：回答「上次那个问题最后怎么解决的」，并给出跳到那个会话的链接。摘录按项目分目录，存在 Riot 自己的数据目录里，不进项目。关掉后提示词里不再提它；每个会话自己的摘录仍会维护 —— 上下文压缩后模型靠它找回被总结掉的原文。摘录随会话一起删。",

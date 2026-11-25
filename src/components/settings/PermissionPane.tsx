@@ -552,6 +552,23 @@ export function PermissionPane({
         </Card>
       </Group>
 
+      <Group title={t("settings.permission.chat")}>
+        <Card>
+          <Row title={t("settings.permission.nextStep")} desc={t("settings.permission.nextStep.desc")}>
+            <Switch
+              on={status.config.nextStep ?? true}
+              label={t("settings.permission.nextStep")}
+              onChange={(v) => {
+                setError("");
+                setConfig({ ...status.config, nextStep: v })
+                  .then(saved)
+                  .catch((e: unknown) => setError(String(e)));
+              }}
+            />
+          </Row>
+        </Card>
+      </Group>
+
       <Group title={t("settings.permission.rules")}>
         <Card>
           <CardBlock>

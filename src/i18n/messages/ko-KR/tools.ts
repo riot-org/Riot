@@ -113,6 +113,7 @@ export default {
 
   // ── 도구 설명: 작업 및 계획 ───────────────────────────
   "tools.todo.update": "작업 목록 업데이트({count}개)",
+  "tools.nextStep.describe": "마무리: {recap}",
   "tools.todo.progress": "{done}/{total} 완료",
   "tools.todo.progressActive": "{done}/{total} 완료 · {active}",
   "tools.plan.create": "계획 「{name}」 작성",

@@ -114,6 +114,7 @@ export default {
 
   // ── 工具描述：任務與計畫 ─────────────────────────────
   "tools.todo.update": "更新任務清單（{count} 項）",
+  "tools.nextStep.describe": "收尾：{recap}",
   "tools.todo.progress": "{done}/{total} 完成",
   "tools.todo.progressActive": "{done}/{total} 完成 · {active}",
   "tools.plan.create": "撰寫計畫「{name}」",

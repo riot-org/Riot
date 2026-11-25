@@ -37,6 +37,7 @@ pub const CREATE_PLAN: &str = "CreatePlan";
 pub const SWITCH_MODE: &str = "SwitchMode";
 pub const TOOL_SEARCH: &str = "ToolSearch";
 pub const REQUEST_ENV: &str = "RequestEnv";
+pub const NEXT_STEP: &str = "NextStep";
 
 // ── 浏览器 ────────────────────────────────────────────────
 //

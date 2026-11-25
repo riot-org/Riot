@@ -357,6 +357,9 @@ export default {
   "settings.permission.compactAt.aria": "預設壓縮閾值（token）",
 
   "settings.permission.memory": "記憶",
+  "settings.permission.chat": "對話",
+  "settings.permission.nextStep": "收尾卡片",
+  "settings.permission.nextStep.desc": "一輪做完時，在回答下面給一張卡片：兩三句小結，需要你拍板時附一個問題和按鈕，點按鈕就是回覆。有的模型用不好它（忘了給或每輪都問），可以關掉。",
   "settings.permission.recall": "歷史會話回憶",
   "settings.permission.recall.desc":
     "讓模型能翻本專案的其他會話：回答「上次那個問題最後怎麼解決的」，並給出跳到那個會話的連結。摘錄按專案分資料夾，存在 Riot 自己的資料目錄裡，不進專案。關掉後提示詞裡不再提它；每個會話自己的摘錄仍會維護 —— 上下文壓縮後模型靠它找回被總結掉的原文。摘錄隨會話一起刪除。",

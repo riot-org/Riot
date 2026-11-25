@@ -742,6 +742,8 @@ pub struct Session {
     closing: AtomicBool,
     /// 多任务模式（见 `prompt::multitask_reminder`）。宿主是权威，每轮现设。
     multitask: AtomicBool,
+    /// 收尾卡片（NextStep 工具）开不开。宿主是权威，每轮现设（设置里的开关）。
+    next_step: AtomicBool,
     /// 完整准则已经在历史里了：之后每轮只注短提醒。历史被动过（压缩、
     /// 回退、撤回）就清掉，下一轮重注完整版。
     multitask_announced: AtomicBool,
@@ -1156,6 +1158,7 @@ impl Session {
             pending_notices: std::sync::Mutex::new(Vec::new()),
             closing: AtomicBool::new(false),
             multitask: AtomicBool::new(false),
+            next_step: AtomicBool::new(true),
             multitask_announced: AtomicBool::new(false),
             multitask_exit_pending: AtomicBool::new(false),
             digests: std::sync::OnceLock::new(),
@@ -1225,6 +1228,7 @@ impl Session {
             pending_notices: std::sync::Mutex::new(Vec::new()),
             closing: AtomicBool::new(false),
             multitask: AtomicBool::new(false),
+            next_step: AtomicBool::new(true),
             multitask_announced: AtomicBool::new(false),
             multitask_exit_pending: AtomicBool::new(false),
             digests: std::sync::OnceLock::new(),
@@ -1607,6 +1611,17 @@ impl Session {
 
     pub fn multitask(&self) -> bool {
         self.multitask.load(Ordering::Relaxed)
+    }
+
+    pub fn set_next_step(&self, on: bool) {
+        self.next_step.store(on, Ordering::Relaxed);
+    }
+
+    /// 收尾卡片关着时，从这一轮的工具里摘掉 NextStep。
+    fn drop_disabled_tools(&self, tools: &mut Vec<Arc<dyn Tool>>) {
+        if !self.next_step.load(Ordering::Relaxed) {
+            tools.retain(|t| t.name() != riot_tools::tools::names::NEXT_STEP);
+        }
     }
 
     /// 历史被动过（压缩、回退、撤回）：完整准则可能不在了，下一轮重注。
@@ -4400,6 +4415,7 @@ impl Session {
             riot_tools::tools::web::date::year_month(riot_protocol::tool::Clock::now_ms(&clock));
 
         let mut tools = riot_tools::tools::builtin();
+        self.drop_disabled_tools(&mut tools);
         crate::code_intel::decorate_edits(&mut tools);
         tools.push(Arc::new(riot_tools::tools::schedule::ScheduleTool::new(
             self.schedule_access(),
@@ -4622,6 +4638,7 @@ impl Session {
         // 的（两个 MCP 服务器的 id 消毒后相同），配置错误不能把应用带崩。
         let profile = crate::adapt::profile_for(&model);
         let mut tools = riot_tools::tools::builtin();
+        self.drop_disabled_tools(&mut tools);
         crate::code_intel::decorate_edits(&mut tools);
         let subagent_deps = crate::subagent::SubagentDeps {
             provider: Arc::clone(&provider),
