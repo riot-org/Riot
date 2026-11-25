@@ -78,7 +78,7 @@ export function usePatchApply({
       <span className="patch-files">
         {files.map((f, i) => (
           <span key={f}>
-            {i > 0 ? "、" : null}
+            {i > 0 ? t("transcript.patch.fileSep") : null}
             <button type="button" className="patch-file" onClick={() => openFilePreview(root ? joinRoot(root, f) : f)}>
               {f}
             </button>

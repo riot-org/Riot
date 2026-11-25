@@ -353,6 +353,7 @@ export default {
   "transcript.patch.undoing": "Undoing…",
   "transcript.patch.undone": "Undone",
   "transcript.patch.undoFailed": "Couldn't undo. No files were changed",
+  "transcript.patch.fileSep": ", ",
   "transcript.widget.title": "Widget in the reply",
   "transcript.widget.error": "Widget script error: {message}",
   "transcript.widget.pending": "Building widget · {n} lines",

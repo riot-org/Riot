@@ -332,6 +332,7 @@ export default {
   "transcript.patch.undoing": "元に戻しています…",
   "transcript.patch.undone": "元に戻しました",
   "transcript.patch.undoFailed": "元に戻せません。ファイルは変更されていません",
+  "transcript.patch.fileSep": "、",
   "transcript.widget.title": "回答内のウィジェット",
   "transcript.widget.error": "ウィジェットのスクリプトエラー：{message}",
   "transcript.widget.pending": "ウィジェットを生成中 · {n} 行",

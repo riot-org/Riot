@@ -330,6 +330,7 @@ export default {
   "transcript.patch.undoing": "正在復原…",
   "transcript.patch.undone": "已復原",
   "transcript.patch.undoFailed": "復原不了，檔案沒有變動",
+  "transcript.patch.fileSep": "、",
   "transcript.widget.title": "回答裡的元件",
   "transcript.widget.error": "元件腳本出錯：{message}",
   "transcript.widget.pending": "正在產生元件 · {n} 行",

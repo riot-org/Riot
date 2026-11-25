@@ -229,7 +229,7 @@ const COLOR_CODE =
 
 /** 快捷键：至少一个修饰键，后面跟一个键。单独的 `Esc`、`Enter` 不算（太像普通词）。 */
 const KBD_CODE =
-  /^(?:(?:⌘|⌥|⇧|⌃|ctrl|cmd|command|alt|option|opt|shift|win|super|meta|fn)\s*[+-]?\s*)+(?:[a-z0-9]|f\d{1,2}|enter|return|esc|escape|tab|space|backspace|delete|del|home|end|pageup|pagedown|up|down|left|right|[`~!@#$%^&*()_=+\[\]{};:'",.<>/?\\|]|↑|↓|←|→|⏎|⌫|↵)$/i;
+  /^(?:(?:⌘|⌥|⇧|⌃|ctrl|cmd|command|alt|option|opt|shift|win|super|meta|fn)\s*[+-]?\s*)+(?:[a-z0-9]|f\d{1,2}|enter|return|esc|escape|tab|space|backspace|delete|del|home|end|pageup|pagedown|up|down|left|right|[`~!@#$%^&*()_=+[\]{};:'",.<>/?\\|]|↑|↓|←|→|⏎|⌫|↵)$/i;
 
 /**
  * 行内代码的两种小装饰：颜色值前面挂一个色块，快捷键画成键帽（样式见

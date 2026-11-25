@@ -350,6 +350,7 @@ export default {
   "transcript.patch.undoing": "되돌리는 중…",
   "transcript.patch.undone": "되돌림",
   "transcript.patch.undoFailed": "되돌릴 수 없습니다. 파일은 바뀌지 않았습니다",
+  "transcript.patch.fileSep": ", ",
   "transcript.widget.title": "답변 속 위젯",
   "transcript.widget.error": "위젯 스크립트 오류: {message}",
   "transcript.widget.pending": "위젯 생성 중 · {n}줄",

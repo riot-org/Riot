@@ -40,7 +40,7 @@ function elementsOf(node: ReactNode): El[] {
  * 「1,234.5 元」「-3%」「$20」「12 ms」都认。
  */
 function numberOf(s: string): number | null {
-  const m = /^[^\d+\-.]*([+\-]?[\d,]*\.?\d+(?:e[+\-]?\d+)?)\s*[^\d\s]{0,4}$/i.exec(s.trim());
+  const m = /^[^\d+.-]*([+-]?[\d,]*\.?\d+(?:e[+-]?\d+)?)\s*[^\d\s]{0,4}$/i.exec(s.trim());
   if (!m?.[1]) return null;
   const n = Number(m[1].replace(/,/g, ""));
   return Number.isFinite(n) ? n : null;

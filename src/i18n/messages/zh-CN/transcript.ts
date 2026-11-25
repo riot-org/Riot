@@ -351,6 +351,7 @@ export default {
   "transcript.patch.undoing": "正在撤销…",
   "transcript.patch.undone": "已撤销",
   "transcript.patch.undoFailed": "撤销不了，文件没有改动",
+  "transcript.patch.fileSep": "、",
   "transcript.widget.title": "回答里的组件",
   "transcript.widget.error": "组件脚本出错：{message}",
   "transcript.widget.pending": "正在生成组件 · {n} 行",

@@ -13,7 +13,9 @@
 const HOST = String.raw`(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|[a-z0-9-]+(?:\.[a-z0-9-]+)*\.localhost)`;
 const PORT = String.raw`:\d{2,5}`;
 /** 路径到空白或全角标点为止（中文句子里 URL 后面紧跟的「，」不算 URL）。 */
-const PATH = String.raw`(?:[/?#][^\s<>"'\`　-〿＀-￯]*)?`;
+// 普通字符串而不是 String.raw：后者的值里 \u3000 会被解析成真的全角字符，
+// lint 当成写死的中文。这里字符串里只有反斜杠 + u，交给 RegExp 才解析。
+const PATH = "(?:[/?#][^\\s<>\"'`\\u3000-\\u303f\\uff00-\\uffef]*)?";
 
 /** 整段就是一个本地网址（行内代码里的那种）。不带协议时必须带端口。 */
 const WHOLE = new RegExp(String.raw`^(?:(https?:\/\/)${HOST}(?:${PORT})?|${HOST}${PORT})${PATH}$`, "i");

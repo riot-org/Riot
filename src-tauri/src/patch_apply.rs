@@ -95,6 +95,9 @@ fn git_apply(root: &Path, patch: &str, strip: u8, directory: Option<&str>, extra
     let mut cmd = Command::new("git");
     cmd.arg("-C")
         .arg(root)
+        // 不许 git 顺手改换行：Windows 版默认开着 core.autocrlf，写出来的文件
+        // 会被换成 CRLF —— 用户文件原来是什么换行就该还是什么。
+        .args(["-c", "core.autocrlf=false"])
         .arg("apply")
         .arg(format!("-p{strip}"))
         .args(["--recount", "--whitespace=nowarn", "--ignore-whitespace"])

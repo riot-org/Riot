@@ -151,7 +151,6 @@ export function WidgetFrame({
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
     // kind 不会变（变了是另一个组件），源码变化不重挂（见 sourceRef）。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind]);
 
   /**
